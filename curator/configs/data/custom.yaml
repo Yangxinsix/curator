@@ -1,0 +1,21 @@
+_target_: curator.data.AtomsDataModule
+datapath: ${datapath}
+batch_size: 8
+compute_neighbor_list: True
+cutoff: 5.0
+val_batch_size: 8
+test_batch_size: 8
+num_train: 0.9
+num_val: 0.1
+num_test: null
+num_workers: 1
+pin_memory: True
+species: auto
+avg_num_neighbors: auto
+atomic_energies: auto
+normalization: True
+atomwise_normalization: True
+scale_forces: True
+transforms:
+  - _target_: curator.data.TypeMapper
+    species: ${data.species}

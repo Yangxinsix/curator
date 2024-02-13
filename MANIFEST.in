@@ -1,0 +1,4 @@
+recursive-include curator *.py
+recursive-include curator *.yaml
+global-exclude *.pyc
+global-exclude __pycache__

@@ -1,0 +1,21 @@
+method: neb
+initial_image: null
+final_image: null
+num_img: 5
+optimizer: 'FIRE'
+fmax: 0.03
+optimizer_step: 200
+mic: True
+climb: False
+print_step: 1
+
+MD:
+  small_MD: True
+  num_MD: 5 # number of images to perform MD on. Chossen to be the lowest energy config
+  temperature: 300 #K
+  friction: 0.003
+  time_step: 1 #fs
+  print_step: 1 #fs
+  total_time: 10 #fs
+  
+
