@@ -1,0 +1,12 @@
+
+cfg: null
+seed: 0
+run_path: .
+model_path: null
+device: cuda
+train_set: null
+pool_set: null # This can also be a list
+batch_size: 10
+kernel: full-g
+method: lcmd_greedy
+n_random_features: 500

@@ -1,0 +1,15 @@
+defaults:
+  - simulator: md
+  - uncertainty: ensemble
+  - _self_
+
+cfg: null
+seed: 0
+run_path: .
+model_path: null
+device: cuda
+#ensemble: True
+
+uncertainty:
+  uncertain_traj: null
+

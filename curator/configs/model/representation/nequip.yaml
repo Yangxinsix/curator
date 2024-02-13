@@ -1,0 +1,10 @@
+_target_ : curator.model.NequipModel
+cutoff: ${data.cutoff}
+num_interactions: 3
+num_features: 32
+num_elements: null
+species: ${data.species}
+num_basis: 8
+power: 6
+lmax: 2
+parity: True

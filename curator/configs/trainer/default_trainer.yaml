@@ -1,0 +1,50 @@
+_target_: pytorch_lightning.Trainer
+
+devices: 1
+
+default_root_dir: ${run_path}
+min_epochs: null
+max_epochs: 1000
+
+# prints
+enable_model_summary: True
+profiler: null
+
+log_every_n_steps: 10
+gradient_clip_val: 0
+accumulate_grad_batches: 1
+val_check_interval: 1.0
+check_val_every_n_epoch: 1
+
+num_sanity_val_steps: 0
+fast_dev_run: False
+overfit_batches: 0
+limit_train_batches: 1.0
+limit_val_batches: 1.0
+limit_test_batches: 1.0
+detect_anomaly: False
+
+precision: 32
+accelerator: auto
+num_nodes: 1
+deterministic: False
+inference_mode: False
+
+callbacks:
+  - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    dirpath: ${run_path}/model_path
+    save_top_k: 1
+    monitor: val_loss
+    filename: best_model_{epoch}-{step}-{val_loss:.2f}
+  - _target_: pytorch_lightning.callbacks.EarlyStopping
+    monitor: val_loss
+    min_delta: 0.0
+    patience: ${patience}
+    mode: min
+  - _target_: pytorch_lightning.callbacks.LearningRateMonitor
+    logging_interval: epoch
+
+logger:
+  _target_: pytorch_lightning.loggers.WandbLogger
+  save_dir: ${run_path}/logs
+  name: curator-train-${oc.env:PWD}

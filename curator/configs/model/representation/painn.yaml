@@ -1,0 +1,12 @@
+_target_: curator.model.PainnModel
+num_interactions: 3
+num_features: 128
+cutoff: ${data.cutoff}
+num_basis: 20
+cutoff_fn:
+  _target_: curator.layer.CosineCutoff
+  cutoff: ${data.cutoff}
+radial_basis:
+  _target_: curator.layer.SineBasis
+  cutoff: ${data.cutoff}
+  num_basis: ${model.representation.num_basis}
