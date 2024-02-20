@@ -69,28 +69,12 @@ class MACE(nn.Module):
         super().__init__()
         
         self.cutoff = cutoff
-        self.num_features = num_features
         self.lmax = lmax
         self.parity = parity
 
         if num_elements is None:
             num_elements = len(species)
         
-        ## handling irreps
-        # chemical embedding irreps
-        if node_irreps is None:
-            self.node_irreps = o3.Irreps([(num_features, (0, 1))])
-        elif isinstance(node_irreps, str):
-            self.node_irreps = o3.Irreps(node_irreps)
-        else:
-            self.node_irreps = node_irreps
-        # edge sphere harmonic irreps
-        if edge_sh_irreps is None:
-            self.edge_sh_irreps = o3.Irreps.spherical_harmonics(lmax, p=-1 if parity else 1)
-        elif isinstance(edge_sh_irreps, str):
-            self.edge_sh_irreps = o3.Irreps(edge_sh_irreps)
-        else:
-            self.edge_sh_irreps = edge_sh_irreps
         # hidden feature irreps
         if hidden_irreps is not None:
             self.hidden_irreps = o3.Irreps(hidden_irreps) if isinstance(hidden_irreps, str) else hidden_irreps
@@ -105,10 +89,27 @@ class MACE(nn.Module):
         # MACE prohibits some irreps like 0e, 1e to be used
         forbidden_ir = ['0o', '1e', '2o', '3e', '4o']
         self.hidden_irreps = o3.Irreps([irrep for irrep in self.hidden_irreps if str(irrep.ir) not in forbidden_ir])
+        self.num_features = self.hidden_irreps.count(o3.Irrep(0, 1))
+
+        ## handling irreps
+        # chemical embedding irreps
+        if node_irreps is None:
+            self.node_irreps = o3.Irreps([(self.num_features, (0, 1))])
+        elif isinstance(node_irreps, str):
+            self.node_irreps = o3.Irreps(node_irreps)
+        else:
+            self.node_irreps = node_irreps
+        # edge sphere harmonic irreps
+        if edge_sh_irreps is None:
+            self.edge_sh_irreps = o3.Irreps.spherical_harmonics(lmax, p=-1 if parity else 1)
+        elif isinstance(edge_sh_irreps, str):
+            self.edge_sh_irreps = o3.Irreps(edge_sh_irreps)
+        else:
+            self.edge_sh_irreps = edge_sh_irreps
         
         # MLP_irreps
         if MLP_irreps is None:
-            self.MLP_irreps = o3.Irreps([(max(1, num_features // 2), (0, 1))])
+            self.MLP_irreps = o3.Irreps([(max(1, self.num_features // 2), (0, 1))])
         elif isinstance(MLP_irreps, str):
             self.MLP_irreps = o3.Irreps(MLP_irreps)
         else:
@@ -135,12 +136,11 @@ class MACE(nn.Module):
         )
         self.irreps_in[properties.node_feat] = self.embeddings.chemical_embedding.irreps_out
         
-        num_features = self.hidden_irreps.count(o3.Irrep(0, 1))
-        interaction_irreps = (self.edge_sh_irreps * num_features).sort()[0].simplify()
+        interaction_irreps = (self.edge_sh_irreps * self.num_features).sort()[0].simplify()
         
         self.interactions = torch.nn.ModuleList()
         self.products = torch.nn.ModuleList()
-        self.readouts = torch.nn.ModuleList()
+        self.readout_mlp = torch.nn.ModuleList()
         gate_fn = activation_fn[gate] if isinstance(gate, str) else gate
         # interaction blocks
         for i in range(num_interactions):
@@ -172,7 +172,7 @@ class MACE(nn.Module):
                 )
             else:
                 readout = o3.Linear(irreps_in=hidden_irreps_out, irreps_out=o3.Irreps('1x0e'))
-            self.readouts.append(readout)
+            self.readout_mlp.append(readout)
             
     def forward(self, data: properties.Type) -> properties.Type:
         # node_e0 = self.reference_energies[data[properties.Z]]
@@ -184,7 +184,7 @@ class MACE(nn.Module):
         node_feat = data[properties.node_feat]
         
         for interaction, product, readout in zip(
-            self.interactions, self.products, self.readouts
+            self.interactions, self.products, self.readout_mlp
         ):
             node_feat, sc = interaction(
                 node_feat, 
