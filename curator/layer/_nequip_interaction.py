@@ -1,3 +1,6 @@
+# The implementation is revised based on https://github.com/mir-group/nequip/tree/main
+# Some code was directly copied from original nequip model
+
 import torch
 from typing import Dict, Callable
 from curator.data import properties

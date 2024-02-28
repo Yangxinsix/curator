@@ -1,4 +1,4 @@
-# This part is copied from MACE code, which is used for calculating higher-order many body interactions
+# This part is copied from MACE code https://github.com/ACEsuit/mace, which is used for calculating higher-order many body interactions
 
 from typing import Dict, Optional, Union
 
