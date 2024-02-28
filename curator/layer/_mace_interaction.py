@@ -1,3 +1,5 @@
+# This part is revised based on MACE code https://github.com/ACEsuit/mace
+
 import torch
 from torch import nn
 from curator.data import properties
