@@ -1,0 +1,4 @@
+# @package _global_
+task:
+  optimizer:
+    lr: 0.0005

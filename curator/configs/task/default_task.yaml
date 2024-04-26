@@ -1,0 +1,31 @@
+defaults:
+  - optimizer: adam
+  - scheduler: reduce_on_plateau
+
+_target_: curator.model.LitNNP
+scheduler_monitor: val_total_loss
+warmup_steps: 0
+
+outputs:
+  - _target_: curator.model.ModelOutput
+    name: energy
+    loss_fn:
+      _target_: torch.nn.MSELoss
+    loss_weight: ${energy_weight}
+    metrics:
+      mae:
+        _target_: torchmetrics.regression.MeanAbsoluteError
+      rmse:
+        _target_: torchmetrics.regression.MeanSquaredError
+        squared: false
+  - _target_: curator.model.ModelOutput
+    name: forces
+    loss_fn:
+      _target_: torch.nn.MSELoss
+    loss_weight: ${forces_weight}
+    metrics:
+      mae:
+        _target_: torchmetrics.regression.MeanAbsoluteError
+      rmse:
+        _target_: torchmetrics.regression.MeanSquaredError
+        squared: false

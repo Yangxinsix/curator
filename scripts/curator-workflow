@@ -1,0 +1,301 @@
+#!/usr/bin/env python3
+from omegaconf import OmegaConf
+from omegaconf.listconfig import ListConfig
+from omegaconf.dictconfig import DictConfig
+
+from myqueue.workflow import run
+from myqueue.task import Task
+
+import os
+from pathlib import Path
+import json
+from typing import Optional
+
+cwd = os.getcwd()
+cwd = Path(cwd)
+
+def _mkdir(path):
+    try:
+        path.mkdir()
+    except FileExistsError:
+        pass
+
+def mkdir(conf, conf_key, iteration, name):
+    ''' Create directory {run_path}/iter_{iteration}/{name}
+        Returns the created Path '''
+    run_path = Path(conf[conf_key]['run_path'])
+    _mkdir(run_path)
+
+    run_path = Path(conf[conf_key]['run_path']) / f'iter_{iteration}'
+    _mkdir(run_path)
+    
+    run_path = run_path / name
+    _mkdir(run_path)
+    return run_path
+
+def merge_conf_params(conf, params):
+    ''' Merges conf and params and deletes ensemble+systems '''
+    conf_copy = conf.copy()
+    if 'defaults' in params.keys():
+        for key in params['defaults']:            
+            if isinstance(conf_copy['defaults'],ListConfig): # if defaults is a list in main config
+                count = 0
+                for i in range(len(conf_copy['defaults'])):
+                    try:
+                        conf_copy['defaults'][i][key] # check if it is the correct key
+                        conf_copy['defaults'][i][key] = params['defaults'][key]
+                        count += 1
+                    except KeyError:
+                        continue
+                if count == 0: # if the default is not in the list, append it
+                    conf_copy['defaults'].append(params['defaults'][key])
+            else:
+                conf_copy['defaults'][key] = params['defaults'][key]
+        params.pop('defaults')
+
+    conf_copy = OmegaConf.merge(conf_copy,params)
+    if 'ensemble' in conf_copy.keys():
+        conf_copy.pop('ensemble')
+    if 'systems' in conf_copy.keys():
+        conf_copy.pop('systems')
+    return conf_copy
+
+def strip_yaml_file(conf_copy, yaml_sections, task):
+    ''' Keep only parameters relevant for the specified task
+        This is done by specifying the sections in the dict yaml_sections'''
+    yaml_keep = yaml_sections[task]
+    
+    defaults = yaml_keep['defaults']
+    to_keep = []
+    for default in defaults:
+        for conf_defaults_key in conf_copy['defaults']:
+            if default == conf_defaults_key:
+                to_keep.append(conf_defaults_key)
+    conf_copy['defaults'] = [conf_copy['defaults'][key] for key in to_keep] 
+
+    sections = yaml_keep['sections']
+    for key in list(conf_copy):
+        if key not in sections and key != 'defaults':
+            conf_copy.pop(key)
+    
+    for key, val in conf_copy[task].items():
+        conf_copy[key] = val
+    conf_copy.pop(task)
+    
+    return conf_copy
+
+def _get_node_input(conf, task_type):
+    ''' Get node input from conf for the specified task '''
+    for inp_type in ['nodename','cores','tmax']:
+        if not hasattr(conf[task_type],inp_type):
+            raise ValueError(f'{inp_type} is not given as input in {task_type} section')
+    
+    nodename = conf[task_type].nodename
+    cores = conf[task_type].cores 
+    tmax = conf[task_type].tmax
+
+    return nodename, cores, tmax
+
+def train(deps: list[Task], 
+          conf: DictConfig, 
+          yaml_sections: dict, 
+          ensemble: DictConfig, 
+          iteration: Optional[int]=0) -> list[Task]:
+    ''' Runs a train task for each model in the ensemble.
+        This is done through the three steps for each model:
+         - Create a new directory 
+         - Save user_cfg file
+         - Run task 
+    '''
+    task_type = 'train'
+    tasks = []
+
+    nodename, cores, tmax = _get_node_input(conf, task_type)
+    arguments = ['cfg=user_cfg.yaml']
+    
+    for name, params in ensemble.items():
+        # Create new directory
+        run_path = mkdir(conf, task_type, iteration, name)
+        
+        # Save config file
+        conf_copy = merge_conf_params(conf, params)
+        conf_copy.train.run_path = './'
+        conf_copy = strip_yaml_file(conf_copy, yaml_sections, task_type)
+        save_file = run_path / 'user_cfg.yaml'
+        OmegaConf.save(config=conf_copy, f=save_file)
+        # Run task
+        tasks.append(run(
+            shell='curator-tmptrain',
+            #shell='curator-train', 
+            nodename=nodename,
+            cores=cores, 
+            tmax=tmax,
+            args=arguments,
+            folder=run_path,
+            name=name,
+            deps=deps,
+        ))
+    return tasks
+
+def simulate(deps: list[Task], 
+            conf: DictConfig, 
+            yaml_sections: dict, 
+            systems: DictConfig, 
+            iteration: Optional[int]=0) -> list[Task]:
+    ''' Runs a simulate task for each system in systems.
+        This is done through the three steps for each system:
+         - Create a new directory 
+         - Save user_cfg file
+         - Run task 
+    '''
+    task_type = 'simulate'
+    tasks = []
+    
+    nodename, cores, tmax = _get_node_input(conf, task_type)
+    arguments = ['cfg=user_cfg.yaml']
+    
+    for name, params in systems.items():
+        # Create new directory
+        run_path = mkdir(conf, task_type, iteration, name)
+
+        # Save config file
+        
+        conf_copy = merge_conf_params(conf, params)
+        conf_copy.simulate.model_path = str(cwd/Path(conf_copy.train.run_path) / f'iter_{iteration}')
+        conf_copy.simulate.run_path = './'
+        conf_copy = strip_yaml_file(conf_copy, yaml_sections, task_type)        
+        save_file = run_path / 'user_cfg.yaml'
+        OmegaConf.save(config=conf_copy, f=save_file)
+
+        # Run task    
+        tasks.append(run(
+            shell='curator-simulate',
+            nodename=nodename,
+            cores=cores, 
+            tmax=tmax,
+            args=arguments,
+            folder=run_path,
+            name=name,
+            deps=deps,
+        ))
+    return tasks
+
+def select(deps: list[Task], 
+            conf: DictConfig, 
+            yaml_sections: dict, 
+            systems: DictConfig, 
+            iteration: Optional[int]=0) -> list[Task]:
+    ''' Runs a select task for each system in systems.
+        This is done through the three steps for each system:
+         - Create a new directory 
+         - Save user_cfg file
+         - Run task 
+    '''
+    task_type = 'select'
+    tasks = []
+
+    nodename, cores, tmax = _get_node_input(conf, task_type)
+    arguments = ['cfg=user_cfg.yaml']
+    
+    for name, params in systems.items():
+        # Create new directory
+        run_path = mkdir(conf, task_type, iteration, name)
+
+        # Save config file
+        conf_copy = merge_conf_params(conf, params)
+        conf_copy.select.model_path = str(cwd/Path(conf_copy.train.run_path) / f'iter_{iteration}')
+        conf_copy.select.run_path = './'
+        conf_copy.select.pool_set = str(cwd/f'simulate/iter_{iteration}/{name}/MD.traj')
+        conf_copy.select.train_set = conf_copy.data.datapath
+        conf_copy = strip_yaml_file(conf_copy, yaml_sections, task_type)           
+        save_file = run_path / 'user_cfg.yaml'
+        OmegaConf.save(config=conf_copy, f=save_file)
+        
+        # Run task     
+        tasks.append(run(
+            shell='curator-select',
+            nodename=nodename,
+            cores=cores, 
+            tmax=tmax,
+            args=arguments,
+            folder=run_path,
+            name=name,
+            deps=deps,
+        ))
+    return tasks
+
+def label(deps: list[Task], 
+            conf: DictConfig, 
+            yaml_sections: dict, 
+            systems: DictConfig, 
+            iteration: Optional[int]=0) -> list[Task]:
+    ''' Runs a label task for each system in systems.
+        This is done through the three steps for each system:
+         - Create a new directory 
+         - Save user_cfg file
+         - Run task 
+    '''
+    task_type = 'label'
+    tasks = []
+
+    nodename, cores, tmax = _get_node_input(conf, task_type)
+    arguments = ['cfg=user_cfg.yaml']
+    
+    for i, (name, params) in enumerate(systems.items()):
+        run_path = mkdir(conf, task_type, iteration, name)
+        
+        # Save config file
+        conf_copy = merge_conf_params(conf, params)
+        conf_copy.label.run_path = './'
+        conf_copy.label.pool_set = str(cwd/f'simulate/iter_{iteration}/{name}/MD.traj')
+        conf_copy.label.al_info = str(cwd/f'select/iter_{iteration}/{name}/selected.json')
+        conf_copy = strip_yaml_file(conf_copy, yaml_sections, task_type)                    
+        save_file = run_path / 'user_cfg.yaml'
+        OmegaConf.save(config=conf_copy, f=save_file)
+
+        # Run task         
+        tasks.append(run(
+            shell='curator-label',
+            nodename=nodename,
+            cores=cores, 
+            tmax=tmax,
+            args=arguments,
+            folder=run_path,
+            name=name,
+            deps=deps,
+        ))
+    return tasks
+
+
+def workflow():
+    config_path = 'user_cfg.yaml' 
+
+    conf = OmegaConf.load(config_path)
+
+    yaml_sections = {'train':{'defaults':['model/representation'], 'sections':['data','model','train','trainer','optimizer']},
+                     'simulate':{'defaults':['simulator','uncertainty'], 'sections':['uncertainty','model','simulate','simulator']},
+                     'select':{'defaults':[], 'sections':['select','model']},
+                     'label':{'defaults':['labeling_method'], 'sections':['label']},
+                     }
+    if 'ensemble' in conf.keys():
+        ensemble = conf['ensemble']
+    else:
+        ensemble = {'model1':{}}
+    if 'systems' in conf.keys():
+        systems = conf['systems']
+    else:
+        systems = {'system':{}}
+
+    label_tasks = []
+    for iteration in range(1):
+        # training part
+        train_tasks = train(deps=label_tasks, conf=conf, yaml_sections=yaml_sections, ensemble=ensemble, iteration=iteration)
+
+        # data generating
+        simulate_tasks = simulate(deps=train_tasks, conf=conf, yaml_sections=yaml_sections, systems=systems, iteration=iteration)
+
+        # active learning selection
+        select_tasks = select(deps=simulate_tasks, conf=conf, yaml_sections=yaml_sections, systems=systems, iteration=iteration)
+
+        # DFT labeling
+        label_tasks = label(deps=select_tasks, yaml_sections=yaml_sections, conf=conf, systems=systems, iteration=iteration)

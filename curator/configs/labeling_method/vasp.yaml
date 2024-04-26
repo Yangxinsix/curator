@@ -1,0 +1,36 @@
+method: vasp
+parameters:
+  xc: pbesol
+  encut: 520
+  ediff: 1e-05
+  ediffg: -0.03
+  algo: all
+  prec: accurate
+  sigma: 0.05
+  ibrion: 2
+  isif: 3
+  ismear: 0
+  ispin: 2
+  nelmin: 8
+  nelm: 400
+  lmaxmix: 4
+  nsw: 0
+  lorbit: 12
+  npar: 1
+  kpar: 1
+  lreal: auto
+  gamma: True
+  ncore: 4
+  istart: 0
+  isym: 0
+  lcharg: False
+  lwave: True
+  kspacing: 0.3
+  command: mpirun vasp_std
+  #ldau: True
+  #nupdown: 0
+  #ldau_luj: 
+  #  Fe: 
+  #    L: 2 
+  #    U: 5.3
+  #    J: 0

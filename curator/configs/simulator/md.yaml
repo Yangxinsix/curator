@@ -1,0 +1,13 @@
+method: md
+init_traj: null
+start_indice: 0
+rattle: null
+fix_under: null
+friction: 0.003
+temperature: 300 #K
+time_step: 1.0 #fs
+print_step: 1
+dump_step: 100
+min_steps: 1000
+max_steps: 10000
+num_uncertain: 100
