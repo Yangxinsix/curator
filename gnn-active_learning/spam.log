@@ -1,0 +1,11 @@
+2024-01-31 22:56:42,959 - simple_example - DEBUG - debug message
+2024-01-31 22:56:42,962 - simple_example - INFO - info message
+2024-01-31 22:56:42,967 - simple_example - WARNING - warn message
+2024-01-31 22:56:42,969 - simple_example - ERROR - error message
+2024-01-31 22:56:42,973 - simple_example - CRITICAL - critical message
+2024-01-31 23:57:57,693 - simple_example - INFO - Batch # of 100  total loss      energy_loss     forces_loss     energy_mae      energy_rmse     forces_mae      forces_rmse     
+2024-02-13 17:28:42,443 - simple_example - DEBUG - debug message
+2024-02-13 17:28:42,445 - simple_example - INFO - info message
+2024-02-13 17:28:42,446 - simple_example - WARNING - warn message
+2024-02-13 17:28:42,447 - simple_example - ERROR - error message
+2024-02-13 17:28:42,448 - simple_example - CRITICAL - critical message
