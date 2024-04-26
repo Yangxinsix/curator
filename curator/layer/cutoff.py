@@ -1,4 +1,10 @@
 import torch
+import abc
+
+class CutoffFunction(torch.nn.Module, metaclass=abc.ABCMeta):
+    @abc.abstractmethod
+    def forward(self):
+        pass
 
 @torch.jit.script
 def _cosine_cutoff(edge_dist: torch.Tensor, cutoff: float) -> torch.Tensor:
@@ -15,7 +21,7 @@ def _cosine_cutoff(edge_dist: torch.Tensor, cutoff: float) -> torch.Tensor:
         torch.tensor(0.0, device=edge_dist.device, dtype=edge_dist.dtype),
     )
 
-class CosineCutoff(torch.nn.Module):
+class CosineCutoff(CutoffFunction):
     def __init__(self, cutoff: float):
         super().__init__()
         self.cutoff = cutoff
@@ -35,7 +41,7 @@ def _poly_cutoff(x: torch.Tensor, factor: float, p: float = 6.0) -> torch.Tensor
     return out * (x < 1.0)
 
 
-class PolynomialCutoff(torch.nn.Module):
+class PolynomialCutoff(CutoffFunction):
     _factor: float
     p: float
 

@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from curator.data import properties
 
 class PainnUpdate(nn.Module):
     """Update function"""
@@ -15,7 +16,10 @@ class PainnUpdate(nn.Module):
             nn.Linear(num_features, num_features * 3),
         )
         
-    def forward(self, node_scalar, node_vector):
+    def forward(self, data: properties.Type) -> properties.Type:
+        node_scalar = data[properties.node_feat]
+        node_vector = data[properties.node_vect]
+        
         Uv = self.update_U(node_vector)
         Vv = self.update_V(node_vector)
         
@@ -33,4 +37,7 @@ class PainnUpdate(nn.Module):
         inner_prod = torch.sum(Uv * Vv, dim=1)
         delta_s = a_sv * inner_prod + a_ss
         
-        return node_scalar + delta_s, node_vector + delta_v
+        data[properties.node_feat] = node_scalar + delta_s
+        data[properties.node_vect] = node_vector + delta_v
+        
+        return data

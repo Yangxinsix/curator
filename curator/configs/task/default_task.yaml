@@ -1,11 +1,9 @@
 defaults:
   - optimizer: adam
-  - scheduler: exponential
+  - scheduler: reduce_on_plateau
 
 _target_: curator.model.LitNNP
-scheduler_monitor: null
-use_ema: False                         # exponential moving average
-ema_decay: null
+scheduler_monitor: val_total_loss
 warmup_steps: 0
 
 outputs:

@@ -9,6 +9,8 @@ from curator.layer import (
     AtomwiseLinear,
     AtomwiseNonLinear,
     RadialBasisEdgeEncoding,
+    BesselBasis,
+    PolynomialCutoff,
     SphericalHarmonicEdgeAttrs,
     RealAgnosticResidualInteractionBlock,
     EquivariantProductBasisBlock,
@@ -30,7 +32,7 @@ class MACE(nn.Module):
         self,
         cutoff: float,
         num_interactions: int,
-        correlation: int,
+        correlation: Union[int, List[int]],
         species: List[str],
         num_elements: Optional[int] = None,
         hidden_irreps: Union[o3.Irreps, str, None] = None,
@@ -71,6 +73,8 @@ class MACE(nn.Module):
         self.cutoff = cutoff
         self.lmax = lmax
         self.parity = parity
+        if isinstance(correlation, int):
+            correlation = [correlation] * num_interactions
 
         if num_elements is None:
             num_elements = len(species)
@@ -118,9 +122,8 @@ class MACE(nn.Module):
         self.embeddings = nn.ModuleDict()
         self.embeddings['onehot_embedding'] = OneHotAtomEncoding(num_elements=num_elements, species=species)
         self.embeddings['radial_basis'] = RadialBasisEdgeEncoding(
-            cutoff=self.cutoff,
-            basis_kwargs={'num_basis': num_basis},
-            cutoff_kwargs={'power': power},
+            basis=BesselBasis(cutoff=cutoff, num_basis=num_basis),
+            cutoff_fn=PolynomialCutoff(cutoff=cutoff, power=power),
         )
         self.embeddings['sphere_harmonics'] = SphericalHarmonicEdgeAttrs(edge_sh_irreps=self.edge_sh_irreps)
         
@@ -158,7 +161,7 @@ class MACE(nn.Module):
             prod = EquivariantProductBasisBlock(
                 node_feats_irreps=inter.target_irreps if i == 0 else interaction_irreps,
                 target_irreps=hidden_irreps_out,
-                correlation=correlation,
+                correlation=correlation[i],
                 num_elements=num_elements,
                 use_sc=True,
             )

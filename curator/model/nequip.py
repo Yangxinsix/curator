@@ -9,6 +9,8 @@ from curator.layer import (
     OneHotAtomEncoding,
     AtomwiseLinear,
     RadialBasisEdgeEncoding,
+    BesselBasis,
+    PolynomialCutoff,
     SphericalHarmonicEdgeAttrs,
     InteractionLayer,
 )
@@ -111,9 +113,8 @@ class NequipModel(torch.nn.Module):
         self.embeddings = nn.ModuleDict()
         self.embeddings['onehot_embedding'] = OneHotAtomEncoding(num_elements=num_elements, species=species)
         self.embeddings['radial_basis'] = RadialBasisEdgeEncoding(
-            cutoff=self.cutoff,
-            basis_kwargs={'num_basis': num_basis},
-            cutoff_kwargs={'power': power},
+            basis=BesselBasis(cutoff=cutoff, num_basis=num_basis),
+            cutoff_fn=PolynomialCutoff(cutoff=cutoff, power=power),
         )
         self.embeddings['sphere_harmonics'] = SphericalHarmonicEdgeAttrs(edge_sh_irreps=self.edge_sh_irreps)
         

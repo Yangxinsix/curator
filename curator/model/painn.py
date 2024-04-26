@@ -21,11 +21,6 @@ class PainnModel(nn.Module):
         num_basis: int = 20,
         cutoff_fn: Optional[nn.Module]=None,
         radial_basis: Optional[nn.Module]=None,
-        # normalization: bool=True,
-        # scale: float=1.0,
-        # shift: float=1.0,
-        # atomwise_normalization: bool=True,
-        # compute_neighborlist: bool=False,
         **kwargs,
     ):
         """PainnModel without edge updating
@@ -37,11 +32,6 @@ class PainnModel(nn.Module):
             num_basis (int, optional): Number of radial basis. Defaults to 20.
             cutoff_fn (Optional[nn.Module], optional): Cutoff function. Defaults to None.
             radial_basis (Optional[nn.Module], optional): Radial basis. Defaults to None.
-            normalization (bool, optional): Normalization. Defaults to True.
-            scale (float, optional): Scale. Defaults to 1.0.
-            shift (float, optional): Shift. Defaults to 1.0.
-            atomwise_normalization (bool, optional): Atomwise normalization. Defaults to True.
-            compute_neighborlist (bool, optional): Compute neighborlist. Defaults to False.
         """
         super().__init__()
         
@@ -79,27 +69,19 @@ class PainnModel(nn.Module):
         self, 
         data: properties.Type,
     ) -> properties.Type:
-        
-        num_atoms = data[properties.n_atoms]
-        edge = data[properties.edge_idx]
-        edge_diff = data[properties.edge_diff]
-        edge_dist = data[properties.edge_dist]  
-        total_atoms = int(torch.sum(num_atoms))
-        
-        node_scalar = self.atom_embedding(data[properties.Z])
-        node_vector = torch.zeros(
+        total_atoms = int(torch.sum(data[properties.n_atoms]))
+        data[properties.node_feat] = self.atom_embedding(data[properties.Z])
+        data[properties.node_vect] = torch.zeros(
             (total_atoms, 3, self.num_features),
-            device=edge_diff.device,
-            dtype=edge_diff.dtype,
+            device=data[properties.edge_diff].device,
+            dtype=data[properties.edge_diff].dtype,
         )
         
         for message_layer, update_layer in zip(self.message_layers, self.update_layers):
-            node_scalar, node_vector = message_layer(node_scalar, node_vector, edge, edge_diff, edge_dist)
-            node_scalar, node_vector = update_layer(node_scalar, node_vector)
+            data = message_layer(data)
+            data = update_layer(data)
         
-        data[properties.node_feat] = node_scalar
-        node_scalar = self.readout_mlp(node_scalar)
-        node_scalar.squeeze_()
-        data[properties.atomic_energy] = node_scalar              # it can be any atomic properties like atomic charge although it is called atomic energy
+        # it can be any atomic properties like atomic charge although it is called atomic energy
+        data[properties.atomic_energy] = self.readout_mlp(data[properties.node_feat]).squeeze()
         
         return data

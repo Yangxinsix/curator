@@ -3,6 +3,7 @@ from torch import nn
 from .cutoff import CosineCutoff
 from .radial_basis import SineBasis
 from typing import Optional
+from curator.data import properties
 
 class PainnMessage(nn.Module):
     """Message function"""
@@ -35,8 +36,15 @@ class PainnMessage(nn.Module):
         
         self.filter_layer = nn.Linear(num_basis, num_features * 3)
         
-    def forward(self, node_scalar, node_vector, edge, edge_diff, edge_dist):
-        # remember to use v_j, s_j but not v_i, s_i        
+    # def forward(self, node_scalar, node_vector, edge, edge_diff, edge_dist):
+    def forward(self, data: properties.Type) -> properties.Type:
+        # remember to use v_j, s_j but not v_i, s_i
+        edge = data[properties.edge_idx]
+        edge_dist = data[properties.edge_dist]
+        edge_diff = data[properties.edge_diff]
+        node_scalar = data[properties.node_feat]
+        node_vector = data[properties.node_vect]
+        
         filter_weight = self.filter_layer(self.radial_basis(edge_dist))
         filter_weight = filter_weight * self.cutoff_fn(edge_dist).unsqueeze(-1)
         scalar_out = self.scalar_message_mlp(node_scalar)        
@@ -49,7 +57,7 @@ class PainnMessage(nn.Module):
         )
         
         # num_pairs * 3 * num_features, num_pairs * num_features
-        message_vector =  node_vector[edge[:, 1]] * gate_state_vector.unsqueeze(1) 
+        message_vector =  data[properties.node_vect][edge[:, 1]] * gate_state_vector.unsqueeze(1) 
         edge_vector = gate_edge_vector.unsqueeze(1) * (edge_diff / edge_dist.unsqueeze(-1)).unsqueeze(-1)
         message_vector = message_vector + edge_vector
         
@@ -60,7 +68,7 @@ class PainnMessage(nn.Module):
         residual_vector.index_add_(0, edge[:, 0], message_vector)
         
         # new node state
-        new_node_scalar = node_scalar + residual_scalar
-        new_node_vector = node_vector + residual_vector
+        data[properties.node_feat] = node_scalar + residual_scalar
+        data[properties.node_vect] = node_vector + residual_vector
         
-        return new_node_scalar, new_node_vector
+        return data

@@ -17,8 +17,8 @@
 
 # -- Project information -----------------------------------------------------
 
-project = 'Tutorial for GNN Active Learning'
-copyright = '2023, Xin Yang'
+project = 'Tutorial for CURATOR'
+copyright = '2024, Xin Yang'
 author = 'Xin Yang'
 
 # The full version, including alpha/beta/rc tags

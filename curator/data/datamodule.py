@@ -28,6 +28,8 @@ class AtomsDataModule(pl.LightningDataModule):
         num_val: Optional[int] = 0.1,
         num_test: Optional[int] = None,
         val_only: bool = True,
+        train_val_split: str = "random",  # could be random or sequential
+        shuffle: bool = True,
         num_workers: int = 1,
         pin_memory: bool = True,
         species: Union[List[str], str, None] = "auto",
@@ -58,6 +60,8 @@ class AtomsDataModule(pl.LightningDataModule):
         self.train_idx = None
         self.val_idx = None
         self.test_idx = None
+        self.train_val_split = train_val_split
+        self.shuffle = shuffle
         
         self._num_workers = num_workers
         self._pin_memory = pin_memory
@@ -133,7 +137,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 batch_size=self.batch_size,
                 collate_fn=self._collate_fn,
                 num_workers=self._num_workers,
-                shuffle=True,
+                shuffle=self.shuffle,
                 pin_memory=self._pin_memory,
             )
         return self._train_dataloader
@@ -162,7 +166,14 @@ class AtomsDataModule(pl.LightningDataModule):
     
     def _split_data(self) -> None:
         if self.split_file is None:
-            indices = torch.randperm(self.datalen)
+            if self.train_val_split == "random":
+                indices = torch.randperm(self.datalen)
+            elif self.train_val_split == "sequential":
+                indices = torch.arange(self.datalen)
+            else:
+                raise NotImplementedError(
+                    f"splitting mode {self.train_val_split} not implemented"
+                )
             self.train_idx = indices[:self.num_train]
             self.val_idx = indices[self.num_train:self.num_train+self.num_val]
             if self.num_test != 0:
@@ -181,8 +192,8 @@ class AtomsDataModule(pl.LightningDataModule):
             self.num_val = len(self.val_idx) if self.val_idx is not None else self.num_val
             self.num_test = len(self.test_idx) if self.test_idx is not None else self.num_test
             
-        logger.info(
-            f"Dataset size: {self.num_train}, training dataset size: {self.num_val}, "
+        logger.debug(
+            f"Dataset size: {self.datalen}, training dataset size: {self.num_train}, validation dataset size: {self.num_val}"
             + f"test dataset size: {self.num_test}."
         )
         self._train_dataset = torch.utils.data.Subset(self.dataset, self.train_idx)
@@ -196,7 +207,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 numbers.append(torch.unique(sample[properties.Z]))
             numbers = torch.unique(torch.cat(numbers))
             self.species = [chemical_symbols[int(n)] for n in numbers]
-        logger.info(f"Training model for elements: {self.species}.")
+        logger.debug(f"Training model for elements: {self.species}.")
         return self.species
             
     def _get_avg_num_neighbors(self) -> Optional[float]:
@@ -208,7 +219,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 # TODO: add compute_neighbor_list here if neighbors are not computed
                 n_neighbors += sample[properties.n_pairs].sum()
             self.avg_num_neighbors = n_neighbors.sum() / n_atoms.item()
-            logger.info(f"The average number of neighbors is calculated to be: {self.avg_num_neighbors:.3f}")
+            logger.debug(f"The average number of neighbors is calculated to be: {self.avg_num_neighbors:.3f}")
         return self.avg_num_neighbors
     
     def _get_average_E0(self) -> Optional[Dict[int, float]]:
@@ -247,7 +258,7 @@ class AtomsDataModule(pl.LightningDataModule):
                     _atomic_energies[chemical_symbols[k]] = v
             self.atomic_energies = _atomic_energies
 
-        logger.info(f"Using reference energies for elements: {self.atomic_energies}.")
+        logger.debug(f"Using reference energies for elements: {self.atomic_energies}.")
         return self.atomic_energies
     
     def _get_scale_shift(
@@ -281,10 +292,11 @@ class AtomsDataModule(pl.LightningDataModule):
                 if self.scale_forces:
                     forces = torch.cat(forces)
                     std = torch.sqrt(torch.mean(forces * forces)).item()
-                    logger.info(f"Forces will be scaled by forces_rms: {std:.3f}.")
+                    logger.debug(f"Forces will be scaled by forces_rms: {std:.3f}.")
             else:
                 mean, std = 0.0, 1.0
             self.mean, self.std = mean, std
-            
-        logger.info(f"Model output properties will be scaled by {std:.3f}, shifted by {mean:.3f}.")
+        if self.atomwise_normalization:
+            logger.debug("Atomwise model outputs will be normalized.")
+        logger.debug(f"Model output properties will be scaled by {self.std:.3f}, shifted by {self.mean:.3f}.")
         return self.mean, self.std
