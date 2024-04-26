@@ -8,8 +8,8 @@ from ase.data import atomic_numbers
 class GlobalRescaleShift(torch.nn.Module):
     def __init__(
         self,
-        scale: Union[float,Dict[str, float],Dict[int, float],None] = None,                            # standard deviation used to rescale output
-        shift: Union[float,Dict[str, float],Dict[int, float],None ]= None,                            # mean value used to shift output
+        scale_by: Union[float,Dict[str, float],Dict[int, float],None] = None,                            # standard deviation used to rescale output
+        shift_by: Union[float,Dict[str, float],Dict[int, float],None ]= None,                            # mean value used to shift output
         scale_trainable: bool=False,
         shift_trainable: bool=False,
         scale_keys: List[str] = ["energy"],
@@ -24,49 +24,74 @@ class GlobalRescaleShift(torch.nn.Module):
         self.output_keys = output_keys
         self.register_buffer("atomwise_normalization", torch.tensor(atomwise_normalization))
             
-        if scale is None and shift is None:
+        if scale_by is None and shift_by is None:
             self._initialized = False
         else:
             self._initialized = True
             
-        if scale is not None:
+        if scale_by is not None:
             self.has_scale = True
             if scale_trainable:
-                self.register_parameter("scale", torch.tensor([scale]))
+                self.register_parameter("scale_by", torch.tensor([scale_by]))
             else:
-                self.register_buffer("scale", torch.tensor([scale]))
+                self.register_buffer("scale_by", torch.tensor([scale_by]))
         else:
             self.has_scale = False
-            self.register_buffer("scale", torch.tensor([1.0]))
+            self.register_buffer("scale_by", torch.tensor([1.0]))
             
-        if shift is not None:
+        if shift_by is not None:
             self.has_shift = True
             if shift_trainable:
-                self.register_parameter("shift", torch.tensor([shift]))
+                self.register_parameter("shift_by", torch.tensor([shift_by]))
             else:
-                self.register_buffer("shift", torch.tensor([shift]))
+                self.register_buffer("shift_by", torch.tensor([shift_by]))
         else:
             self.has_shift = False
-            self.register_buffer("shift", torch.tensor([0.0]))
+            self.register_buffer("shift_by", torch.tensor([0.0]))
 
         self.model_outputs = output_keys
         self._get_atomic_energies_list(atomic_energies)
         
-    def forward(self,  data: properties.Type) -> properties.Type:
-        if self.has_scale:
-            for key in self.scale_keys:
-                data[key] = data[key] * self.scale
-        if self.has_shift:
-            # add atomic energies
-            shift = data[properties.n_atoms] * self.shift if self.atomwise_normalization else self.shift    
-            if self.shift_by_E0:
-                node_e0 = self.atomic_energies[data[properties.Z]]
-                e0 = scatter_add(node_e0, data[properties.image_idx], data[properties.n_atoms].shape[0])
-                shift = shift + e0
-            for key in self.shift_keys:
-                data[key] = data[key] + shift
+    def forward(self, data: properties.Type) -> properties.Type:
+        return self.scale(data, force_process=False)
+    
+    @torch.jit.export
+    def scale(self, data: properties.Type, force_process: bool=False) -> properties.Type:
+        data = data.copy()
+        if not self.training or force_process:
+            if self.has_scale:
+                for key in self.scale_keys:
+                    data[key] = data[key] * self.scale_by
+            if self.has_shift:
+                # add atomic energies
+                shift_by = data[properties.n_atoms] * self.shift_by if self.atomwise_normalization else self.shift_by    
+                if self.shift_by_E0:
+                    node_e0 = self.atomic_energies[data[properties.Z]]
+                    e0 = scatter_add(node_e0, data[properties.image_idx], data[properties.n_atoms].shape[0])
+                    shift_by = shift_by + e0
+                for key in self.shift_keys:
+                    data[key] = data[key] + shift_by       
         return data
-
+    
+    @torch.jit.export
+    def unscale(self, data: properties.Type, force_process: bool=False) -> properties.Type:
+        data = data.copy()
+        if self.training or force_process:
+            # inverse scale and shift for unscale
+            if self.has_shift:
+                # add atomic energies
+                shift_by = data[properties.n_atoms] * self.shift_by if self.atomwise_normalization else self.shift_by
+                if self.shift_by_E0:
+                    node_e0 = self.atomic_energies[data[properties.Z]]
+                    e0 = scatter_add(node_e0, data[properties.image_idx], data[properties.n_atoms].shape[0])
+                    shift_by = shift_by + e0
+                for key in self.shift_keys:
+                    data[key] = data[key] - shift_by
+            if self.has_scale:
+                for key in self.scale_keys:
+                    data[key] = data[key] / self.scale_by
+        return data
+        
     def _get_atomic_energies_list(self, atomic_energies: Union[Dict[int, float], Dict[str, float], None]):
         if atomic_energies is not None:
             self.shift_by_E0 = True
@@ -86,13 +111,13 @@ class GlobalRescaleShift(torch.nn.Module):
         
     def datamodule(self, _datamodule):
         if not self._initialized:
-            shift, scale = _datamodule._get_scale_shift()
-            if scale is not None:
+            shift_by, scale_by = _datamodule._get_scale_shift()
+            if scale_by is not None:
                 self.has_scale = True
-                self.scale = torch.tensor([scale])
-            if shift is not None:
+                self.scale_by = torch.tensor([scale_by])
+            if shift_by is not None:
                 self.has_shift = True
-                self.shift = torch.tensor([shift])
+                self.shift_by = torch.tensor([shift_by])
                 
             self.atomwise_normalization = torch.tensor(_datamodule.atomwise_normalization)
             scale_forces = _datamodule.scale_forces

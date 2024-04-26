@@ -67,10 +67,11 @@ class NeighborListTransform(Transform):
             edge_info = self._build_neighbor_list(data[properties.positions], data[properties.cell])
         else:
             edge_info = self._simple_neighbor_list(data[properties.positions])
-        data[properties.edge_idx] = edge_info[0]
-        data[properties.edge_diff] = edge_info[1]
+        data.update(edge_info)
         data[properties.n_pairs] = torch.tensor([data[properties.edge_idx].shape[0]])
         
+        if self.return_distance:
+            data[properties.edge_dist] = torch.linalg.norm(data[properties.edge_diff], dim=1)
         return data
     
     def _build_neighbor_list(self, pos: torch.Tensor, cell: torch.Tensor):
@@ -85,8 +86,11 @@ class NeighborListTransform(Transform):
         mask.fill_diagonal_(False)
         pairs = torch.argwhere(mask)
         n_diff = pos[pairs[:, 1]] - pos[pairs[:, 0]]
-        
-        return pairs, n_diff
+        outputs = {
+            properties.edge_idx: pairs,
+            properties.edge_diff: n_diff,
+        }
+        return outputs
 
 
 class TorchNeighborList(NeighborListTransform):
@@ -117,20 +121,6 @@ class TorchNeighborList(NeighborListTransform):
         self.requires_grad = requires_grad
         self.return_distance = return_distance
         self.wrap_atoms = wrap_atoms
-    
-    def forward(self, data: properties.Type) -> properties.Type:
-        if properties.cell in data:
-            edge_info = self._build_neighbor_list(data[properties.positions], data[properties.cell])
-        else:
-            edge_info = self._simple_neighbor_list(data[properties.positions])
-        data[properties.edge_idx] = edge_info[0]
-        data[properties.edge_diff] = edge_info[1]
-        data[properties.n_pairs] = torch.tensor([data[properties.edge_idx].shape[0]])
-        
-        if self.return_distance:
-            data[properties.edge_dist] = edge_info[2]
-        
-        return data
     
     def _build_neighbor_list(self, positions: torch.tensor, cell: torch.tensor) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:
         # calculate padding size. It is useful for all kinds of cells
@@ -200,16 +190,17 @@ class TorchNeighborList(NeighborListTransform):
         mask = torch.logical_and(pair_dist < self.cutoff, pair_dist > 0.01)   # 0.01 for numerical stability
         pairs = torch.hstack((pair_i.unsqueeze(-1), pair_j.unsqueeze(-1)))
         
-        if self.return_distance:
-            return pairs[mask], pair_diff[mask], pair_dist[mask]
-        else:
-            return pairs[mask], pair_diff[mask]
-        
+        outputs = {
+            properties.edge_idx: pairs[mask],
+            properties.edge_diff: pair_diff[mask],
+        }
+        return outputs
         
 class Asap3NeighborList(NeighborListTransform):
     def __init__(
         self,
         cutoff: float,
+        return_distance: bool = False,
         return_cell_displacements: bool = False,
     ) -> None:
         super().__init__()
@@ -217,20 +208,8 @@ class Asap3NeighborList(NeighborListTransform):
         if not ("asap3" in sys.modules):
             raise ModuleNotFoundError("This neighbor list implementation needs ASAP3 module!")
         self.nblist = asap3.FullNeighborList(self.cutoff, atoms=None)
+        self.return_distance = return_distance
         self.return_cell_displacements = return_cell_displacements
-    
-    def forward(self, data: properties.Type) -> properties.Type:
-        if properties.cell in data:
-            edge_info = self._build_neighbor_list(data[properties.positions], data[properties.cell])
-            if self.return_cell_displacements:
-                data[properties.cell_displacements] = edge_info[2]
-        else:
-            edge_info = self._simple_neighbor_list(data[properties.positions])
-        data[properties.edge_idx] = edge_info[0]
-        data[properties.edge_diff] = edge_info[1]
-        data[properties.n_pairs] = torch.tensor([data[properties.edge_idx].shape[0]])
-        
-        return data
     
     def _build_neighbor_list(
         self, 
@@ -271,7 +250,11 @@ class Asap3NeighborList(NeighborListTransform):
         n_diff = np.concatenate(n_diff)
         pairs = torch.as_tensor(pairs)
         n_diff = torch.as_tensor(n_diff, dtype=torch.float)
+        
+        outputs = {
+            properties.edge_idx: pairs,
+            properties.edge_diff: n_diff,
+        }
         if self.return_cell_displacements:
-            return pairs, n_diff, cell_displacements
-        else:
-            return pairs, n_diff
+            outputs[properties.cell_displacements] = cell_displacements   
+        return outputs

@@ -4,6 +4,40 @@ from omegaconf import open_dict, OmegaConf, DictConfig
 from hydra import compose, initialize
 import hydra
 from collections import abc
+import logging
+
+class CustomFormatter(logging.Formatter):
+    format = "%(asctime)s: %(message)s"
+    time_format = "%Y-%m-%d %H:%M:%S"
+     
+    FORMATS = {
+        logging.DEBUG: format,
+        logging.INFO: "%(message)s",
+        logging.WARNING: format,
+        logging.ERROR: format,
+        logging.CRITICAL: format
+    }
+
+    def format(self, record):
+        log_fmt = self.FORMATS.get(record.levelno)
+        formatter = logging.Formatter(log_fmt, self.time_format)
+        return formatter.format(record)
+
+# Set up Early stopping for pytorch training 
+class EarlyStopping():
+    def __init__(self, patience=5, min_delta=0):
+
+        self.patience = patience
+        self.min_delta = min_delta
+        self.counter = 0
+        self.early_stop = False
+
+    def __call__(self, val_loss, best_loss):
+        if val_loss - best_loss > self.min_delta:
+            self.counter +=1
+            if self.counter >= self.patience:  
+                self.early_stop = True
+        return self.early_stop
 
 def deploy_model(model, file_path: str):
     compiled_model = script(model)

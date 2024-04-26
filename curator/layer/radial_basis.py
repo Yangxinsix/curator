@@ -4,18 +4,26 @@ from torch import nn
 from e3nn import o3
 from curator.data import properties
 from e3nn.util.jit import compile_mode
-from .cutoff import PolynomialCutoff
+from .cutoff import CutoffFunction, PolynomialCutoff
+import abc
 
-class SineBasis(torch.nn.Module):
+class RadialBasis(torch.nn.Module, metaclass=abc.ABCMeta):
+    @abc.abstractmethod
+    def forward(self):
+        pass
+
+
+class SineBasis(RadialBasis):
     """
     calculate sinc radial basis function:
     
     sin(n *pi*d/d_cut)/d
     """
-    def __init__(self, num_basis: int, cutoff: float):
+    def __init__(self, cutoff: float, num_basis: int):
         super().__init__()
-        self.num_basis = num_basis
         self.cutoff = cutoff
+        self.num_basis = num_basis
+        self.irreps_out = o3.Irreps([(num_basis, (0, 1))])
         
     def forward(self, edge_dist: torch.Tensor) -> torch.Tensor:
         n = torch.arange(self.num_basis, device=edge_dist.device) + 1
@@ -28,11 +36,11 @@ def gaussian_rbf(inputs: torch.Tensor, offsets: torch.Tensor, widths: torch.Tens
     y = torch.exp(coeff * torch.pow(diff, 2))
     return y
 
-class GaussianBasis(torch.nn.Module):
+class GaussianBasis(RadialBasis):
     r"""Gaussian radial basis functions."""
 
     def __init__(
-        self, n_rbf: int, cutoff: float, start: float = 0.0, trainable: bool = False
+        self, cutoff: float, n_rbf: int, start: float = 0.0, trainable: bool = False
     ):
         """
         Args:
@@ -43,7 +51,9 @@ class GaussianBasis(torch.nn.Module):
                 are adjusted during training process.
         """
         super().__init__()
+        self.cutoff = cutoff
         self.n_rbf = n_rbf
+        self.irreps_out = o3.Irreps([(n_rbf, (0, 1))])
 
         # compute offset and width of Gaussian functions
         offset = torch.linspace(start, cutoff, n_rbf)
@@ -60,7 +70,7 @@ class GaussianBasis(torch.nn.Module):
     def forward(self, inputs: torch.Tensor):
         return gaussian_rbf(inputs, self.offsets, self.widths)
 
-class BesselBasis(torch.nn.Module):
+class BesselBasis(RadialBasis):
     cutoff: float
     prefactor: float
 
@@ -116,17 +126,12 @@ class RadialBasisEdgeEncoding(torch.nn.Module):
 
     def __init__(
         self,
-        cutoff,
-        basis=BesselBasis,
-        cutoff_fn=PolynomialCutoff,
-        basis_kwargs={},
-        cutoff_kwargs={},
+        basis: RadialBasis,
+        cutoff_fn: CutoffFunction,
     ):
         super().__init__()
-        basis_kwargs['cutoff'] = cutoff
-        cutoff_kwargs['cutoff'] = cutoff
-        self.basis = basis(**basis_kwargs)
-        self.cutoff_fn = cutoff_fn(**cutoff_kwargs)
+        self.basis = basis
+        self.cutoff_fn = cutoff_fn
         
         # output edge dist irreps
         self.irreps_out = self.basis.irreps_out

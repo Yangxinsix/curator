@@ -34,7 +34,7 @@ class AtomwiseLinear(torch.nn.Module):
 @compile_mode("script") 
 class AtomwiseNonLinear(torch.nn.Module):
     def __init__(
-        self, 
+        self,
         irreps_in: o3.Irreps,
         MLP_irreps: o3.Irreps,
         gate: Optional[Callable],

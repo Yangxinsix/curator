@@ -15,12 +15,12 @@ n_atoms : Final[str] = "_n_atoms"
 n_types : Final[str] = "_n_types"              # read from config file, useful for onehot embedding in nequip
 atomic_types: Final[str] = "_atomic_types"     # map chemical symbols to numbers
 symbols: Final[str] = "_symbols"
-image_idx: Final[str] = "_image_idx"             # image index of atoms in a batch
+image_idx: Final[str] = "_image_index"             # image index of atoms in a batch
 
 # neighbor list related properties
-edge_idx: Final[str] = "_edge_idx"             # index of i (center atoms), j (neighboring atoms)
-edge_diff: Final[str] = "_edge_diff"           # R_j - R_i
-edge_dist: Final[str] = "_edge_dist"           # distance between R_i and R_j
+edge_idx: Final[str] = "_edge_index"             # index of i (center atoms), j (neighboring atoms)
+edge_diff: Final[str] = "_edge_difference"           # R_j - R_i
+edge_dist: Final[str] = "_edge_distance"           # distance between R_i and R_j
 n_pairs: Final[str] = "_n_pairs"               # number of pairs
 cell_displacements: Final[str] = "_cell_displacements"     # cell displacements used to reconstruct neighbor list for gradients calculation
 
@@ -37,8 +37,9 @@ forces_uncertainty: Final[str] = "forces_uncertainty"
 # node and edge feature keys (for nequip)
 edge_diff_embedding: Final[str] = "_edge_diff_embedding"
 edge_dist_embedding: Final[str] = "_edge_dist_embedding"
-node_attr: Final[str] = "_node_attr"
-node_feat: Final[str] = "_node_feat"
+node_attr: Final[str] = "_node_attribute"
+node_feat: Final[str] = "_node_feature"
+node_vect: Final[str] = "_node_vector"
 sc: Final[str] = "_skip_connection"
 
 

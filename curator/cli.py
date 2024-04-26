@@ -5,9 +5,10 @@ from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf, open_dict
 import sys, os, json
 from pathlib import Path
-from .utils import read_user_config
+from .utils import read_user_config, CustomFormatter
 import logging
 import socket
+import contextlib
 
 # very ugly solution for solving pytorch lighting and myqueue conflictions
 if "SLURM_NTASKS" in os.environ:
@@ -16,23 +17,8 @@ if "SLURM_JOB_NAME" in os.environ:
     del os.environ["SLURM_JOB_NAME"]
 
 # Set up logger for the different tasks 
-log = logging.getLogger(__name__)
-
-# Set up Early stopping for pytorch training 
-class EarlyStopping():
-    def __init__(self, patience=5, min_delta=0):
-
-        self.patience = patience
-        self.min_delta = min_delta
-        self.counter = 0
-        self.early_stop = False
-
-    def __call__(self, val_loss, best_loss):
-        if val_loss - best_loss > self.min_delta:
-            self.counter +=1
-            if self.counter >= self.patience:  
-                self.early_stop = True
-        return self.early_stop
+log = logging.getLogger('curator')
+log.setLevel(logging.DEBUG)
 
 # Trainining with Pytorch Lightning (only with weights and biasses)
 @hydra.main(config_path="configs", config_name="train", version_base=None)
@@ -45,6 +31,7 @@ def train(config: DictConfig) -> None:
         None
 
     """
+    import torch
     from pytorch_lightning import (
     LightningDataModule, 
     Trainer,
@@ -52,47 +39,50 @@ def train(config: DictConfig) -> None:
     from curator.model import LitNNP
     from e3nn.util.jit import script
 
+    # set up logger
+    fh = logging.FileHandler(os.path.join(config.run_path, "training.log"), mode="w")
+    fh.setFormatter(CustomFormatter())
+    log.addHandler(fh)
     
     # Load the arguments 
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="train")
 
     # Save yaml file in run_path
-    OmegaConf.resolve(config)
-    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolved=True)
-    log.info("Running on host: " + str(socket.gethostname()))
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
+    log.debug("Running on host: " + str(socket.gethostname()))
     
     # Set up seed
     if "seed" in config:
-        log.info(f"Seed with <{config.seed}>")
+        log.debug(f"Seed with <{config.seed}>")
     else:
-        log.info("Seed randomly...")
+        log.debug("Seed randomly...")
     
     # Initiate the datamodule
-    log.info(f"Instantiating datamodule <{config.data._target_}>")
+    log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath}")
     if not os.path.isfile(config.data.datapath):
         raise RuntimeError("Please provide valid data path!")
     datamodule: LightningDataModule = hydra.utils.instantiate(config.data)
     
     # Initiate the model
-    log.info(f"Instantiating model <{config.model._target_}>")
+    log.debug(f"Instantiating model <{config.model._target_}>")
     model = hydra.utils.instantiate(config.model)
+    log.debug(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,d}")
     
     # Initiate the task and load old model, if any
-    log.info(f"Instantiating task <{config.task._target_}>")
+    log.debug(f"Instantiating task <{config.task._target_}>")
     task: LitNNP = hydra.utils.instantiate(config.task, model=model)
     if config.model_path is not None:
-        log.info(f"Loading trained model from {config.model_path}")
+        log.debug(f"Loading trained model from {config.model_path}")
         task = LitNNP.load_from_checkpoint(checkpoint_path=config.model_path, model=model)
     # Save extra arguments in checkpoint
     task.save_configuration(config)
     
     # Initiate the training
-    log.info(f"Instantiating trainer <{config.trainer._target_}>")
+    log.debug(f"Instantiating trainer <{config.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(config.trainer)
     
     # Train the model
-    log.info("Starting training.")
     trainer.fit(model=task, datamodule=datamodule)
     
     # Deploy model to a compiled model
@@ -109,12 +99,13 @@ def train(config: DictConfig) -> None:
         model_path = model_path[index]
           
         # Compile the model
-        log.info(f"Deploy trained model from {model_path} with validation loss of {val_loss:.3f}")
-        task = LitNNP.load_from_checkpoint(checkpoint_path=f"{model_path}", model=model)
+        outputs = torch.load(model_path)['outputs']
+        log.debug(f"Deploy trained model from {model_path} with validation loss of {val_loss:.3f}")
+        task = LitNNP.load_from_checkpoint(checkpoint_path=f"{model_path}", model=model, outputs=outputs)
         model_compiled = script(task.model)
         metadata = {"cutoff": str(model_compiled.representation.cutoff).encode("ascii")}
         model_compiled.save(f"{config.run_path}/compiled_model.pt", _extra_files=metadata)
-        log.info(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
+        log.debug(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
 
 # Training without Pytorch Lightning
 @hydra.main(config_path="configs", config_name="train", version_base=None)
@@ -131,6 +122,7 @@ def tmp_train(config: DictConfig):
     import torch
     from e3nn.util.jit import script
     from torch_ema import ExponentialMovingAverage
+    from .utils import EarlyStopping
 
 
     # Load the arguments
@@ -138,8 +130,7 @@ def tmp_train(config: DictConfig):
         config = read_user_config(config.cfg, config_path="configs", config_name="train")
 
     # Save yaml file in run_path
-    resolved = OmegaConf.to_container(config, resolve=True)
-    OmegaConf.save(resolved, f"{config.run_path}/config.yaml")
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
     log.info("Running on host: " + str(socket.gethostname()))
     
     # Set up the seed
@@ -161,8 +152,8 @@ def tmp_train(config: DictConfig):
         raise RuntimeError("Please provide valid data path!")
     datamodule = instantiate(config.data)
     datamodule.setup()
-    train_loader = datamodule.train_dataloader()
-    val_loader = datamodule.val_dataloader()
+    train_loader = datamodule.train_dataloader
+    val_loader = datamodule.val_dataloader
 
     # Set up the model, the optimizer and  the scheduler
     model = instantiate(config.model)
@@ -183,10 +174,14 @@ def tmp_train(config: DictConfig):
     epoch = config.trainer.max_epochs
     best_val_loss = torch.inf
     prev_loss = None
-    
+    rescale_layers = []
+    for layer in model.output_modules:
+        if hasattr(layer, "unscale"):
+            rescale_layers.append(layer)
     # Start training
     for e in range(epoch):
         # train
+        model.train()
         for i, batch in enumerate(train_loader):
             # Initialize the batch, targets and loss
             batch = {k: v.to(config.device) for k, v in batch.items()}
@@ -194,15 +189,19 @@ def tmp_train(config: DictConfig):
                 output.target_property: batch[output.target_property]
                 for output in outputs
             }
+            atoms_dict = {k: v for k, v in batch.items() if k not in targets}
             optimizer.zero_grad()
-
+            unscaled_targets = targets.copy()
+            unscaled_targets.update(atoms_dict)
+            for layer in rescale_layers:
+                unscaled_targets = layer.unscale(unscaled_targets, force_process=True)
             pred = model(batch)
             loss = 0.0
             
             # Calculate the loss and metrics
             metrics = {}
             for output in outputs:
-                tmp_loss = output.calculate_loss(targets, pred)
+                tmp_loss, _ = output.calculate_loss(unscaled_targets, pred)
                 metrics[f"{output.target_property}_loss"] = tmp_loss.detach()
                 loss += tmp_loss
             
@@ -213,47 +212,65 @@ def tmp_train(config: DictConfig):
                 ema.update()
             
             # Log the training metrics
+            scaled_pred = pred.copy()
+            scaled_pred.update(atoms_dict)
+            for layer in rescale_layers:
+                scaled_pred = layer.scale(scaled_pred, force_process=True)
             if i % config.trainer.log_every_n_steps == 0:
                 for output in outputs:
                     for k, v in output.metrics['train'].items():
-                        metrics[f"{output.name}_{k}"] = v(pred[output.name], targets[output.name]).detach()
+                        metrics[f"{output.name}_{k}"] = v(scaled_pred[output.name], targets[output.name]).detach()
                 log_outputs = ",".join([f"{k}: {v:8.3f} " for k, v in metrics.items()])
                 log.info(f"Training step: {i} {log_outputs}")
         
         # validation for each epoch
+        model.eval()
         metrics = {}
         a_counts = 0
         s_counts = 0
-        for i, batch in enumerate(val_loader):
-            # Initialize the batch, targets and loss
-            batch = {k: v.to(config.device) for k, v in batch.items()}
-            targets = {
-                output.target_property: batch[output.target_property]
-                for output in outputs
-            }
-            
-            a = batch["forces"].shape[0]
-            s = batch["energy"].shape[0]
-            a_counts += a
-            s_counts += s
-            pred = model(batch)
-            # calculate loss
-            for output in outputs:
-                tmp_loss = output.calculate_loss(targets, pred).detach()
-                # metrics
-                if i == 0:
-                    metrics[f"{output.target_property}_loss"] = tmp_loss
-                else:
-                    metrics[f"{output.target_property}_loss"] += tmp_loss
+        if config.task.use_ema:
+            cm = ema.average_parameters()
+        else:
+            cm = contextlib.nullcontext()
+        with cm:
+            for i, batch in enumerate(val_loader):
+                # Initialize the batch, targets and loss
+                batch = {k: v.to(config.device) for k, v in batch.items()}
+                targets = {
+                    output.target_property: batch[output.target_property]
+                    for output in outputs
+                }
+                atoms_dict = {k: v for k, v in batch.items() if k not in targets}
                     
-                for k, v in output.metrics['train'].items():
-                    m = v(pred[output.name], targets[output.name]).detach()
-                    if "rmse" in k:
-                        m = m ** 2
+                a = batch["forces"].shape[0]
+                s = batch["energy"].shape[0]
+                a_counts += a
+                s_counts += s
+                pred = model(batch)
+                unscaled_targets, unscaled_pred = targets.copy(), pred.copy()
+                unscaled_pred.update(atoms_dict)
+                unscaled_targets.update(atoms_dict)
+                for layer in rescale_layers:
+                    unscaled_targets = layer.unscale(unscaled_targets, force_process=True)
+                    unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
+                    
+                # calculate loss
+                for output in outputs:
+                    tmp_loss = output.calculate_loss(unscaled_targets, unscaled_pred, return_num_obs=False).detach()
+                    # metrics
                     if i == 0:
-                        metrics[f"{output.name}_{k}"] = m
+                        metrics[f"{output.target_property}_loss"] = tmp_loss
                     else:
-                        metrics[f"{output.name}_{k}"] += m
+                        metrics[f"{output.target_property}_loss"] += tmp_loss
+                        
+                    for k, v in output.metrics['train'].items():
+                        m = v(pred[output.name], targets[output.name]).detach()
+                        if "rmse" in k:
+                            m = m ** 2
+                        if i == 0:
+                            metrics[f"{output.name}_{k}"] = m
+                        else:
+                            metrics[f"{output.name}_{k}"] += m
             
         # postprocess validation metrics    
         for k in metrics:
@@ -384,8 +401,7 @@ def simulate(config: DictConfig):
         config = read_user_config(config.cfg, config_path="configs", config_name="simulate")
     
     # Save yaml file in run_path
-    resolved = OmegaConf.to_container(config, resolve=True)
-    OmegaConf.save(resolved, f"{config.run_path}/config.yaml")
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
     
     # set logger
     log.setLevel(logging.DEBUG)
@@ -473,8 +489,7 @@ def select(config: DictConfig):
         config = read_user_config(config.cfg, config_path="configs", config_name="select")
     
     # Save yaml file in run_path
-    resolved = OmegaConf.to_container(config, resolve=True)
-    OmegaConf.save(resolved, f"{config.run_path}/config.yaml")
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
     log.info("Running on host: " + str(socket.gethostname()))
 
     # Set up the seed
@@ -565,8 +580,7 @@ def label(config: DictConfig):
         config = read_user_config(config.cfg, config_path="configs", config_name="label")
 
     # Save yaml file in run_path
-    resolved = OmegaConf.to_container(config, resolve=True)
-    OmegaConf.save(resolved, f"{config.run_path}/config.yaml")
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
     log.info("Running on host: " + str(socket.gethostname()))
 
     # Set up dataframe and load possible converged data id's

@@ -1,7 +1,6 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from torch_ema import ExponentialMovingAverage
 from typing import List, Optional, Dict, Type, Any
 from curator.data import properties
 from pytorch_lightning.utilities.types import STEP_OUTPUT
@@ -12,6 +11,9 @@ from torchmetrics import Metric
 import copy
 from pytorch_lightning import LightningDataModule
 from omegaconf import DictConfig
+import logging
+from collections import OrderedDict, defaultdict
+from curator.model import MACE
 
 
 class NeuralNetworkPotential(nn.Module):
@@ -55,7 +57,7 @@ class NeuralNetworkPotential(nn.Module):
                 module.datamodule(datamodule)
         self._initialized = True
     
-    def collect_outputs(self):
+    def collect_outputs(self) -> None:
         self.model_outputs = None
         model_outputs = set()
         for m in self.modules():
@@ -68,7 +70,6 @@ class NeuralNetworkPotential(nn.Module):
         results = {k: data[k] for k in self.model_outputs}
         return results
 
-
 class ModelOutput(nn.Module):
     """ Base class for model outputs."""
     def __init__(
@@ -78,6 +79,8 @@ class ModelOutput(nn.Module):
         loss_weight: float = 1.0,
         metrics: Optional[Dict[str, Metric]] = None,
         target_property: Optional[str]=None,
+        # per_species_loss: bool=False,
+        # per_species_metrics: bool=False,
     ) -> None:
         """ Base class for model outputs. 
 
@@ -94,32 +97,87 @@ class ModelOutput(nn.Module):
         self.loss_fn = loss_fn
         self.loss_weight = loss_weight
         self.train_metrics = nn.ModuleDict(metrics)
-        self.val_metrics = nn.ModuleDict(copy.deepcopy(metrics))
-        self.test_metrics = nn.ModuleDict(copy.deepcopy(metrics))
+        self.val_metrics = nn.ModuleDict({k: copy.copy(v) for k, v in metrics.items()})
+        self.test_metrics = nn.ModuleDict({k: copy.copy(v) for k, v in metrics.items()})
+        
+        # here we found a serious bug that deepcopy is not working in hydra instantiate!!!
         self.metrics = {
             "train": self.train_metrics,
             "val": self.val_metrics,
             "test": self.test_metrics,
         }
+        
+        # self.per_species_loss = per_species_loss
+        # self.per_species_metrics = per_species_metrics
     
-    def calculate_loss(self, pred: Dict, target: Dict) -> torch.Tensor:
+    def calculate_loss(self, pred: Dict, target: Dict, return_num_obs=True) -> torch.Tensor:
         if self.loss_weight == 0 or self.loss_fn is None:
             return 0.0
 
         loss = self.loss_weight * self.loss_fn(
             pred[self.name], target[self.target_property]
         )
+        num_obs = target[self.target_property].view(-1).shape[0]
+        
+        if return_num_obs:
+            return loss, num_obs
+        
         return loss
 
     def update_metrics(self, pred: Dict, target: Dict, subset: str) -> None:
         for metric in self.metrics[subset].values():
-            metric(pred[self.name].detach(), target[self.target_property].detach())
-            
-    def add_metrics(self, metrics: Dict[str, Metric]):
-        for k in self.metrics:
-            self.metrics[k].update(metrics)
+            metric(pred[self.name], target[self.target_property])
+
+    def calculate_metrics(self, pred: Dict, target: Dict, subset: str) -> None:
+        batch_val = OrderedDict()
+        # if self.per_species_metrics:
+        #     pass
+        for k in self.metrics[subset]:
+            metric = self.metrics[subset][k]
+            if isinstance(metric, torchmetrics.Metric):
+                metric(pred[self.name].detach(), target[self.target_property].detach())
+            else:
+                metric = metric(pred[self.name].detach(), target[self.target_property].detach())
+            batch_val[f"{subset}_{self.name}_{k}"] = metric
+        
+        return batch_val
+    
+    def reset_loss(self, subset: Optional[str]=None) -> None:
+        if subset is None:
+            for k in self.loss:
+                self.loss[k] = 0.0
+                self.num_obs[k] = 0
+        else:
+            self.loss[subset] = 0.0
+            self.num_obs[subset] = 0
+    
+    def reset_metrics(self, subset: Optional[str]=None) -> None:
+        if subset is None:
+            for k1 in self.metrics:
+                for k2 in self.metrics[k1]:
+                    self.metrics[k1][k2].reset()
+        else:
+            for k in self.metrics[subset]:
+                self.metrics[subset][k].reset()
+    
+    # # def register_key(self,)
+    
+    # def add_metrics(self, name: str, metric: Metric, subset: Optional[str]=None) -> None:
+    #     if subset is None:
+    #         for k1 in self.metrics:
+    #             self.metrics[k1][name] = metric
+    #     else:
+    #         self.metrics[subset][name] = metric
+    
+    # def update_metrics(self, metric_dict: Dict[str, Metric], subset: Optional[str]=None) -> None:
+    #     if subset is None:
+    #         for k1 in self.metrics:
+    #             self.metrics[k1].update(metric_dict)
+    #     else:
+    #         self.metrics[subset].update(metric_dict)
 
 
+logger = logging.getLogger(__name__)    # console output
 class LitNNP(pl.LightningModule):
     """ Base class for neural network potentials using PyTorch Lightning."""
     def __init__(
@@ -129,9 +187,8 @@ class LitNNP(pl.LightningModule):
         optimizer: Type[torch.optim.Optimizer],
         scheduler: Optional[Type] = None,
         scheduler_monitor: Optional[str] = None,
-        use_ema: bool=False,
-        ema_decay: Optional[float] = None,
         warmup_steps: int = 0,
+        save_entire_model: bool = True
     ) -> None:
         """ Base class for neural network potentials using PyTorch Lightning.
 
@@ -141,98 +198,262 @@ class LitNNP(pl.LightningModule):
             optimizer (Type[torch.optim.Optimizer]): Optimizer
             scheduler (Optional[Type], optional): Scheduler. Defaults to None.
             scheduler_monitor (Optional[str], optional): Scheduler monitor. Defaults to None.
-            use_ema (bool, optional): Use exponential moving average. Defaults to False.
-            ema_decay (Optional[float], optional): EMA decay. Defaults to None.
             warmup_steps (int, optional): Warmup steps. Defaults to 0.
         """
         super().__init__()
-        self.save_hyperparameters(ignore=['model'])
+        self.save_hyperparameters(ignore=['model', 'outputs'])
         self.model = model
         self.outputs = nn.ModuleList(outputs)
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.scheduler_monitor = scheduler_monitor
         self.warmup_steps = warmup_steps
-        self.use_ema = use_ema
-        self.ema_decay = ema_decay
-        self.ema = None
+        self.save_entire_model = save_entire_model
         
     def setup(self, stage: Optional[str]=None) -> None:
         if stage == "fit":
             if not self.model._initialized:
                 self.model.initialize_modules(self.trainer.datamodule)
+            self.rescale_layers = []
+            for layer in self.model.output_modules:
+                if hasattr(layer, "unscale"):
+                    self.rescale_layers.append(layer)
     
-    def loss_fn(self, pred: Dict, batch: Dict) -> torch.Tensor:
-        loss = 0.0
+    def loss_fn(self, pred: Dict, batch: Dict, subset: str):
+        loss_dict = OrderedDict()
+        loss_dict[subset + '_total_loss'] = 0.0
+        num_obs_dict = OrderedDict()
+        num_obs_dict[subset + '_total_loss'] = 1
         for output in self.outputs:
-            loss += output.calculate_loss(pred, batch)
-        return loss
+            key = subset + '_' + output.name + '_loss'
+            loss_dict[key], num_obs_dict[key] = output.calculate_loss(pred, batch, True)
+            loss_dict[subset + '_total_loss'] += loss_dict[key]
+            
+        return loss_dict, num_obs_dict
     
-    def log_metrics(self, pred: Dict, batch: Dict, subset: str) -> None:
-        for output in self.outputs:
-            output.update_metrics(pred, batch, subset)
-            for metric_name, metric in output.metrics[subset].items():
-                self.log(
-                    f"{subset}_{output.name}_{metric_name}",
-                    metric,
-                    on_step=(subset == "train"),
-                    on_epoch=(subset != "train"),
-                    prog_bar=False,
-                )
+    # TODO: manually reset metrics
+
+    # def log_metrics(self, pred: Dict, batch: Dict, subset: str) -> None:
+    #     for output in self.outputs:
+    #         output.update_metrics(pred, batch, subset)
+    #         for metric_name, metric in output.metrics[subset].items():
+    #             self.log(
+    #                 f"{subset}_{output.name}_{metric_name}",
+    #                 metric,
+    #                 on_step=(subset == "train"),
+    #                 on_epoch=(subset != "train"),
+    #                 prog_bar=False,
+    #             )
+                
+    # def reset_loss_metrics(self, subset: str) -> None:
+    #     for output in self.outputs:
+    #         output.loss = 0.0
+    #         output.num_obs = 0
+    #         for k in output.metrics:
+    #             output.metrics[subset][k].reset()
+    
+    
+    def _get_metrics_key(self, subset: str):
+        msgs = [f'{"total_loss":>16s}']
+        msgs += [output.name + '_loss' for output in self.outputs]
+        msgs += [output.name + '_' + metric for output in self.outputs for metric in output.metrics[subset]]
+        msgs = [f'{msg:>16s}' for msg in msgs]
+        return msgs
+    
+    def _get_metrics(self):
+        forward_cache = [f'{metric._forward_cache:>16.3g}' for metric in self.trainer._results.values()]
+        return forward_cache
+    
+    def on_train_start(self):
+        logger.info("\n")
+        logger.debug("Start training model")
+    
+    # def on_validation_start(self):
+    #     logger.info("\nStart validating model")
+        
+    def on_test_start(self):
+        logger.info("\n")
+        logger.debug("Start testing model")
+
+    def on_train_epoch_start(self):
+        logger.info("\n")
+        logger.debug("Training")
+        head = [f'# epoch      batch']
+        logger.info("".join(head + self._get_metrics_key(subset='train')))
+        
+    def on_validation_epoch_start(self):
+        torch.set_grad_enabled(True)
+        logger.info("\n")
+        logger.debug("Validating")
+        head = [f'# epoch      batch']
+        logger.info("".join(head + self._get_metrics_key(subset='train')))
+    
+    def on_test_epoch_start(self):
+        torch.set_grad_enabled(True)
+        logger.info("\n")
+        logger.debug("Testing")
+        head = [f'# epoch      batch']
+        logger.info("".join(head + self._get_metrics_key(subset='train')))
     
     def training_step(self, batch: Dict, batch_idx: List[int]) -> torch.Tensor:
         targets = {
             output.target_property: batch[output.target_property]
             for output in self.outputs
         }
+        atoms_dict = {k: v for k, v in batch.items() if k not in targets}
         pred = self.model(batch)
-        loss = self.loss_fn(pred, targets)
-        self.log("train_loss", loss, on_step=True, on_epoch=False, prog_bar=True)
-        self.log_metrics(pred, targets, "train")
+
+        # calculate loss, metrics
+        # unscale targets because loss will be calculated with normalized units
+        unscaled_targets = targets.copy()
+        unscaled_targets.update(atoms_dict)
+        for layer in self.rescale_layers:
+            unscaled_targets = layer.unscale(unscaled_targets, force_process=True)
+        loss_dict, num_abs_dict = self.loss_fn(pred, unscaled_targets, 'train')
+        for k in loss_dict.keys():
+            self.log(k, loss_dict[k], batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True)
         
-        if self.use_ema:
-            self.ema.update()
+        # when calculate metrics pred need to be scaled to get real units
+        scaled_pred = pred.copy()
+        scaled_pred.update(atoms_dict)
+        for layer in self.rescale_layers[::-1]:
+            scaled_pred = layer.scale(scaled_pred, force_process=True)
+        for output in self.outputs:
+            batch_metrics = output.calculate_metrics(scaled_pred, targets, 'train')
+            self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False)
+        
+        # # logging metric keys
+        # if self.current_epoch == 0 and not self._train_log_head:
+        #     logger.info("".join(self._get_metrics_key(subset='train')))
+        #     self._train_log_head = True
+        # logging metrics to console
+        if batch_idx % self.trainer.log_every_n_steps == 0:
+            msgs = [f'{self.current_epoch:>7d}', f'{batch_idx:>11d}']
+            forward_cache = [f'{metric._forward_cache:>16.3g}' for metric in self.trainer._results.values()]
+            logger.info("".join(msgs + forward_cache))
             
-        return loss
+        return loss_dict['train_total_loss']
     
     def validation_step(self, batch: Dict, batch_idx: List[int]) -> torch.Tensor:
-        torch.set_grad_enabled(True)
-
         targets = {
             output.target_property: batch[output.target_property]
             for output in self.outputs
         }
+        atoms_dict = {k: v for k, v in batch.items() if k not in targets}
         pred = self.model(batch)
-        loss = self.loss_fn(pred, targets)
-        self.log("val_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log_metrics(pred, targets, "val")
-        return loss
+        
+        # calculate loss, metrics
+        # both targets and pred need to be normalized for calculating loss in validation mode
+        unscaled_targets, unscaled_pred = targets.copy(), pred.copy()
+        unscaled_pred.update(atoms_dict)
+        unscaled_targets.update(atoms_dict)
+        for layer in self.rescale_layers:
+            unscaled_targets = layer.unscale(unscaled_targets, force_process=True)
+            unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
+        loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_targets, 'val')
+        for k in loss_dict.keys():
+            self.log(k, loss_dict[k], batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True) 
+        
+        # nothing need to be scaled for calculating metrics        
+        for output in self.outputs:
+            batch_metrics = output.calculate_metrics(pred, targets, 'val')
+            self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False)
+        
+        # logging metrics to console
+        if batch_idx % self.trainer.log_every_n_steps == 0:
+            msgs = [f'{self.current_epoch:>7d}', f'{batch_idx:>11d}']
+            forward_cache = [f'{metric._forward_cache:>16.3g}' for metric in self.trainer._results.values()]
+            logger.info("".join(msgs + forward_cache))
+        
+        return loss_dict['val_total_loss']
     
     def test_step(self, batch: Dict, batch_idx: List[int]) -> torch.Tensor:
         targets = {
             output.target_property: batch[output.target_property]
             for output in self.outputs
         }
+        atoms_dict = {k: v for k, v in batch.items() if k not in targets}
         pred = self.model(batch)
-        loss = self.loss_fn(pred, targets)
-        self.log("test_loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log_metrics(pred, targets, "test")
-        return loss
+        
+        # calculate loss, metrics
+        # both targets and pred need to be normalized for calculating loss in validation mode
+        unscaled_targets, unscaled_pred = targets.copy(), pred.copy()
+        unscaled_pred.update(atoms_dict)
+        unscaled_targets.update(atoms_dict)
+        for layer in self.rescale_layers:
+            unscaled_targets = layer.unscale(unscaled_targets, force_process=True)
+            unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
+        loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_targets, 'test')
+        for k in loss_dict.keys():
+            self.log(k, loss_dict[k], batch_size=num_abs_dict[k], on_step=True, on_epoch=False, prog_bar=True) 
+               
+        for output in self.outputs:
+            batch_metrics = output.calculate_metrics(pred, targets, 'test')
+            self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False)
+        
+        # logging metrics to console
+        if batch_idx % self.trainer.log_every_n_steps == 0:
+            msgs = [f'{self.current_epoch:>7d}', f'{batch_idx:>11d}']
+            forward_cache = [f'{metric._forward_cache:>16.3g}' for metric in self.trainer._results.values()]
+            logger.info("".join(msgs + forward_cache))
+        
+        return loss_dict['test_loss']
+    
+    def on_train_epoch_end(self):
+        msgs = ['Train       # epoch'] + self._get_metrics_key(subset='train')
+        metrics = [f'{self.current_epoch:>19d}']
+        metrics += [f'{metric.compute():>16.3g}' for metric in self.trainer._results.values()]
+        logger.info("".join(msgs))
+        logger.info("".join(metrics))
+    
+    def on_validation_epoch_end(self):
+        # validation end goes before train epoch
+        msgs = ['Validation  # epoch'] + self._get_metrics_key(subset='val')
+        metrics = [f'{self.current_epoch:>19d}']
+        metrics += [f'{metric.compute():>16.3g}' for metric in self.trainer._results.values()]
+        
+        logger.info("\n")
+        logger.debug("Epoch summary:")
+        logger.info("".join(msgs))
+        logger.info("".join(metrics))
     
     def save_configuration(self, config: DictConfig):
         self.config = config
         
     def on_save_checkpoint(self, checkpoint):
         checkpoint['data_params'] = self.config.data
-        checkpoint['mdoel_params'] = self.config.model
+        checkpoint['model_params'] = self.config.model
+        checkpoint['outputs'] = self.outputs
+        if self.save_entire_model:
+            checkpoint['model'] = self.model
     
     def configure_optimizers(self) -> Type[torch.optim.Optimizer]:
+        # if type(self.model.representation) == MACE:
+        #     decay_params = {}
+        #     no_decay_params = {}
+
+        #     for name, param in self.named_parameters():
+        #         if ("linear_2.weight" in name or "skip_tp_full.weight" in name or "products" in name) and "readouts" not in name:
+        #             decay_params[name] = param
+        #         else:
+        #             no_decay_params[name] = param
+                    
+        #     param_group = [
+        #         {
+        #             "name": "decay_params",
+        #             "params": list(decay_params.values()),
+        #             "weight_decay": self.optimizer.keywords['weight_decay'],
+        #         },
+        #         {
+        #             "name": "no_decay_params",
+        #             "params": list(no_decay_params.values()),
+        #             "weight_decay": 0.0,
+        #         },
+        #     ]
+        #     optimizer = self.optimizer(params=param_group)
+        # else:
+        #     optimizer = self.optimizer(params=self.parameters())
         optimizer = self.optimizer(params=self.parameters())
-        if self.use_ema and self.ema is None:
-            self.ema = ExponentialMovingAverage(
-                self.parameters(),
-                decay=self.ema_decay,
-            )
         if self.scheduler is not None:
             scheduler = self.scheduler(optimizer=optimizer)
             lr_scheduler = {"scheduler": scheduler}

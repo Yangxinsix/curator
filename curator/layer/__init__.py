@@ -12,6 +12,7 @@ from ._node_embedding import OneHotAtomEncoding
 from ._painn_message import PainnMessage
 from ._painn_update import PainnUpdate
 from ._pairwise_distance import PairwiseDistance
+from ._symmetric_contraction import Contraction, SymmetricContraction
 from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift
 from ._strain import Strain
 from .cutoff import CosineCutoff, PolynomialCutoff
@@ -40,6 +41,8 @@ __all__ = [
     EquivariantProductBasisBlock,
     RealAgnosticInteractionBlock,
     RealAgnosticResidualInteractionBlock,
+    Contraction,
+    SymmetricContraction,
     OneHotAtomEncoding,
     PainnMessage,
     PainnUpdate,
