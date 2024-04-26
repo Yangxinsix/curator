@@ -1,0 +1,130 @@
+defaults: # default parameters
+  - model/representation: painn # choss from painn nequip or mace
+  - simulator: md # choss from md or neb or md_meta
+  - uncertainty: ensemble # only uncernatinty ensemble is available
+  - labeling_method: vasp # choss from vasp or gpaw
+
+data:
+  datapath: init_dataset.traj # <MANUALLY INSERT>
+  cutoff: 3.0 # cutoff radius for the atomic environment
+  batch_size: 32 # batch size for training
+  num_train: 0.8 # procentage of training data
+  num_val: 0.2 # procentage of validation data
+  normalization: True # normalize the data
+  atomwise_normalization: True # normalize the data atomwise
+  species: # list of species
+    - Li
+    - Fe
+    - O
+    - P
+
+model: # model parameters
+  representation:
+    num_elements: 2
+    num_interactions: 4
+    num_features: 64
+
+train: # Main Train parameters
+  run_path: ./train 
+  patience: 100 # early-stopping patience, different from reduce on plateau
+  energy_weight: 2 # weight of the energy loss 
+  forces_weight: 98 # weight of the forces loss
+  device: cuda
+  nodename: <MANUALLY INSERT>
+  cores: <MANUALLY INSERT>
+  tmax: <MANUALLY INSERT>
+  deploy_model: False # deploy the model after training
+
+trainer:
+  log_every_n_steps: 1 # logginf frequency
+  max_epochs: 10 # maximum number of epochs
+
+optimizer: 
+  lr: 0.1 # learning rate
+
+simulate: # Main simulate parameters
+  run_path: ./simulate 
+  model_path: ./train
+  device: cuda 
+  nodename: <MANUALLY INSERT>
+  cores: <MANUALLY INSERT>
+  tmax: <MANUALLY INSERT>  
+
+simulator: # General simulate parameters
+  init_traj: null # The trajectory you starts from, will be defined later per system <MANUALLY INSERT>
+  start_indice: 0 # For which index you start from in the trajectory
+  rattle: null # Rattle the initial structure
+  fix_under: null # Fix the undercoordinated atoms
+  friction: 0.003 # Friction for the MD
+  temperature: 300 #K Temperature for the MD
+  time_step: 1.0 #fs Time step for the MD
+  print_step: 1 # Logging frequency for the MD
+  dump_step: 100 # Saving trajectory frequency for the MD
+  min_steps: 400 # Minimum number of MD steps
+  max_steps: 600 # Maximum number of MD steps
+  num_uncertain: 50 # Number of uncertain structures to simulate before stopping the simualtion
+
+uncertainty: # Uncertainty parameters
+  threshol_value: 0.05 # Threshold value for the uncertainty. This is set for forces difference
+  threshold_maxvalue: 0.5 # Maximum threshold value for the uncertainty, where the simualtion will stop. This is set for forces difference
+  uncertain_traj: warning.traj # If you want to save the uncertain trajectories 
+
+select: # Active learning selection parameters
+  run_path: ./select
+  model_path: test_data/
+  train_set: init_dataset.traj #<MANUALLY INSERT>
+  pool_set: null # The data for which the AL algorthm will pick samples from. Will be defined automatically in the workflow
+  batch_size: 10 # Number of samples to be label
+  kernel: full-g # What kernal to use for the AL algorithm
+  method: lcmd_greedy # What AL algorithm to use
+  n_random_features: 500 # Number of random features to use for the kernel
+  device: cuda
+  nodename: <MANUALLY INSERT>
+  cores: <MANUALLY INSERT>
+  tmax: <MANUALLY INSERT>
+
+label:
+  run_path: ./label
+  datapath: init_dataset.traj #<MANUALLY INSERT>
+  pool_set: null
+  nodename: <MANUALLY INSERT>
+  cores: <MANUALLY INSERT>
+  tmax: <MANUALLY INSERT>
+
+ensemble: # Define the ensemble ML models to be trained
+  model1:
+    model:
+      representation:
+        num_interactions: 3
+        num_features: 128
+  model2:
+    model:
+      representation:
+        num_interactions: 4
+        num_features: 120
+
+systems: # Define the systems to be simulated. if system is not given the main parameters will be used
+  LiFePO_0:
+    simulate:
+      init_traj: 'LiFePO4_MD_0.traj' # <MANUALLY INSERT>
+  LiFePO_1:
+    simulate:
+      init_traj: 'LiFePO4_MD_1.traj' # <MANUALLY INSERT>
+  LiFePO_4:
+    simulate:
+      init_traj: 'LiFePO4_MD_4.traj'  # <MANUALLY INSERT>
+  NEB:
+    defaults:
+      simulator: neb
+    simulate:
+      initial_image: NEB_final_pristine.traj # <MANUALLY INSERT>
+      final_image: NEB_final_pristine.traj # <MANUALLY INSERT>
+      num_img: 5 # number of intermediate images
+      optimizer: 'FIRE' # optimizer to use
+      fmax: 0.03 # maximum force for convergence
+      optimizer_step: 200 # number of steps for the optimizer
+      mic: True 
+      print_step: 1 # logging frequency
+      MD:
+        small_MD: False # if a small MD should be performed after the NEB for each image 
+

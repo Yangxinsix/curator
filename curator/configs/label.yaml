@@ -1,0 +1,11 @@
+defaults:
+  - labeling_method: vasp
+  - _self_
+
+cfg: null
+run_path: .
+label_set: null #if you want to label specific trajectories
+pool_set: null # This can also be a list
+indices: null #sepcify the indices of the pool_set to label
+al_info: null # get the active learning information from the previous run
+user_method: null # if you want to use your own method

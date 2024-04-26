@@ -1,0 +1,6 @@
+# @package _global_
+task:
+  optimizer:
+    amsgrad: True
+    lr: 0.005
+    weight_decay: 0.0

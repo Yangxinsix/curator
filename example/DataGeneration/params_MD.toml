@@ -1,0 +1,6 @@
+temperature = 300
+friction_term = 0.003
+time_step = 0.1 #fs
+dump_step = 10 #fs
+print_step = 1
+max_step = 1000000

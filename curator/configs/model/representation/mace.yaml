@@ -1,0 +1,15 @@
+_target_: curator.model.MACE
+cutoff: ${data.cutoff}
+num_interactions: 3
+num_elements: null             # will be obtained from species
+species: ${data.species}
+correlation: 3
+hidden_irreps: 32x0e
+MLP_irreps: 16x0e
+avg_num_neighbors: null
+lmax: 3
+parity: True
+num_features: null             # will be inferred from hidden_irreps
+num_basis: 8
+power: 5
+gate: silu

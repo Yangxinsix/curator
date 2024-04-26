@@ -1,0 +1,25 @@
+xc = "PBE"
+[eigensolver] 
+name = "dav"
+niter=1
+
+[mode]
+name = "pw"
+ecut = 520
+
+[kpts]
+size = [ 4, 4, 4,]
+gamma = true
+
+[occupations]
+name = "fermi-dirac"
+width = 0.05
+fixmagmom = true
+
+[convergence]
+eigenstates = 1
+energy = 1e-5
+density = 1
+
+[setups]
+Fe = ":d,4.3"
