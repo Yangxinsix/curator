@@ -270,7 +270,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 if atomic_energies is not None:
                     reference_energies = torch.zeros((119,), dtype=torch.float)
                     for k, v in atomic_energies.items():
-                        reference_energies[k] = v
+                        reference_energies[atomic_numbers[k] if isinstance(k, str) else k] = v
 
                 energies = []
                 if self.scale_forces:

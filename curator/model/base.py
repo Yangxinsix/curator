@@ -428,32 +428,32 @@ class LitNNP(pl.LightningModule):
             checkpoint['model'] = self.model
     
     def configure_optimizers(self) -> Type[torch.optim.Optimizer]:
-        # if type(self.model.representation) == MACE:
-        #     decay_params = {}
-        #     no_decay_params = {}
+        if type(self.model.representation) == MACE:
+            decay_params = {}
+            no_decay_params = {}
 
-        #     for name, param in self.named_parameters():
-        #         if ("linear_2.weight" in name or "skip_tp_full.weight" in name or "products" in name) and "readouts" not in name:
-        #             decay_params[name] = param
-        #         else:
-        #             no_decay_params[name] = param
+            for name, param in self.named_parameters():
+                if ("linear_2.weight" in name or "skip_tp_full.weight" in name or "products" in name) and "readouts" not in name:
+                    decay_params[name] = param
+                else:
+                    no_decay_params[name] = param
                     
-        #     param_group = [
-        #         {
-        #             "name": "decay_params",
-        #             "params": list(decay_params.values()),
-        #             "weight_decay": self.optimizer.keywords['weight_decay'],
-        #         },
-        #         {
-        #             "name": "no_decay_params",
-        #             "params": list(no_decay_params.values()),
-        #             "weight_decay": 0.0,
-        #         },
-        #     ]
-        #     optimizer = self.optimizer(params=param_group)
-        # else:
-        #     optimizer = self.optimizer(params=self.parameters())
-        optimizer = self.optimizer(params=self.parameters())
+            param_group = [
+                {
+                    "name": "decay_params",
+                    "params": list(decay_params.values()),
+                    "weight_decay": self.optimizer.keywords['weight_decay'],
+                },
+                {
+                    "name": "no_decay_params",
+                    "params": list(no_decay_params.values()),
+                    "weight_decay": 0.0,
+                },
+            ]
+            optimizer = self.optimizer(params=param_group)
+        else:
+            optimizer = self.optimizer(params=self.parameters())
+        # optimizer = self.optimizer(params=self.parameters())
         if self.scheduler is not None:
             scheduler = self.scheduler(optimizer=optimizer)
             lr_scheduler = {"scheduler": scheduler}
