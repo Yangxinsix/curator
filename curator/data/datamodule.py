@@ -193,7 +193,7 @@ class AtomsDataModule(pl.LightningDataModule):
             self.num_test = len(self.test_idx) if self.test_idx is not None else self.num_test
             
         logger.debug(
-            f"Dataset size: {self.datalen}, training dataset size: {self.num_train}, validation dataset size: {self.num_val}"
+            f"Dataset size: {self.datalen}, training dataset size: {self.num_train}, validation dataset size: {self.num_val}, "
             + f"test dataset size: {self.num_test}."
         )
         self._train_dataset = torch.utils.data.Subset(self.dataset, self.train_idx)
@@ -251,7 +251,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 )
             self.atomic_energies = atomic_energies_dict
             
-        elif isinstance(self.atomic_energies, Dict):
+        if isinstance(self.atomic_energies, Dict):
             _atomic_energies = {}
             for k, v in self.atomic_energies.items():
                 if isinstance(k, int):

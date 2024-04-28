@@ -1,9 +1,0 @@
-Dataset size: 100, training dataset size: 50, test dataset size: 0.
-The average number of neighbors is calculated to be: 10.427
-Using reference energies for elements: None.
-Forces will be scaled by forces_rms: 28.034.
-Atomwise model outputs will be normalized.
-Model output properties will be scaled by 28.034, shifted by -19368.445.
-Using reference energies for elements: None.
-Training step: 0 energy_loss: 210681872.000 ,forces_loss:    2.312 ,energy_mae: 406917.062 ,energy_rmse: 406917.062 ,forces_mae:   32.052 ,forces_rmse:   42.624 
-Training step: 10 energy_loss: 189768816.000 ,forces_loss: 1967.556 ,energy_mae: 386193.250 ,energy_rmse: 386193.344 ,forces_mae:  808.744 ,forces_rmse: 1243.529 
