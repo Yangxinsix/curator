@@ -14,7 +14,7 @@ num_workers: 1
 pin_memory: True
 species: auto
 avg_num_neighbors: auto
-atomic_energies: auto
+atomic_energies: null
 normalization: True
 atomwise_normalization: True
 scale_forces: True
