@@ -1,4 +1,4 @@
-from ._ase_reader import AseDataReader
+from ._data_reader import AseDataReader
 from ._neighborlist import (
     wrap_positions, 
     TorchNeighborList, 
@@ -6,7 +6,7 @@ from ._neighborlist import (
     Asap3NeighborList,
     NeighborListTransform,
 )
-from .dataset import AseDataset, cat_tensors, collate_atomsdata
+from .dataset import AseDataset, NumpyDataset, cat_tensors, collate_atomsdata
 from .datamodule import AtomsDataModule
 from ._type_mapper import TypeMapper
 from ._transform import Transform
@@ -29,6 +29,7 @@ __all__ = [
     Asap3NeighborList,
     NeighborListTransform,
     AseDataset,
+    NumpyDataset,
     cat_tensors,
     collate_atomsdata,
     TypeMapper,

@@ -1,10 +1,12 @@
 import torch
-from ._ase_reader import AseDataReader
+from ._data_reader import AseDataReader
+from ._neighborlist import NeighborListTransform, Asap3NeighborList
 from typing import List, Union, Dict
 from ase.io import Trajectory
 from ase import Atoms
 from . import properties
 from ._transform import Transform
+import numpy as np
 
 class AseDataset(torch.utils.data.Dataset):
     def __init__(
@@ -13,6 +15,7 @@ class AseDataset(torch.utils.data.Dataset):
         cutoff: float=5.0, 
         compute_neighborlist: bool=True, 
         transforms: List[Transform] = [],
+        default_dtype: torch.dtype = torch.get_default_dtype(),
     ) -> None:
         super().__init__()
         
@@ -22,6 +25,7 @@ class AseDataset(torch.utils.data.Dataset):
             self.db = ase_db
         
         self.cutoff = cutoff
+        self.default_dtype = default_dtype
         self.atoms_reader = AseDataReader(cutoff, compute_neighborlist, transforms)
         
     def __len__(self) -> int:
@@ -32,6 +36,63 @@ class AseDataset(torch.utils.data.Dataset):
         atoms_data = self.atoms_reader(atoms)
         return atoms_data
 
+class NumpyDataset(torch.utils.data.Dataset):
+    def __init__(
+        self, 
+        datapath, 
+        cutoff: float=5.0, 
+        compute_neighborlist: bool=True, 
+        transforms: List[Transform] = [],
+        default_dtype: torch.dtype = torch.get_default_dtype(),
+    ) -> None:
+        super().__init__()
+        
+        self.npdata = np.load(datapath)
+        self.cutoff = cutoff
+        self.default_dtype = default_dtype
+        self.compute_neighborlist = compute_neighborlist
+        self.transforms = transforms
+        if self.compute_neighborlist:
+            assert isinstance(self.cutoff, float), "Cutoff radius must be given when compute the neighbor list"
+            if not any([isinstance(t, NeighborListTransform) for t in self.transforms]):
+                self.transforms.append(Asap3NeighborList(cutoff=self.cutoff))
+        
+    def __len__(self) -> int:
+        return len(self.npdata['E'])
+    
+    def __getitem__(self, idx):
+        atoms_dict = {
+            properties.Z: torch.from_numpy(self.npdata["z"]).type(torch.long), 
+            properties.R: torch.from_numpy(self.npdata["R"][idx]).type(self.default_dtype),
+        }
+        n_atoms = len(self.npdata["z"])
+        atoms_dict[properties.n_atoms] = torch.tensor([n_atoms], dtype=torch.long)
+        atoms_dict[properties.image_idx] = torch.zeros((n_atoms,), dtype=self.default_dtype)
+
+        if "cell" in self.npdata:
+            cell = torch.from_numpy(self.npdata["cell"]).type(self.default_dtype)
+        
+        # transform
+        for t in self.transforms:
+            atoms_dict = t(atoms_dict)
+        
+        try:
+            atoms_dict[properties.energy] = torch.from_numpy(self.npdata["E"][idx]).type(self.default_dtype)
+        except (AttributeError, RuntimeError, KeyError):
+            pass
+        
+        try: 
+            atoms_dict[properties.forces] = torch.from_numpy(self.npdata["F"][idx]).type(self.default_dtype)
+        except (AttributeError, RuntimeError, KeyError):
+            pass
+        
+        try: 
+            atoms_dict[properties.stress] = torch.from_numpy(self.npdata["stress"][idx]).type(self.default_dtype)
+        except (AttributeError, RuntimeError, KeyError):
+            pass
+        
+        return atoms_dict
+        
 def cat_tensors(tensors: List[torch.Tensor]) -> torch.Tensor:
     if tensors[0].shape:
         return torch.cat(tensors)
