@@ -4,6 +4,7 @@ defaults:
 
 _target_: curator.model.LitNNP
 scheduler_monitor: val_total_loss
+save_entire_model: True
 warmup_steps: 0
 
 outputs:

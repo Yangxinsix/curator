@@ -2,7 +2,7 @@ import pytorch_lightning as pl
 import torch
 from typing import Union, Optional, List, Dict, Callable, Tuple
 from ._transform import Transform
-from .dataset import collate_atomsdata, AseDataset
+from .dataset import collate_atomsdata, AseDataset, NumpyDataset
 import math
 from . import properties
 from ase.data import chemical_symbols, atomic_numbers
@@ -88,12 +88,22 @@ class AtomsDataModule(pl.LightningDataModule):
         
     def setup(self, stage: Optional[str] = None) -> None:
         if self.dataset is None:
-            self.dataset = AseDataset(
-                self.datapath, 
-                cutoff=self.cutoff,
-                compute_neighborlist = self.compute_neighbor_list, 
-                transforms = self.transforms,
-            )
+            # differentiate datasets
+            if self.datapath.endswith('npz'):
+                self.dataset = NumpyDataset(
+                    self.datapath, 
+                    cutoff=self.cutoff,
+                    compute_neighborlist = self.compute_neighbor_list, 
+                    transforms = self.transforms,
+                )
+            else:
+                self.dataset = AseDataset(
+                    self.datapath, 
+                    cutoff=self.cutoff,
+                    compute_neighborlist = self.compute_neighbor_list, 
+                    transforms = self.transforms,
+                )
+            
             self.datalen = len(self.dataset)
             
             if self.train_idx is None:
