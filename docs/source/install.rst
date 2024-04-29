@@ -1,7 +1,5 @@
 Installation
 =============
-That has a paragraph about a main subject and is set when the '='
-is at least the same length of the title itself.
 
 Requirements
 -------------
@@ -9,9 +7,9 @@ Requirements
 - `Pytorch <https://pytorch.org/get-started/locally/>`_ (>=1.9)
 - `ASE <https://wiki.fysik.dtu.dk/ase/install.html>`_ (>=3.22.0)
 - `Myqueue <https://myqueue.readthedocs.io/en/latest/installation.html>`_ (==22.7.1)
-- `e3nn <https://e3nn.org/>_`
-- `Hydra <https://hydra.cc/>_`
-- `PyTorch Lightning <https://github.com/Lightning-AI/pytorch-lightning>_`
+- `e3nn <https://e3nn.org/>`_
+- `Hydra <https://hydra.cc/>`_
+- `PyTorch Lightning <https://github.com/Lightning-AI/pytorch-lightning>`_
 
 pip installation
 ---------------------
@@ -34,7 +32,9 @@ After installed all required packages, installing the code can be quite simple.
 
 Sometimes you may run the code on the login node which may not be equiped with GPU. If you are using above commands to install PyTorch, cpu-only version will be installed.
 To install the cuda version pytorch, you need to specify the cuda version run the following command:
+
 .. code-block:: bash
     conda install pytorch=*=*cuda* cudatoolkit==11.8 -c pytorch
+
 
 Now you are ready to go!
