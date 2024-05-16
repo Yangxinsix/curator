@@ -77,7 +77,7 @@ class MACE(nn.Module):
             correlation = [correlation] * num_interactions
 
         if num_elements is None:
-            num_elements = len(species)
+            num_elements = len(species) if species is not None else 119
         
         # hidden feature irreps
         if hidden_irreps is not None:
