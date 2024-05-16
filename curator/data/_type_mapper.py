@@ -43,6 +43,7 @@ class TypeMapper(Transform):
             warnings.warn("Data already contains mapped types. This will be overwrited.")
         
         data[properties.atomic_types] = self.transform(data[properties.Z])
+        assert torch.all(data[properties.atomic_types] >= 0), "Provided data contains species not defined in TypeMapper!"
         return data
         
     def transform(self, numbers: torch.Tensor) -> torch.Tensor:

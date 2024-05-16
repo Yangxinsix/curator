@@ -11,7 +11,7 @@ from ._mace_interaction import (
 from ._node_embedding import OneHotAtomEncoding
 from ._painn_message import PainnMessage
 from ._painn_update import PainnUpdate
-from ._pairwise_distance import PairwiseDistance
+from ._pairwise_distance import PairwiseDistance, get_pair_distance
 from ._symmetric_contraction import Contraction, SymmetricContraction
 from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift
 from ._strain import Strain
@@ -58,6 +58,7 @@ __all__ = [
     tp_path_exists,
     tp_out_irreps_with_instructions,
     linear_out_irreps,
+    get_pair_distance,
     reshape_irreps,
     PairwiseDistance,         # input modules (preprocess, calculate pairwise distances)
     Strain,                   # input modules (preprocess, add strain on cell and atom positions)
