@@ -1,5 +1,6 @@
 import torch
 from curator.data import properties, BatchNeighborList
+from typing import Optional
 
 @torch.jit.script
 def get_pair_distance(data: properties.Type, force_process: bool=False) -> properties.Type:
@@ -25,7 +26,8 @@ class PairwiseDistance(torch.nn.Module):
         self,
         compute_neighborlist: bool = False,
         compute_distance_from_R: bool = False,
-        compute_forces: bool = True
+        compute_forces: bool = True,
+        cutoff: Optional[float] = None,
     ) -> None:
         super().__init__()
         self.compute_neighborlist = compute_neighborlist
@@ -33,15 +35,15 @@ class PairwiseDistance(torch.nn.Module):
         self.compute_forces = compute_forces
         self.batch_nl = None
         if self.compute_neighborlist:
-            self.batch_nl = BatchNeighborList(self.cutoff, requires_grad=True, wrap_atoms=True)
+            self.batch_nl = BatchNeighborList(cutoff, requires_grad=self.compute_forces, wrap_atoms=True, return_distance=True)
     
     def forward(self, data: properties.Type) -> properties.Type:
         if self.batch_nl is not None:
-            data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = self.batch_nl(data)
-        elif self.compute_distance_from_R:
-            if self.compute_forces:
-                    data[properties.positions].requires_grad_()
-            data = get_pair_distance(data)
+            data = self.batch_nl(data)
+            
+        if self.compute_distance_from_R:
+            if self.batch_nl is None:
+                data = get_pair_distance(data, force_process=True)
         else:
             if self.compute_forces:
                 data[properties.edge_diff].requires_grad_()

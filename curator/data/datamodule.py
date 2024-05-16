@@ -2,6 +2,7 @@ import pytorch_lightning as pl
 import torch
 from typing import Union, Optional, List, Dict, Callable, Tuple
 from ._transform import Transform
+from ._neighborlist import NeighborListTransform, TorchNeighborList
 from .dataset import collate_atomsdata, AseDataset, NumpyDataset
 import math
 from . import properties
@@ -227,6 +228,9 @@ class AtomsDataModule(pl.LightningDataModule):
             for sample in self.train_dataset:
                 n_atoms += sample[properties.n_atoms].sum()
                 # TODO: add compute_neighbor_list here if neighbors are not computed
+                if not self.compute_neighbor_list and not any(isinstance(t, NeighborListTransform) for t in self.transforms):
+                    torch_nl = TorchNeighborList(cutoff=self.cutoff, wrap_atoms=True, requires_grad=False, return_distance=False)
+                    sample = torch_nl(sample)
                 n_neighbors += sample[properties.n_pairs].sum()
             self.avg_num_neighbors = n_neighbors.sum() / n_atoms.item()
             logger.debug(f"The average number of neighbors is calculated to be: {self.avg_num_neighbors:.3f}")

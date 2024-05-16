@@ -116,11 +116,12 @@ def collate_atomsdata(atoms_data: List[dict], pin_memory=True) -> Dict:
     collated[properties.image_idx] = image_idx
     
     # shift index of edges (because of batching)
-    edge_offset = torch.zeros_like(collated[properties.n_atoms])
-    edge_offset[1:] = collated[properties.n_atoms][:-1]
-    edge_offset = torch.cumsum(edge_offset, dim=0)
-    edge_offset = torch.repeat_interleave(edge_offset, collated[properties.n_pairs])
-    edge_idx = collated[properties.edge_idx] + edge_offset.unsqueeze(-1)
-    collated[properties.edge_idx] = edge_idx
+    if properties.edge_idx in collated:
+        edge_offset = torch.zeros_like(collated[properties.n_atoms])
+        edge_offset[1:] = collated[properties.n_atoms][:-1]
+        edge_offset = torch.cumsum(edge_offset, dim=0)
+        edge_offset = torch.repeat_interleave(edge_offset, collated[properties.n_pairs])
+        edge_idx = collated[properties.edge_idx] + edge_offset.unsqueeze(-1)
+        collated[properties.edge_idx] = edge_idx
     
     return collated

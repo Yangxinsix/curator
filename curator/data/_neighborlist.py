@@ -21,7 +21,7 @@ def wrap_positions(positions: torch.tensor, cell: torch.tensor, eps: int=1e-7) -
 
 class BatchNeighborList(nn.Module):
     """Batch neighbor list"""
-    def __init__(self, cutoff :float, requires_grad :bool =True, wrap_atoms :bool =True) -> None:
+    def __init__(self, cutoff: float, requires_grad: bool =True, wrap_atoms: bool =True, return_distance: bool=True) -> None:
         """Batch neighbor list
         
         Args:
@@ -30,38 +30,50 @@ class BatchNeighborList(nn.Module):
             wrap_atoms (bool, optional): Whether to wrap atoms into the unit cell. Defaults to True.
         """
         super().__init__()
-        self.cutoff = cutoff
-        self.torch_nl = TorchNeighborList(cutoff, requires_grad=requires_grad, wrap_atoms=wrap_atoms)
+        self.requires_grad = requires_grad
+        self.return_distance = return_distance
+        self.torch_nl = TorchNeighborList(cutoff, requires_grad=requires_grad, wrap_atoms=wrap_atoms, return_distance=return_distance)
     
-    def forward(self, data: properties.Type, inplace=False) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def forward(self, data: properties.Type) -> properties.Type:
+        if self.requires_grad:
+            data[properties.positions].requires_grad_()
         num_offset = torch.zeros_like(data[properties.n_atoms])
         num_offset[1:] = data[properties.n_atoms][:-1]
         num_offset = torch.cumsum(num_offset, dim=0)
-        cells = data[properties.cell].view(-1, 3, 3)
         batch_pairs, batch_pair_diff, batch_pair_dist = [], [], []
         for i, num_atoms in enumerate(data[properties.n_atoms]):
-            positions = data[properties.positions][num_offset[i]:num_offset[i]+num_atoms]
-            cell = cells[i]
-            pairs, pair_diff, pair_dist = self.torch_nl(positions, cell)
-            pairs += num_offset[i]
-            batch_pairs.append(pairs)
-            batch_pair_diff.append(pair_diff)
-            batch_pair_dist.append(pair_dist)
+            atoms_dict = {
+                properties.R: data[properties.positions][num_offset[i]:num_offset[i]+num_atoms],
+                properties.cell: data[properties.cell][i*3: (i+1)*3],
+            }
+            atoms_dict = self.torch_nl(atoms_dict)
+            batch_pairs.append(atoms_dict[properties.edge_idx] + num_offset[i])
+            batch_pair_diff.append(atoms_dict[properties.edge_diff])
+            if self.return_distance:
+                batch_pair_dist.append(atoms_dict[properties.edge_dist])
 
-        batch_pairs = torch.cat(batch_pairs)
-        batch_pair_diff = torch.cat(batch_pair_diff)
-        batch_pair_dist = torch.cat(batch_pair_dist)
-        if inplace:
-            data[properties.edge_idx] = batch_pairs
-            data[properties.edge_diff] = batch_pair_diff
-            data[properties.edge_dist] = batch_pair_dist
+        data[properties.edge_idx] = torch.cat(batch_pairs)
+        data[properties.edge_diff] = torch.cat(batch_pair_diff)
+        if self.return_distance:
+            data[properties.edge_dist] = torch.cat(batch_pair_dist)
         
-        return batch_pairs, batch_pair_diff, batch_pair_dist
+        return data
 
 class NeighborListTransform(Transform):
     """
     Base classs for calculating neighbor list
     """
+    def __init__(
+        self,
+        cutoff: float,
+        requires_grad: bool = False,
+        return_distance: bool = False,
+    ) -> None:
+        super().__init__()
+        self.cutoff = cutoff
+        self.requires_grad = requires_grad
+        self.return_distance = return_distance
+    
     def forward(self, data: properties.Type) -> properties.Type:
         if properties.cell in data:
             edge_info = self._build_neighbor_list(data[properties.positions], data[properties.cell])
@@ -70,7 +82,9 @@ class NeighborListTransform(Transform):
         data.update(edge_info)
         data[properties.n_pairs] = torch.tensor([data[properties.edge_idx].shape[0]])
         
-        if self.return_distance:
+        if self.requires_grad:
+            data[properties.edge_diff].requires_grad_()
+        if self.return_distance and properties.edge_dist not in data:
             data[properties.edge_dist] = torch.linalg.norm(data[properties.edge_diff], dim=1)
         return data
     
@@ -104,26 +118,24 @@ class TorchNeighborList(NeighborListTransform):
     Model predictions (forces) will be erroneous if using a neighbor list algorithm that different with model training.
     """
     def __init__(
-        self, 
-        cutoff: float, 
-        requires_grad: bool=False,
-        wrap_atoms: bool=True, 
-        return_distance: bool=True
+        self,
+        *args,
+        wrap_atoms: bool=True,
+        **kwargs,
     ) -> None:
-        super().__init__()
-        self.cutoff = cutoff
+        super().__init__(*args, **kwargs)
         disp_mat = torch.cartesian_prod(
             torch.arange(-1, 2),
             torch.arange(-1, 2),
             torch.arange(-1, 2),
         )
-        self.register_buffer('disp_mat', disp_mat, persistent=False)
-        self.requires_grad = requires_grad
-        self.return_distance = return_distance
         self.wrap_atoms = wrap_atoms
+        self.register_buffer('disp_mat', disp_mat, persistent=False)
     
     def _build_neighbor_list(self, positions: torch.tensor, cell: torch.tensor) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:
         # calculate padding size. It is useful for all kinds of cells
+        if self.requires_grad:
+            positions.requires_grad_()
         wrapped_pos = wrap_positions(positions, cell) if self.wrap_atoms else positions
         norm_a = cell[1].cross(cell[2]).norm()
         norm_b = cell[2].cross(cell[0]).norm()
@@ -194,21 +206,21 @@ class TorchNeighborList(NeighborListTransform):
             properties.edge_idx: pairs[mask],
             properties.edge_diff: pair_diff[mask],
         }
+        if self.return_distance:
+            outputs[properties.edge_dist] = pair_dist[mask]
         return outputs
         
 class Asap3NeighborList(NeighborListTransform):
     def __init__(
         self,
-        cutoff: float,
-        return_distance: bool = False,
+        *args,
         return_cell_displacements: bool = False,
+        **kwargs,
     ) -> None:
-        super().__init__()
-        self.cutoff = cutoff
+        super().__init__(*args, **kwargs)
         if not ("asap3" in sys.modules):
             raise ModuleNotFoundError("This neighbor list implementation needs ASAP3 module!")
         self.nblist = asap3.FullNeighborList(self.cutoff, atoms=None)
-        self.return_distance = return_distance
         self.return_cell_displacements = return_cell_displacements
     
     def _build_neighbor_list(
