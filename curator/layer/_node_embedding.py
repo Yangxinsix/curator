@@ -28,7 +28,9 @@ class OneHotAtomEncoding(torch.nn.Module):
         if self.species is not None:
             self.type_mapper = TypeMapper(self.species)
             self.num_elements = len(self.species)
-            
+        else:
+            self.num_elements = 119
+            self.type_mapper = None
         # output node feature irreps
         self.irreps_out = {
             properties.node_attr: o3.Irreps([(self.num_elements, (0, 1))])
@@ -38,7 +40,10 @@ class OneHotAtomEncoding(torch.nn.Module):
             
     def forward(self, data: properties.Type) -> properties.Type:
         if properties.atomic_types not in data:
-            data = self.type_mapper(data)
+            if self.type_mapper is not None:
+                data = self.type_mapper(data)
+            else:
+                data[properties.atomic_types] = data[properties.Z] - 1
         onehot = torch.nn.functional.one_hot(
             data[properties.atomic_types], num_classes=self.num_elements
         ).to(device=data[properties.positions].device, dtype=data[properties.positions].dtype)
@@ -48,7 +53,7 @@ class OneHotAtomEncoding(torch.nn.Module):
             data[properties.node_feat] = onehot
         return data
     
-    def datamodule(self, _datamodule):
-        if self.species is None:
-            self.species = _datamodule._get_species()
-            self.type_mapper = TypeMapper(self.species)
+    # def datamodule(self, _datamodule):
+    #     if self.species is None:
+    #         self.species = _datamodule._get_species()
+    #         self.type_mapper = TypeMapper(self.species)
