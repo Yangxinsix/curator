@@ -10,7 +10,7 @@ num_val: 0.1
 num_test: null
 train_val_split: random
 shuffle: true
-num_workers: 1
+num_workers: 0
 pin_memory: True
 species: None
 avg_num_neighbors: auto
