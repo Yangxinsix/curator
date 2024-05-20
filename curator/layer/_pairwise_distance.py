@@ -35,6 +35,7 @@ class PairwiseDistance(torch.nn.Module):
         self.compute_forces = compute_forces
         self.batch_nl = None
         if self.compute_neighborlist:
+            assert isinstance(cutoff, float), "Valid cutoff value must be provided for computing neighbor list!"
             self.batch_nl = BatchNeighborList(cutoff, requires_grad=self.compute_forces, wrap_atoms=True, return_distance=True)
     
     def forward(self, data: properties.Type) -> properties.Type:

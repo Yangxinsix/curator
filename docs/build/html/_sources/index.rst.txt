@@ -3,9 +3,9 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-GNN Active Learning documentation
+CURATOR
 ============================================================
-GNN active learning is a toolbox for constructing machine learning interatomic potentials via active learning. It contains basic building blocks of curator model, the scripts for training and deploy of ML potentials.
+CURATOR is a toolbox for constructing machine learning interatomic potentials via active learning. It contains basic building blocks of graph neural networks, the scripts for training and deploy of ML potentials.
 
 .. toctree::
    :maxdepth: 2
@@ -15,7 +15,13 @@ GNN active learning is a toolbox for constructing machine learning interatomic p
 
 .. toctree::
    :maxdepth: 2
-   :caption: How to
+   :caption: Tutorials
 
-   lammps.rst
-   openmm.rst
+   tutorials/training.rst
+
+.. toctree::
+   :maxdepth: 2
+   :caption: 
+
+   interface/lammps.rst
+   interface/openmm.rst

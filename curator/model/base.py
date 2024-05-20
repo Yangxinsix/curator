@@ -188,7 +188,9 @@ class LitNNP(pl.LightningModule):
         scheduler: Optional[Type] = None,
         scheduler_monitor: Optional[str] = None,
         warmup_steps: int = 0,
-        save_entire_model: bool = True
+        save_entire_model: bool = True,
+        *args,
+        **kwargs,
     ) -> None:
         """ Base class for neural network potentials using PyTorch Lightning.
 
