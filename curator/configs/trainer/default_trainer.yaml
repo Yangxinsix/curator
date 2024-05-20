@@ -39,7 +39,7 @@ callbacks:
   - _target_: pytorch_lightning.callbacks.EarlyStopping
     monitor: val_total_loss
     min_delta: 0.0
-    patience: ${patience}
+    patience: ${task.patience}
     mode: min
   - _target_: pytorch_lightning.callbacks.LearningRateMonitor
     logging_interval: epoch
