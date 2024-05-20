@@ -10,6 +10,7 @@ warmup_steps: 0
 # customize loss ratios
 energy_weight: 1
 forces_weight: 100
+patience: 200
 
 outputs:
   - _target_: curator.model.ModelOutput
