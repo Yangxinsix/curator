@@ -2,3 +2,6 @@
 task:
   optimizer:
     lr: 0.0005
+
+data:
+  batch_size: 16
