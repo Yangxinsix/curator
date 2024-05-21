@@ -25,9 +25,9 @@ class AtomsDataModule(pl.LightningDataModule):
         transforms: List[Transform] = [],
         collate_fn: Callable = collate_atomsdata,
         split_file: Optional[str] = None,
-        num_train: Optional[int] = None,
-        num_val: Optional[int] = 0.1,
-        num_test: Optional[int] = None,
+        num_train: Union[int, float, None] = None,
+        num_val: Union[int, float, None] = 0.1,
+        num_test: Union[int, float, None] = None,
         val_only: bool = True,
         train_val_split: str = "random",  # could be random or sequential
         shuffle: bool = True,
