@@ -9,10 +9,6 @@ defaults:
 
 # Some parameters that are important for training
 seed: 3407
-cfg: null
-datapath: null
 run_path: .
-model_path: null
 deploy_model: True
-patience: 200             # early-stopping patience, different from reduce on plateau
 device: cuda
