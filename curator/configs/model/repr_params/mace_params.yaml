@@ -4,6 +4,6 @@ task:
     amsgrad: True
     lr: 0.005
     weight_decay: 0.0
-
+  
 data:
   batch_size: 5
