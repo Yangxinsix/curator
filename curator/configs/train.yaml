@@ -10,6 +10,7 @@ defaults:
 # Some parameters that are important for training
 seed: 3407
 cfg: null
+model_path: null               # Model checkpoint
 run_path: .
 deploy_model: True
 device: cuda
