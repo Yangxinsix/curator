@@ -9,6 +9,7 @@ defaults:
 
 # Some parameters that are important for training
 seed: 3407
+cfg: null
 run_path: .
 deploy_model: True
 device: cuda
