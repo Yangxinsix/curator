@@ -74,7 +74,15 @@ def train(config: DictConfig) -> None:
     task: LitNNP = hydra.utils.instantiate(config.task, model=model)
     if config.model_path is not None:
         log.debug(f"Loading trained model from {config.model_path}")
-        task = LitNNP.load_from_checkpoint(checkpoint_path=config.model_path, model=model)
+        # When using CSVlogger and save_hyperparameters() together, the code will report pickle error.
+        # So we choose to save the entire model and outputs in LitNNP and then reload it
+        if config.task.save_entire_model:
+            state_dict = torch.load(config.model_path)
+            model = state_dict['model']
+            outputs = state_dict['outputs']
+        else:
+            outputs = instantiate(config.task.outputs)
+        task = LitNNP.load_from_checkpoint(checkpoint_path=config.model_path, model=model, outputs=outputs)
     # Save extra arguments in checkpoint
     task.save_configuration(config)
     
