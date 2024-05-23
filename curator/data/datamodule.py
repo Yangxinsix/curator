@@ -16,8 +16,11 @@ logger = logging.getLogger(__name__)
 class AtomsDataModule(pl.LightningDataModule):
     def __init__(
         self,
-        datapath: str,
         batch_size: int,
+        datapath: Union[List[str], str, None] = None,
+        train_datapath: Union[List[str], str, None] = None,
+        val_datapath: Union[List[str], str, None] = None,
+        test_datapath: Union[List[str], str, None] = None,
         cutoff: Optional[float] = None,
         compute_neighbor_list: bool = True,
         val_batch_size: Optional[int] = None,
@@ -43,6 +46,9 @@ class AtomsDataModule(pl.LightningDataModule):
         super().__init__()
         
         self.datapath = datapath
+        self.train_datapath = train_datapath
+        self.val_datapath = val_datapath
+        self.test_datapath = test_datapath
         self.transforms = transforms
         self.cutoff = cutoff
         self.compute_neighbor_list = compute_neighbor_list
@@ -88,46 +94,74 @@ class AtomsDataModule(pl.LightningDataModule):
         self.std = None
         
     def setup(self, stage: Optional[str] = None) -> None:
-        if self.dataset is None:
+        if self._train_dataset is None:
             # differentiate datasets
-            if self.datapath.endswith('npz'):
-                self.dataset = NumpyDataset(
-                    self.datapath, 
+            # if separate data files are provided
+            if self.train_datapath is not None:
+                assert self.datapath is None, "Datapath should be None if train_datapath is provided."
+                self._train_dataset = AseDataset(
+                    self.train_datapath,
                     cutoff=self.cutoff,
                     compute_neighborlist = self.compute_neighbor_list, 
                     transforms = self.transforms,
                 )
-            else:
-                self.dataset = AseDataset(
-                    self.datapath, 
+                self.num_train = len(self._train_dataset)
+            if self.val_datapath is not None:
+                self._val_dataset = AseDataset(
+                    self.val_datapath,
                     cutoff=self.cutoff,
                     compute_neighborlist = self.compute_neighbor_list, 
                     transforms = self.transforms,
                 )
-            
-            self.datalen = len(self.dataset)
-            
-            if self.train_idx is None:
-                # get number of train, validation, and test points
-                if self.num_train is not None and self.num_train < 1.0:
-                    self.num_train = int(math.floor(self.num_train * self.datalen))
-                if self.num_val is not None and self.num_val < 1.0:
-                    self.num_val = int(math.floor(self.num_val * self.datalen))
-                if self.num_test is not None and self.num_test is not None:
-                    if self.num_test < 1.0:
-                        self.num_test = int(math.floor(self.num_test * self.datalen))
-                else:
-                    self.num_test = 0
-                    
-                assert self.num_train + self.num_val + self.num_test <= self.datalen, f"Number of train, validation, and test points exceed the total number of dataset."
-                self._split_data()
+                self.num_val = len(self._val_dataset)
+            if self.test_datapath is not None:
+                self._test_dataset = AseDataset(
+                    self.test_datapath,
+                    cutoff=self.cutoff,
+                    compute_neighborlist = self.compute_neighbor_list, 
+                    transforms = self.transforms,
+                )
+                self.num_test = len(self._test_dataset)
                 
-            if self.train_idx is not None:
-                self._train_dataset = torch.utils.data.Subset(self.dataset, self.train_idx)
-            if self.val_idx is not None:
-                self._train_dataset = torch.utils.data.Subset(self.dataset, self.train_idx)
-            if self.test_idx is not None:
-                self._test_dataset = torch.utils.data.Subset(self.dataset, self.test_idx)
+            if self.datapath is not None:
+                if self.datapath.endswith('npz'):
+                    self.dataset = NumpyDataset(
+                        self.datapath, 
+                        cutoff=self.cutoff,
+                        compute_neighborlist = self.compute_neighbor_list, 
+                        transforms = self.transforms,
+                    )
+                else:
+                    self.dataset = AseDataset(
+                        self.datapath, 
+                        cutoff=self.cutoff,
+                        compute_neighborlist = self.compute_neighbor_list, 
+                        transforms = self.transforms,
+                    )
+                
+                self.datalen = len(self.dataset)
+                
+                if self.train_idx is None:
+                    # get number of train, validation, and test points
+                    if self.num_train is not None and self.num_train < 1.0:
+                        self.num_train = int(math.floor(self.num_train * self.datalen))
+                    if self.num_val is not None and self.num_val < 1.0:
+                        self.num_val = int(math.floor(self.num_val * self.datalen))
+                    if self.num_test is not None and self.num_test is not None:
+                        if self.num_test < 1.0:
+                            self.num_test = int(math.floor(self.num_test * self.datalen))
+                    else:
+                        self.num_test = 0
+                        
+                    assert self.num_train + self.num_val + self.num_test <= self.datalen, f"Number of train, validation, and test points exceed the total number of dataset."
+                    self._split_data()
+                    
+                if self.train_idx is not None:
+                    self._train_dataset = torch.utils.data.Subset(self.dataset, self.train_idx)
+                if self.val_idx is not None:
+                    self._train_dataset = torch.utils.data.Subset(self.dataset, self.train_idx)
+                if self.test_idx is not None:
+                    self._test_dataset = torch.utils.data.Subset(self.dataset, self.test_idx)
         
     @property
     def train_dataset(self) -> torch.utils.data.Dataset:
