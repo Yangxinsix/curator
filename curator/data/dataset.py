@@ -20,14 +20,9 @@ class AseDataset(torch.utils.data.Dataset):
     ) -> None:
         super().__init__()
         
-        # very stupid code. working in jupyter notebook but not in the code
-        # if isinstance(ase_db, str) or (isinstance(ase_db, List) and all(isinstance(item, str) for item in ase_db)):
-        #     self.db = Trajectory(ase_db)
-        # else:
-        #     self.db = ase_db
-        try:
+        if isinstance(ase_db, str) or (isinstance(ase_db, List) and all(isinstance(item, str) for item in ase_db)):
             self.db = Trajectory(ase_db)
-        except:
+        else:
             self.db = ase_db
         
         self.cutoff = cutoff
