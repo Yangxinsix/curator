@@ -1,4 +1,9 @@
-from ._data_reader import AseDataReader
+from ._data_reader import (
+    AseDataReader, 
+    Trajectory, 
+    CombinedTrajectoryReader, 
+    CombinedTrajectoryWriter,
+)
 from ._neighborlist import (
     wrap_positions, 
     TorchNeighborList, 
@@ -23,6 +28,9 @@ from .properties import (
 
 __all__ = [
     AseDataReader,
+    Trajectory, 
+    CombinedTrajectoryReader, 
+    CombinedTrajectoryWriter,
     wrap_positions,
     TorchNeighborList,
     BatchNeighborList,

@@ -2,6 +2,11 @@ import torch
 import numpy as np
 from typing import Dict, Optional, List
 from ase import Atoms
+from ase.parallel import world
+from ase.io.trajectory import (
+    TrajectoryReader,
+    TrajectoryWriter,
+)
 from . import properties
 from ._neighborlist import NeighborListTransform, Asap3NeighborList
 from ._transform import Transform
@@ -13,6 +18,65 @@ try:
     import asap3
 except ModuleNotFoundError:
     warnings.warn("Failed to import asap3 module for fast neighborlist")
+
+def Trajectory(filenames, mode='r', atoms=None, properties=None, master=None, comm=world):
+    if mode == 'r':
+        return CombinedTrajectoryReader(filenames)
+    else:
+        return CombinedTrajectoryWriter(filenames[0], mode, atoms, properties, master=master, comm=comm)
+
+class CombinedTrajectoryReader(TrajectoryReader):
+    def __init__(self, filenames):
+        if isinstance(filenames, str):
+            filenames = [filenames]
+        self.readers = [TrajectoryReader(filename) for filename in filenames]
+
+    def __len__(self):
+        return sum(len(reader) for reader in self.readers)
+
+    def __getitem__(self, i):
+        if isinstance(i, slice):
+            return SlicedTrajectory(self, i)
+        
+        for reader in self.readers:
+            if i < len(reader):
+                return reader[i]
+            i -= len(reader)
+        raise IndexError("Index out of range")
+
+    def __iter__(self):
+        for reader in self.readers:
+            for item in reader:
+                yield item
+
+    def __add__(self, other):
+        if not isinstance(other, CombinedTrajectoryReader):
+            raise TypeError("Operands must be of type CombinedTrajectoryReader")
+        combined_filenames = [reader.filename for reader in self.readers] + [reader.filename for reader in other.readers]
+        return CombinedTrajectoryReader(combined_filenames)
+
+    def close(self):
+        for reader in self.readers:
+            reader.close()
+
+class CombinedTrajectoryWriter(TrajectoryWriter):
+    def __init__(self, filename, mode='w'):
+        super().__init__(filename, mode)
+
+    def __add__(self, other):
+        if not isinstance(other, CombinedTrajectoryWriter):
+            raise TypeError("Operands must be of type CombinedTrajectoryWriter")
+        combined_filename = "combined_output.traj"
+        combined_writer = CombinedTrajectoryWriter(combined_filename, 'w')
+
+        # Assuming self.writer and other.writer support reading their contents
+        for writer in [self.writer, other.writer]:
+            combined_writer.write(writer.read())
+
+        return combined_writer
+
+    def close(self):
+        super().close()
 
 class DataReader(metaclass=abc.ABCMeta):
     @abc.abstractmethod

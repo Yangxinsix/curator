@@ -2,7 +2,8 @@ import torch
 from ._data_reader import AseDataReader
 from ._neighborlist import NeighborListTransform, Asap3NeighborList
 from typing import List, Union, Dict
-from ase.io import Trajectory
+from ._data_reader import Trajectory
+from ase.io.trajectory import TrajectoryReader
 from ase import Atoms
 from . import properties
 from ._transform import Transform
@@ -11,7 +12,7 @@ import numpy as np
 class AseDataset(torch.utils.data.Dataset):
     def __init__(
         self, 
-        ase_db, 
+        ase_db: Union[List[Atoms], TrajectoryReader, str, List[str]], 
         cutoff: float=5.0, 
         compute_neighborlist: bool=True, 
         transforms: List[Transform] = [],
@@ -19,9 +20,14 @@ class AseDataset(torch.utils.data.Dataset):
     ) -> None:
         super().__init__()
         
-        if isinstance(ase_db, str):
+        # very stupid code. working in jupyter notebook but not in the code
+        # if isinstance(ase_db, str) or (isinstance(ase_db, List) and all(isinstance(item, str) for item in ase_db)):
+        #     self.db = Trajectory(ase_db)
+        # else:
+        #     self.db = ase_db
+        try:
             self.db = Trajectory(ase_db)
-        else:
+        except:
             self.db = ase_db
         
         self.cutoff = cutoff
