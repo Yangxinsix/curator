@@ -59,8 +59,8 @@ def train(config: DictConfig) -> None:
         log.debug("Seed randomly...")
     
     # Initiate the datamodule
-    log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath}")
-    if not os.path.isfile(config.data.datapath):
+    log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_datapath}")
+    if not os.path.isfile(config.data.datapath or config.data.train_datapath):
         raise RuntimeError("Please provide valid data path!")
     datamodule: LightningDataModule = hydra.utils.instantiate(config.data)
     
