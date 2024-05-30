@@ -1,0 +1,33 @@
+- _target_: curator.model.ModelOutput
+  name: energy
+  loss_fn:
+    _target_: torch.nn.MSELoss
+  loss_weight: ${task.energy_weight}
+  metrics:
+    mae:
+      _target_: torchmetrics.regression.MeanAbsoluteError
+    rmse:
+      _target_: torchmetrics.regression.MeanSquaredError
+      squared: false
+- _target_: curator.model.ModelOutput
+  name: forces
+  loss_fn:
+    _target_: torch.nn.MSELoss
+  loss_weight: ${task.forces_weight}
+  metrics:
+    mae:
+      _target_: torchmetrics.regression.MeanAbsoluteError
+    rmse:
+      _target_: torchmetrics.regression.MeanSquaredError
+      squared: false
+- _target_: curator.model.ModelOutput
+  name: stress
+  loss_fn:
+    _target_: torch.nn.MSELoss
+  loss_weight: ${task.stress_weight}
+  metrics:
+    mae:
+      _target_: torchmetrics.regression.MeanAbsoluteError
+    rmse:
+      _target_: torchmetrics.regression.MeanSquaredError
+      squared: false
