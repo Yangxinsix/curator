@@ -6,6 +6,7 @@ from ase.parallel import world
 from ase.io.trajectory import (
     TrajectoryReader,
     TrajectoryWriter,
+    SlicedTrajectory,
 )
 from . import properties
 from ._neighborlist import NeighborListTransform, Asap3NeighborList
