@@ -76,7 +76,7 @@ def train(config: DictConfig) -> None:
         log.debug(f"Loading trained model from {config.model_path}")
         # When using CSVlogger and save_hyperparameters() together, the code will report pickle error.
         # So we choose to save the entire model and outputs in LitNNP and then reload it
-        if config.task.save_entire_model:
+        if config.task.load_entire_model:
             state_dict = torch.load(config.model_path)
             model = state_dict['model']
             outputs = state_dict['outputs']
