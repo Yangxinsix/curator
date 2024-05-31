@@ -79,8 +79,8 @@ class GradientOutput(torch.nn.Module):
                 i_forces = torch.zeros((forces_dim, 3), device=edge_diff.device, dtype=edge_diff.dtype)
                 j_forces = torch.zeros_like(i_forces)
                 i_forces.index_add_(0, edge_idx[:, 0], dE_ddiff)
-                j_forces.index_add_(0, edge_idx[:, 1], -dE_ddiff)
-                forces = i_forces + j_forces
+                j_forces.index_add_(0, edge_idx[:, 1], dE_ddiff)
+                forces = -i_forces + j_forces
                 data[properties.forces] = forces
 
                 # Reference: https://en.wikipedia.org/wiki/Virial_stress
@@ -89,13 +89,17 @@ class GradientOutput(torch.nn.Module):
                 if self.compute_stress:
                     if properties.cell in data:
                         image_idx = data[properties.image_idx]
-                        atomic_stress = torch.einsum("ij, ik -> ijk", edge_diff, -dE_ddiff)           # I'm quite not sure if a negative sign should be added before dE_ddiff, but I think it should be right
+                        atomic_stress = torch.einsum("ij, ik -> ijk", edge_diff, dE_ddiff)           # I'm quite not sure if a negative sign should be added before dE_ddiff, but I think it should be right
                         cell = data[properties.cell].view(-1, 3, 3)
                         volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2]), dim=1)
-                        atomic_stress = torch.zeros(
+                        i_stress = torch.zeros(
                             (forces_dim, 3, 3),                                         
                             dtype=forces.dtype,
+                            # it seens like the calculation is not very right... because f_ij is not absolutely right here. Maybe we need to do something like in force calculation
+                            # add i_stress and j_stress together then it is the total stress. need verification
                             device=forces.device).index_add(0, edge_idx[:, 0], atomic_stress)
+                        j_stress = torch.zeros_like(i_stress).index_add(0, edge_idx[:, 1], atomic_stress)
+                        atomic_stress = -i_stress + j_stress          
                         stress = torch.zeros_like(cell).index_add(0, image_idx, atomic_stress)
                         stress = stress / volumes[:, None, None] / 2
                         data[properties.stress] = full_3x3_to_voigt_6_stress(stress)
