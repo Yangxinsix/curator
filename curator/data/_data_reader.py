@@ -89,7 +89,7 @@ class AseDataReader(DataReader):
     def __init__(
         self,
         cutoff: Optional[float] = None,
-        compute_neighborlist: bool = True,
+        compute_neighbor_list: bool = True,
         transforms: List[Transform] = [],
         default_dtype: torch.dtype = torch.get_default_dtype(),
     )   -> None:
@@ -97,14 +97,14 @@ class AseDataReader(DataReader):
 
         Args:
             cutoff (Optional[float], optional): Cutoff radius. Defaults to None.
-            compute_neighborlist (bool, optional): Compute neighborlist. Defaults to True.
+            compute_neighbor_list (bool, optional): Compute neighborlist. Defaults to True.
             transforms (List[Transform], optional): Transforms. Defaults to [].
         """ 
         self.cutoff = cutoff
-        self.compute_neighborlist = compute_neighborlist
+        self.compute_neighbor_list = compute_neighbor_list
         self.transforms = transforms
         self.default_dtype = default_dtype
-        if self.compute_neighborlist:
+        if self.compute_neighbor_list:
             assert isinstance(self.cutoff, float), "Cutoff radius must be given when compute the neighbor list"
             if not any([isinstance(t, NeighborListTransform) for t in self.transforms]):
                 self.transforms.append(Asap3NeighborList(cutoff=self.cutoff))

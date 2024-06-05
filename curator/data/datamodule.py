@@ -102,7 +102,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 self._train_dataset = AseDataset(
                     self.train_datapath,
                     cutoff=self.cutoff,
-                    compute_neighborlist = self.compute_neighbor_list, 
+                    compute_neighbor_list = self.compute_neighbor_list, 
                     transforms = self.transforms,
                 )
                 self.num_train = len(self._train_dataset)
@@ -110,7 +110,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 self._val_dataset = AseDataset(
                     self.val_datapath,
                     cutoff=self.cutoff,
-                    compute_neighborlist = self.compute_neighbor_list, 
+                    compute_neighbor_list = self.compute_neighbor_list, 
                     transforms = self.transforms,
                 )
                 self.num_val = len(self._val_dataset)
@@ -118,7 +118,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 self._test_dataset = AseDataset(
                     self.test_datapath,
                     cutoff=self.cutoff,
-                    compute_neighborlist = self.compute_neighbor_list, 
+                    compute_neighbor_list = self.compute_neighbor_list, 
                     transforms = self.transforms,
                 )
                 self.num_test = len(self._test_dataset)
@@ -128,14 +128,14 @@ class AtomsDataModule(pl.LightningDataModule):
                     self.dataset = NumpyDataset(
                         self.datapath, 
                         cutoff=self.cutoff,
-                        compute_neighborlist = self.compute_neighbor_list, 
+                        compute_neighbor_list = self.compute_neighbor_list, 
                         transforms = self.transforms,
                     )
                 else:
                     self.dataset = AseDataset(
                         self.datapath, 
                         cutoff=self.cutoff,
-                        compute_neighborlist = self.compute_neighbor_list, 
+                        compute_neighbor_list = self.compute_neighbor_list, 
                         transforms = self.transforms,
                     )
                 

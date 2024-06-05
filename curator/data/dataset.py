@@ -14,7 +14,7 @@ class AseDataset(torch.utils.data.Dataset):
         self, 
         ase_db: Union[List[Atoms], TrajectoryReader, str, List[str]], 
         cutoff: float=5.0, 
-        compute_neighborlist: bool=True, 
+        compute_neighbor_list: bool=True, 
         transforms: List[Transform] = [],
         default_dtype: torch.dtype = torch.get_default_dtype(),
     ) -> None:
@@ -27,7 +27,7 @@ class AseDataset(torch.utils.data.Dataset):
         
         self.cutoff = cutoff
         self.default_dtype = default_dtype
-        self.atoms_reader = AseDataReader(cutoff, compute_neighborlist, transforms)
+        self.atoms_reader = AseDataReader(cutoff, compute_neighbor_list, transforms)
         
     def __len__(self) -> int:
         return len(self.db)
@@ -42,7 +42,7 @@ class NumpyDataset(torch.utils.data.Dataset):
         self, 
         datapath, 
         cutoff: float=5.0, 
-        compute_neighborlist: bool=True, 
+        compute_neighbor_list: bool=True, 
         transforms: List[Transform] = [],
         default_dtype: torch.dtype = torch.get_default_dtype(),
     ) -> None:
@@ -51,9 +51,9 @@ class NumpyDataset(torch.utils.data.Dataset):
         self.npdata = np.load(datapath)
         self.cutoff = cutoff
         self.default_dtype = default_dtype
-        self.compute_neighborlist = compute_neighborlist
+        self.compute_neighbor_list = compute_neighbor_list
         self.transforms = transforms
-        if self.compute_neighborlist:
+        if self.compute_neighbor_list:
             assert isinstance(self.cutoff, float), "Cutoff radius must be given when compute the neighbor list"
             if not any([isinstance(t, NeighborListTransform) for t in self.transforms]):
                 self.transforms.append(Asap3NeighborList(cutoff=self.cutoff))
