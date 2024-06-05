@@ -24,17 +24,17 @@ class PairwiseDistance(torch.nn.Module):
     """
     def __init__(
         self,
-        compute_neighborlist: bool = False,
+        compute_neighbor_list: bool = False,
         compute_distance_from_R: bool = False,
         compute_forces: bool = True,
         cutoff: Optional[float] = None,
     ) -> None:
         super().__init__()
-        self.compute_neighborlist = compute_neighborlist
+        self.compute_neighbor_list = compute_neighbor_list
         self.compute_distance_from_R = compute_distance_from_R
         self.compute_forces = compute_forces
         self.batch_nl = None
-        if self.compute_neighborlist:
+        if self.compute_neighbor_list:
             assert isinstance(cutoff, float), "Valid cutoff value must be provided for computing neighbor list!"
             self.batch_nl = BatchNeighborList(cutoff, requires_grad=self.compute_forces, wrap_atoms=True, return_distance=True)
     

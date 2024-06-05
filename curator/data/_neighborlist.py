@@ -11,7 +11,7 @@ try:
 except ModuleNotFoundError:
     warnings.warn("Failed to import asap3 module for fast neighborlist")
 
-def wrap_positions(positions: torch.tensor, cell: torch.tensor, eps: int=1e-7) -> torch.tensor:
+def wrap_positions(positions: torch.Tensor, cell: torch.Tensor, eps: int=1e-7) -> torch.Tensor:
     """Wrap positions into the unit cell"""
     # wrap atoms outside of the box
     scaled_pos = positions @ torch.linalg.inv(cell) + eps
@@ -93,8 +93,8 @@ class NeighborListTransform(Transform):
     
     def _simple_neighbor_list(
         self,
-        pos: torch.tensor,
-    ) -> Tuple[torch.tensor, torch.tensor]:
+        pos: torch.Tensor,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
         dist_mat = torch.cdist(pos, pos)
         mask = dist_mat < self.cutoff
         mask.fill_diagonal_(False)
@@ -132,7 +132,7 @@ class TorchNeighborList(NeighborListTransform):
         self.wrap_atoms = wrap_atoms
         self.register_buffer('disp_mat', disp_mat, persistent=False)
     
-    def _build_neighbor_list(self, positions: torch.tensor, cell: torch.tensor) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:
+    def _build_neighbor_list(self, positions: torch.Tensor, cell: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         # calculate padding size. It is useful for all kinds of cells
         if self.requires_grad:
             positions.requires_grad_()
@@ -225,9 +225,9 @@ class Asap3NeighborList(NeighborListTransform):
     
     def _build_neighbor_list(
         self, 
-        pos: torch.tensor, 
-        cell: torch.tensor, 
-    ) -> Tuple[torch.tensor, torch.tensor, torch.tensor]:
+        pos: torch.Tensor, 
+        cell: torch.Tensor, 
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         atoms = Atoms(positions=pos, pbc=True, cell=cell)
         self.nblist.check_and_update(atoms)
         pair_i_idx = []
