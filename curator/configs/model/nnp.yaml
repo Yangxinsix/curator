@@ -7,6 +7,7 @@ input_modules:
   - _target_: curator.layer.PairwiseDistance
     compute_neighbor_list: True
     compute_distance_from_R: False
+    cutoff: ${data.cutoff}
 output_modules:
   - _target_: curator.layer.AtomwiseReduce
   - _target_: curator.layer.GradientOutput
