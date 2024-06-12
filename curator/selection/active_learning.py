@@ -123,6 +123,7 @@ class FeatureStatistics:
         model_inputs: torch.tensor,
         random_projection: RandomProjections,
         kernel: str='ll-gradient',
+        to_cpu: bool=True,
     ) -> torch.Tensor:
         """
         Implementing features calculation and kernel transformation. 
@@ -214,7 +215,7 @@ class FeatureStatistics:
                 atomic_g = feats[0][:, :-1]
             g = atomic_g
         
-        return g
+        return g.cpu() if to_cpu else g
     
     def _compute_fisher(self, g: torch.Tensor) -> torch.Tensor:
         return torch.einsum('mci, mcj -> mij', g, g)
@@ -223,6 +224,7 @@ class FeatureStatistics:
         self, 
         dataset: Optional[torch.utils.data.Dataset]=None, 
         kernel: str='full-gradient',
+        to_cpu: bool=True,
     ) -> torch.Tensor:
         """
         :return: Feature vector of ``shape=(n_models, n_structures, n_features)``.
@@ -250,6 +252,7 @@ class FeatureStatistics:
                         batch, 
                         kernel=kernel, 
                         random_projection=self.random_projections[i],
+                        to_cpu=to_cpu,
                     ))
                 feat_extract.unhook()
                 model_g = torch.cat(model_g)

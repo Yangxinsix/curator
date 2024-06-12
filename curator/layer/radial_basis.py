@@ -45,8 +45,8 @@ class GaussianBasis(RadialBasis):
         """
         Args:
             n_rbf: total number of Gaussian functions, :math:`N_g`.
-            cutoff: center of last Gaussian function, :math:`\mu_{N_g}`
-            start: center of first Gaussian function, :math:`\mu_0`.
+            cutoff: center of last Gaussian function, :math:`mu_{N_g}`
+            start: center of first Gaussian function, :math:`mu_0`.
             trainable: If True, widths and offset of Gaussian functions
                 are adjusted during training process.
         """
