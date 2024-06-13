@@ -79,8 +79,8 @@ class GradientOutput(torch.nn.Module):
                 i_forces = torch.zeros((forces_dim, 3), device=edge_diff.device, dtype=edge_diff.dtype)
                 j_forces = torch.zeros_like(i_forces)
                 i_forces.index_add_(0, edge_idx[:, 0], dE_ddiff)
-                j_forces.index_add_(0, edge_idx[:, 1], dE_ddiff)
-                forces = -i_forces + j_forces
+                j_forces.index_add_(0, edge_idx[:, 1], -dE_ddiff)
+                forces = i_forces + j_forces
                 data[properties.forces] = forces
 
                 # Reference: https://en.wikipedia.org/wiki/Virial_stress
