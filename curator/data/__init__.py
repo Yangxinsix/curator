@@ -15,6 +15,7 @@ from .dataset import AseDataset, NumpyDataset, cat_tensors, collate_atomsdata
 from .datamodule import AtomsDataModule
 from ._type_mapper import TypeMapper
 from ._transform import Transform
+from .utils import read_trajectory
 from .properties import (
     _DEFAULT_EDGE_FIELDS,
     _DEFAULT_INDEX_FIELDS,
@@ -40,6 +41,7 @@ __all__ = [
     NumpyDataset,
     cat_tensors,
     collate_atomsdata,
+    read_trajectory,
     TypeMapper,
     Transform,
     AtomsDataModule,

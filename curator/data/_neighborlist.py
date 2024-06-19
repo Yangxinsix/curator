@@ -137,10 +137,10 @@ class TorchNeighborList(NeighborListTransform):
         if self.requires_grad:
             positions.requires_grad_()
         wrapped_pos = wrap_positions(positions, cell) if self.wrap_atoms else positions
-        norm_a = cell[1].cross(cell[2]).norm()
-        norm_b = cell[2].cross(cell[0]).norm()
-        norm_c = cell[0].cross(cell[1]).norm()
-        volume = torch.sum(cell[0] * cell[1].cross(cell[2]))
+        norm_a = cell[1].cross(cell[2], dim=-1).norm()
+        norm_b = cell[2].cross(cell[0], dim=-1).norm()
+        norm_c = cell[0].cross(cell[1], dim=-1).norm()
+        volume = torch.sum(cell[0] * cell[1].cross(cell[2], dim=-1))
 
         # get padding size and padding matrix to generate padded atoms. Use minimal image convention
         padding_a = torch.ceil(self.cutoff * norm_a / volume).long()

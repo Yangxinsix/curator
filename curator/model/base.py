@@ -40,6 +40,7 @@ class NeuralNetworkPotential(nn.Module):
         self.collect_outputs()
         
     def forward(self, data: properties.Type) -> properties.Type:
+        data = data.copy()
         for m in self.input_modules:
             data = m(data)
             
@@ -69,6 +70,61 @@ class NeuralNetworkPotential(nn.Module):
     def extract_outputs(self, data: properties.Type) -> properties.Type:
         results = {k: data[k] for k in self.model_outputs}
         return results
+
+class EnsembleModel(nn.Module):
+    """
+    Ensemble model for evaluating uncertainties
+    """
+    def __init__(self, models: List[NeuralNetworkPotential]) -> None:
+        super().__init__()
+        self.models = nn.ModuleList([model for model in models])
+        self.compute_uncertainty = True if len(models) > 1 else False
+
+    def forward(self, data: properties.Type) -> properties.Type:
+        energy = []
+        forces = []
+        for model in self.models:
+            out = model(data)
+            energy.append(out[properties.energy].detach())
+            forces.append(out[properties.forces].detach())
+        
+        energy = torch.stack(energy)
+        forces = torch.stack(forces)
+        f_scatter = torch.zeros(data[properties.n_atoms].shape[0], device=out[properties.energy].device)
+        
+        result_dict = {
+            properties.energy: torch.mean(energy, dim=0),
+            properties.forces: torch.mean(forces, dim=0),
+        }
+
+        if self.compute_uncertainty:
+            uncertainty = {
+                properties.e_var: torch.var(energy, dim=0),
+                properties.e_max: torch.max(energy).unsqueeze(-1),
+                properties.e_min: torch.min(energy).unsqueeze(-1),
+                properties.e_sd: torch.std(energy, dim=0),
+                properties.f_var: f_scatter.index_add(0, data[properties.image_idx], torch.var(forces, dim=0).mean(dim=1)) / data[properties.n_atoms],
+            }
+            uncertainty[properties.f_sd] = uncertainty[properties.f_var].sqrt()
+            result_dict[properties.uncertainty] = uncertainty
+        
+        if properties.energy in data:
+            # calculate errors
+            e_diff = result_dict[properties.energy] - data[properties.energy]
+            f_diff = result_dict[properties.forces] - data[properties.forces]
+            error = {
+                properties.e_ae: torch.abs(e_diff),
+                properties.e_se: torch.square(e_diff),
+                properties.f_ae: f_scatter.index_add(0, data[properties.image_idx], torch.abs(f_diff).mean(dim=1)) / data[properties.n_atoms],
+                properties.f_se: f_scatter.index_add(0, data[properties.image_idx], torch.square(f_diff).mean(dim=1)) / data[properties.n_atoms],
+            }
+
+            # TODO: wait for torch_scatter.
+            # error[properties.f_maxe] = f_scatter.scatter_reduce(0, data[properties.image_idx].unsqueeze(1).expand_as(f_diff), torch.abs(f_diff), reduce='amax', include_self=False)
+            # error[properties.f_mine] = f_scatter.scatter_reduce(0, data[properties.image_idx].unsqueeze(1).expand_as(f_diff), torch.abs(f_diff), reduce='amin', include_self=False)
+            result_dict[properties.error] = error
+
+        return result_dict
 
 class ModelOutput(nn.Module):
     """ Base class for model outputs."""
@@ -298,30 +354,22 @@ class LitNNP(pl.LightningModule):
         logger.info("".join(head + self._get_metrics_key(subset='train')))
     
     def training_step(self, batch: Dict, batch_idx: List[int]) -> torch.Tensor:
-        targets = {
-            output.target_property: batch[output.target_property]
-            for output in self.outputs
-        }
-        atoms_dict = {k: v for k, v in batch.items() if k not in targets}
         pred = self.model(batch)
+        pred.update({k: v for k, v in batch.items() if k not in pred.keys()})
 
         # calculate loss, metrics
-        # unscale targets because loss will be calculated with normalized units
-        unscaled_targets = targets.copy()
-        unscaled_targets.update(atoms_dict)
+        # unscale batch because loss will be calculated with normalized units
         for layer in self.rescale_layers:
-            unscaled_targets = layer.unscale(unscaled_targets, force_process=True)
-        loss_dict, num_abs_dict = self.loss_fn(pred, unscaled_targets, 'train')
+            unscaled_batch = layer.unscale(batch, force_process=True)
+        loss_dict, num_abs_dict = self.loss_fn(pred, unscaled_batch, 'train')
         for k in loss_dict.keys():
             self.log(k, loss_dict[k], batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True)
         
         # when calculate metrics pred need to be scaled to get real units
-        scaled_pred = pred.copy()
-        scaled_pred.update(atoms_dict)
         for layer in self.rescale_layers[::-1]:
-            scaled_pred = layer.scale(scaled_pred, force_process=True)
+            scaled_pred = layer.scale(pred, force_process=True)
         for output in self.outputs:
-            batch_metrics = output.calculate_metrics(scaled_pred, targets, 'train')
+            batch_metrics = output.calculate_metrics(scaled_pred, batch, 'train')
             self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False)
         
         # # logging metric keys
@@ -337,28 +385,21 @@ class LitNNP(pl.LightningModule):
         return loss_dict['train_total_loss']
     
     def validation_step(self, batch: Dict, batch_idx: List[int]) -> torch.Tensor:
-        targets = {
-            output.target_property: batch[output.target_property]
-            for output in self.outputs
-        }
-        atoms_dict = {k: v for k, v in batch.items() if k not in targets}
         pred = self.model(batch)
+        pred.update({k: v for k, v in batch.items() if k not in pred.keys()})
         
         # calculate loss, metrics
-        # both targets and pred need to be normalized for calculating loss in validation mode
-        unscaled_targets, unscaled_pred = targets.copy(), pred.copy()
-        unscaled_pred.update(atoms_dict)
-        unscaled_targets.update(atoms_dict)
+        # both batch and pred need to be normalized for calculating loss in validation mode
         for layer in self.rescale_layers:
-            unscaled_targets = layer.unscale(unscaled_targets, force_process=True)
-            unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
-        loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_targets, 'val')
+            unscaled_batch = layer.unscale(batch, force_process=True)
+            unscaled_pred = layer.unscale(pred, force_process=True)
+        loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_batch, 'val')
         for k in loss_dict.keys():
             self.log(k, loss_dict[k], batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True) 
         
         # nothing need to be scaled for calculating metrics        
         for output in self.outputs:
-            batch_metrics = output.calculate_metrics(pred, targets, 'val')
+            batch_metrics = output.calculate_metrics(pred, batch, 'val')
             self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False)
         
         # logging metrics to console
@@ -370,27 +411,20 @@ class LitNNP(pl.LightningModule):
         return loss_dict['val_total_loss']
     
     def test_step(self, batch: Dict, batch_idx: List[int]) -> torch.Tensor:
-        targets = {
-            output.target_property: batch[output.target_property]
-            for output in self.outputs
-        }
-        atoms_dict = {k: v for k, v in batch.items() if k not in targets}
         pred = self.model(batch)
+        pred.update({k: v for k, v in batch.items() if k not in pred.keys()})
         
         # calculate loss, metrics
         # both targets and pred need to be normalized for calculating loss in validation mode
-        unscaled_targets, unscaled_pred = targets.copy(), pred.copy()
-        unscaled_pred.update(atoms_dict)
-        unscaled_targets.update(atoms_dict)
         for layer in self.rescale_layers:
-            unscaled_targets = layer.unscale(unscaled_targets, force_process=True)
-            unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
+            unscaled_targets = layer.unscale(batch, force_process=True)
+            unscaled_pred = layer.unscale(pred, force_process=True)
         loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_targets, 'test')
         for k in loss_dict.keys():
             self.log(k, loss_dict[k], batch_size=num_abs_dict[k], on_step=True, on_epoch=False, prog_bar=True) 
                
         for output in self.outputs:
-            batch_metrics = output.calculate_metrics(pred, targets, 'test')
+            batch_metrics = output.calculate_metrics(pred, batch, 'test')
             self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False)
         
         # logging metrics to console

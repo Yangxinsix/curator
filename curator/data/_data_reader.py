@@ -24,13 +24,22 @@ def Trajectory(filenames, mode='r', atoms=None, properties=None, master=None, co
     if mode == 'r':
         return CombinedTrajectoryReader(filenames)
     else:
-        return CombinedTrajectoryWriter(filenames[0], mode, atoms, properties, master=master, comm=comm)
+        if isinstance(filenames, list):
+            return CombinedTrajectoryWriter(filenames[0], mode, atoms, properties, master=master, comm=comm)
+        elif isinstance(filenames, str):
+            return CombinedTrajectoryWriter(filenames, mode, atoms, properties, master=master, comm=comm)
 
 class CombinedTrajectoryReader(TrajectoryReader):
     def __init__(self, filenames):
         if isinstance(filenames, str):
             filenames = [filenames]
         self.readers = [TrajectoryReader(filename) for filename in filenames]
+
+    @classmethod
+    def from_readers(cls, readers):
+        instance = cls([])
+        instance.readers = readers
+        return instance
 
     def __len__(self):
         return sum(len(reader) for reader in self.readers)
@@ -51,18 +60,21 @@ class CombinedTrajectoryReader(TrajectoryReader):
                 yield item
 
     def __add__(self, other):
-        if not isinstance(other, CombinedTrajectoryReader):
-            raise TypeError("Operands must be of type CombinedTrajectoryReader")
-        combined_filenames = [reader.filename for reader in self.readers] + [reader.filename for reader in other.readers]
-        return CombinedTrajectoryReader(combined_filenames)
+        if isinstance(other, CombinedTrajectoryReader):
+            new_readers = self.readers + other.readers
+        elif isinstance(other, TrajectoryReader):
+            new_readers = self.readers + [other]
+        else:
+            raise TypeError("Operands must be of type CombinedTrajectoryReader or TrajectoryReader")
+        return CombinedTrajectoryReader.from_readers(new_readers)
 
     def close(self):
         for reader in self.readers:
             reader.close()
 
 class CombinedTrajectoryWriter(TrajectoryWriter):
-    def __init__(self, filename, mode='w'):
-        super().__init__(filename, mode)
+    def __init__(self, filename, mode='w', *args, **kwargs):
+        super().__init__(filename, mode, *args, **kwargs)
 
     def __add__(self, other):
         if not isinstance(other, CombinedTrajectoryWriter):

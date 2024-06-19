@@ -52,7 +52,7 @@ simulate: # Main simulate parameters
 
 simulator: # General simulate parameters
   init_traj: null # The trajectory you starts from, will be defined later per system <MANUALLY INSERT>
-  start_indice: 0 # For which index you start from in the trajectory
+  start_index: 0 # For which index you start from in the trajectory
   rattle: null # Rattle the initial structure
   fix_under: null # Fix the undercoordinated atoms
   friction: 0.003 # Friction for the MD

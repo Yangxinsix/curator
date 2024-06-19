@@ -1,13 +1,13 @@
 import torch
-from ._data_reader import AseDataReader
+from ._data_reader import AseDataReader, Trajectory
 from ._neighborlist import NeighborListTransform, Asap3NeighborList
 from typing import List, Union, Dict
-from ._data_reader import Trajectory
 from ase.io.trajectory import TrajectoryReader
 from ase.io import read
 from ase import Atoms
 from . import properties
 from ._transform import Transform
+from .utils import read_trajectory
 import numpy as np
 
 class AseDataset(torch.utils.data.Dataset):
@@ -21,20 +21,7 @@ class AseDataset(torch.utils.data.Dataset):
     ) -> None:
         super().__init__()
         
-        if isinstance(ase_db, str):
-            if ase_db.endswith('.traj'):
-                self.db = Trajectory(ase_db)
-            else:
-                self.db = read(ase_db)
-        elif isinstance(ase_db, List):
-            if all(isinstance(item, Atoms) for item in ase_db):
-                self.db = ase_db
-            elif all(item.endswith('traj') for item in ase_db):
-                self.db = Trajectory(ase_db)
-            else:
-                self.db = []
-                for item in ase_db:
-                    self.db += read(item)
+        self.db = read_trajectory(ase_db)
 
         self.cutoff = cutoff
         self.default_dtype = default_dtype

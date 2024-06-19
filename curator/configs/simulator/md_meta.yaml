@@ -1,6 +1,6 @@
 method: md
 init_traj: null
-start_indice: 0
+start_index: 0
 rattle: null
 fix_under: null
 friction: 0.003

@@ -91,7 +91,7 @@ class GradientOutput(torch.nn.Module):
                         image_idx = data[properties.image_idx]
                         atomic_stress = torch.einsum("ij, ik -> ijk", edge_diff, dE_ddiff)           # I'm quite not sure if a negative sign should be added before dE_ddiff, but I think it should be right
                         cell = data[properties.cell].view(-1, 3, 3)
-                        volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2]), dim=1)
+                        volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1)
                         i_stress = torch.zeros(
                             (forces_dim, 3, 3),                                         
                             dtype=forces.dtype,
@@ -129,7 +129,7 @@ class GradientOutput(torch.nn.Module):
                         if stress is None:
                             stress = torch.zeros_like(data[properties.cell])
                         cell = data[properties.cell].view(-1, 3, 3)
-                        volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2]), dim=1)
+                        volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1)
                         data[properties.stress] = stress / volumes[:, None, None]
         
         else:
