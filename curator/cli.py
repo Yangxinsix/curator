@@ -412,7 +412,10 @@ def simulate(config: DictConfig):
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
     
     # set logger
-    log.setLevel(logging.DEBUG)
+    fh = logging.FileHandler(os.path.join(config.run_path, "simulation.log"), mode="w")
+    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
+    fh.setLevel(logging.DEBUG)
+    log.addHandler(fh)
     log.info("Running on host: " + str(socket.gethostname()))
 
     # Set up the seed
@@ -421,7 +424,23 @@ def simulate(config: DictConfig):
     else:
         log.info("Seed randomly...")
     
-    # Load model. Uses a compiled model, if any, otherwise a not compiled model
+    # Load model. Uses a compiled model, if any, otherwise a uncompiled model
+    if isinstance(config.model_path, list):
+        model_pt = []
+        for model_path in config.model_path:
+            if model_path.endswith('.pt') or model_path.endswith('.pth'):
+                model_pt.append(model_path)
+            else:
+                log.warning(f'Invalid model path is given: {model_path}! Trying to find models in the directory...')
+
+                model_pt += list(Path(model_path).rglob('*compiled_model.pt'))
+    elif isinstance(config.model_path, str):
+        if config.model_path.endswith('.pt') or config.model_path.endswith('.pth'):
+            model_pt = [config.model_path]
+        else:
+            log.warning(f'Invalid model path is given: {config.model_path}! Trying to find models in the directory...')
+            model_pt = list(Path(config.model_path).rglob('*best_model.pth'))
+
     model_pt = Path(config.model_path).rglob('*compiled_model.pt')
     models = [torch.jit.load(each, map_location=torch.device(config.device)) for each in model_pt]
     

@@ -1,11 +1,38 @@
-from .data import properties
+from . import properties
 from typing import List, Dict, Tuple, Union, Optional
 from ase.data import atomic_names, atomic_numbers
 import torch
 from torch.utils.data import DataLoader, Dataset
-from curator.layer import scatter_add
 import math
 import numpy as np
+from ase.io import read
+from ._data_reader import Trajectory
+from ase import Atoms
+from pathlib import PosixPath
+from ase.io.trajectory import TrajectoryReader
+
+def read_trajectory(ase_db):
+    if isinstance(ase_db, (str, PosixPath)):
+        ase_db = str(ase_db)  # Convert PosixPath to string if necessary
+        if ase_db.endswith('.traj'):
+            db = Trajectory(ase_db)
+        else:
+            db = read(ase_db)
+    elif isinstance(ase_db, list):
+        if all(isinstance(item, Atoms) for item in ase_db):
+            db = ase_db
+        elif all(isinstance(item, (str, PosixPath)) and str(item).endswith('.traj') for item in ase_db):
+            db = Trajectory([str(item) for item in ase_db])
+        else:
+            db = []
+            for item in ase_db:
+                if isinstance(item, (str, PosixPath)):
+                    item = str(item)  # Convert PosixPath to string if necessary
+                    db += read(item)
+    elif isinstance(ase_db, TrajectoryReader):
+        db = ase_db
+
+    return db
 
 def compute_average_E0(
     dataset,
@@ -43,6 +70,7 @@ def compute_scale_shift(
     per_atom=True,
     atomic_energies: Optional[Dict[int, float]]=None,
 ) -> Tuple[float, float]:
+    from curator.layer import scatter_add
     reference_energies = torch.zeros((119,), dtype=torch.float)
     if atomic_energies is not None:
         for k, v in atomic_energies.items():

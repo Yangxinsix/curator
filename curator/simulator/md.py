@@ -18,6 +18,7 @@ from omegaconf import DictConfig
 from ase.calculators.calculator import Calculator
 from curator.simulator import PrintEnergy
 
+logger = logging.getLogger(__name__)
 
 def MD(config: DictConfig, MLcalc: Calculator,PE: PrintEnergy) -> None:
     """ MD simulation with ASE
@@ -28,33 +29,33 @@ def MD(config: DictConfig, MLcalc: Calculator,PE: PrintEnergy) -> None:
         PE (PrintEnergy): PrintEnergy object
     
     """
-    # Setup log file 
-    log = PE.logger
+    # Setup logger file 
+    logger = PE.logger
     runHandler = logging.FileHandler('MD.log', mode='w')
     runHandler.setLevel(logging.DEBUG)
     runHandler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
     errorHandler = logging.FileHandler('warning.log', mode='w')
     errorHandler.setLevel(logging.WARNING)
     errorHandler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
-    log.addHandler(runHandler)
-    log.addHandler(errorHandler)
-    log.addHandler(logging.StreamHandler())
+    logger.addHandler(runHandler)
+    logger.addHandler(errorHandler)
+    logger.addHandler(logging.StreamHandler())
     
     # set up md start configuration
     if not os.path.isfile(config.init_traj):
         raise RuntimeError("Please provide valid initial data path!")
     images = read(config.init_traj, ':')
-    start_indice = np.random.choice(len(images)) if config.start_indice == None else config.start_indice
-    log.debug(f'MD starts from No.{start_indice} configuration in {config.init_traj}')
-    atoms = images[start_indice] 
+    start_index = np.random.choice(len(images)) if config.start_index == None else config.start_index
+    logger.debug(f'MD starts from No.{start_index} configuration in {config.init_traj}')
+    atoms = images[start_index] 
     atoms.wrap() #Wrap positions to unit cell.
     
     # Settings for atom object
     if config.rattle:
-        log.debug(f'Rattle atoms with {config.rattle} eV/A^2')
+        logger.debug(f'Rattle atoms with {config.rattle} eV/A^2')
         atoms.rattle(config.rattle)
     if config.fix_under:
-        log.debug(f'Fix atoms under {config.fix_under} A')
+        logger.debug(f'Fix atoms under {config.fix_under} A')
         cons = FixAtoms(mask=atoms.positions[:, 2] < config.fix_under) if config.fix_under else []
         atoms.set_constraint(cons)
     

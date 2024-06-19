@@ -31,6 +31,26 @@ strain: Final[str] = "strain"
 stress: Final[str] = "stress"
 virial: Final[str] = "virial"
 atomic_energy: Final[str] = "atomic_energy"
+
+# uncertainties
+e_var: Final[str] = "energy_var"      # energy variance
+e_sd: Final[str] = "energy_sd"        # energy standard deviation
+e_max: Final[str] = "energy_max"      # energy maximum
+e_min: Final[str] = "energy_min"      # energy minimum
+e_ae: Final[str] = "energy_ae"        # energy absolute error
+e_se: Final[str] = "energy_se"        # energy standard error
+
+f_var: Final[str] = "force_var"      # forces variance
+f_sd: Final[str] = "force_sd"        # forces standard deviation
+f_max: Final[str] = "force_max"      # forces maximum
+f_min: Final[str] = "force_min"      # forces minimum
+f_ae: Final[str] = "force_ae"        # forces absolute error
+f_se: Final[str] = "force_se"        # forces standard error
+f_maxe: Final[str] = "force_maxe"    # forces maximum error
+f_mine: Final[str] = "force_mine"    # forces minimum error
+
+uncertainty: Final[str] = "uncertainties"
+error: Final[str] = "errors"
 energy_uncertainty: Final[str] = "energy_uncertainty"
 forces_uncertainty: Final[str] = "forces_uncertainty"
 
@@ -78,6 +98,18 @@ _DEFAULT_GRAPH_FIELDS: Set[str] = {
     cell,
     n_atoms,
     n_pairs,
+    e_var,
+    e_sd,
+    e_max,
+    e_min,
+    e_ae,
+    e_se,
+    f_var,
+    f_sd,
+    f_max,
+    f_min,
+    f_ae,
+    f_se,
     energy_uncertainty,
     forces_uncertainty,
 }

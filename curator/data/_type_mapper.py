@@ -2,7 +2,7 @@ from typing import Optional, List, Dict
 from ase.data import atomic_numbers
 import warnings
 import torch
-from curator.data import properties
+from . import properties
 from ._transform import Transform
 
 class TypeMapper(Transform):

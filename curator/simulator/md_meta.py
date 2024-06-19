@@ -42,9 +42,9 @@ def MD_meta(config: DictConfig, MLcalc: Calculator,PE: PrintEnergy) -> None:
     if not os.path.isfile(config.init_traj):
         raise RuntimeError("Please provide valid initial data path!")
     images = read(config.init_traj, ':')
-    start_indice = np.random.choice(len(images)) if config.start_indice == None else config.start_indice
-    log.debug(f'MD starts from No.{start_indice} configuration in {config.init_traj}')
-    atoms = images[start_indice] 
+    start_index = np.random.choice(len(images)) if config.start_index == None else config.start_index
+    log.debug(f'MD starts from No.{start_index} configuration in {config.init_traj}')
+    atoms = images[start_index] 
     atoms.wrap() #Wrap positions to unit cell.
     
     # Settings for atom object
@@ -67,7 +67,7 @@ def MD_meta(config: DictConfig, MLcalc: Calculator,PE: PrintEnergy) -> None:
         restart=config.plumed_restart,
         )
     #if config.plumed_restart:
-    #    atoms.calc.istep = start_indice if start_indice >= 0 else len(images) + start_indice 
+    #    atoms.calc.istep = start_index if start_index >= 0 else len(images) + start_index 
 
     # Test MD calculator
     atoms.get_potential_energy()

@@ -3,7 +3,7 @@ from curator.data import AseDataReader, TypeMapper
 import ase
 import numpy as np
 import torch
-
+from typing import Optional
 
 class MLCalculator(Calculator):
     """ ML model calulator used for ASE applications """
@@ -11,10 +11,9 @@ class MLCalculator(Calculator):
     def __init__(
         self,
         model: torch.nn.Module,
-        cutoff: float,
-#        species,
-        energy_scale: float =1.0,
-        forces_scale: float =1.0,
+        cutoff: Optional[float] = None,
+        energy_scale: float = 1.0,
+        forces_scale: float = 1.0,
 #        stress_scale=1.0,
         **kwargs
     ) -> None:
@@ -28,17 +27,45 @@ class MLCalculator(Calculator):
             forces_scale (float, optional): forces scale. Defaults to 1.0.
         """
         self.model = model
+        self.model.eval()
         self.model_device = next(model.parameters()).device
-        self.ase_data_reader = AseDataReader(cutoff)#,transforms=[TypeMapper(species)])
+        if cutoff is None:
+            for name, module in model.named_modules():
+                if "representation" in name:
+                    cutoff = module.cutoff
+                    break
+        
+        assert cutoff is not None, "Valid cutoff value should be given or inferred from model!"
+        self.ase_data_reader = AseDataReader(cutoff)
         self.energy_scale = energy_scale
         self.forces_scale = forces_scale
 #        self.stress_scale = stress_scale
 
+    def _convert_to_cpu(self, tensor):
+        tensor = tensor.detach().cpu()
+        if tensor.ndimension() == 0:
+            return tensor.item()
+        elif tensor.numel() == 1:
+            return tensor.item()
+        else:
+            return tensor.numpy()
+
+    def _process_results(self, results):
+        processed_results = {}
+        for key, value in results.items():
+            if isinstance(value, torch.Tensor):
+                processed_results[key] = self._convert_to_cpu(value)
+            elif isinstance(value, dict):
+                processed_results[key] = self._process_results(value)
+            else:
+                processed_results[key] = value
+        return processed_results
+
     def calculate(
             self, 
             atoms: ase.Atoms =None, 
-            properties: list =["energy"], 
-            system_changes: list =all_changes
+            properties: list = ["energy"], 
+            system_changes: list = all_changes,
             ) -> None:
         """
         Calculate atomic properties using ML model.
@@ -59,23 +86,11 @@ class MLCalculator(Calculator):
         }
         
         # Run model
-        model_results = self.model(model_inputs)
-
-        results = {}
+        self.results = self._process_results(self.model(model_inputs))
 
         # Convert outputs to calculator format
-        results["forces"] = (
-            model_results["forces"].detach().cpu().numpy() * self.forces_scale
-        )
-        results["energy"] = (
-            model_results["energy"][0].detach().cpu().numpy().item()
-            * self.energy_scale
-        )
-        for k in model_results.keys():
-            if k != "forces" and k != "energy":
-                results[k] = model_results[k][0].detach().cpu().numpy().item()
-    
-        self.results = results
+        self.results["forces"] *= self.forces_scale
+        self.results["energy"] *= self.energy_scale
 
 class EnsembleCalculator(Calculator):
     """ Ensemble calulator for ML models used for ASE applications """
@@ -84,7 +99,7 @@ class EnsembleCalculator(Calculator):
     def __init__(
         self,
         models: list,
-        cutoff: float,
+        cutoff: Optional[float] = None,
         energy_scale: int =1.0,
         forces_scale: int =1.0,
 #        stress_scale=1.0,
@@ -105,8 +120,7 @@ class EnsembleCalculator(Calculator):
             self.model_device = next(models[0].parameters()).device
         else:
             self.model_device = models[0]['device']
-        self.cutoff = cutoff
-        self.ase_data_reader = AseDataReader(cutoff)#,transforms=[TypeMapper(species)])
+        self.ase_data_reader = AseDataReader(cutoff if cutoff is not None else models[0].representation.cutoff)
         self.energy_scale = energy_scale
         self.forces_scale = forces_scale
 #        self.stress_scale = stress_scale
