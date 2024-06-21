@@ -45,8 +45,9 @@ class BatchNeighborList(nn.Module):
         for i, num_atoms in enumerate(data[properties.n_atoms]):
             atoms_dict = {
                 properties.R: data[properties.positions][num_offset[i]:num_offset[i]+num_atoms],
-                properties.cell: data[properties.cell][i*3: (i+1)*3],
             }
+            if properties.cell in data:
+                atoms_dict[properties.cell] = data[properties.cell][i*3: (i+1)*3]
             atoms_dict = self.torch_nl(atoms_dict)
             batch_pairs.append(atoms_dict[properties.edge_idx] + num_offset[i])
             batch_pair_diff.append(atoms_dict[properties.edge_diff])

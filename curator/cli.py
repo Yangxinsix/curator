@@ -397,6 +397,8 @@ def simulate(config: DictConfig):
     """
     import torch
     from .utils import load_models
+    from curator.model import EnsembleModel
+    from curator.simulate import MLCalculator
 
     # Load the arguments
     if config.cfg is not None:
@@ -420,35 +422,16 @@ def simulate(config: DictConfig):
     
     # Load model. Uses a compiled model, if any, otherwise a uncompiled model
     log.info("Using model from <{}>".format(config.model_path))
-    models = load_models(config.model_path, config.device)
+    model = load_models(config.model_path, config.device)
     
     # Set up calculator
-    if len(models) >1:
-        log.info("Ensemble calculator")
-        MLcalc = EnsembleCalculator(models,cutoff=cutoff)
-    elif len(models) == 1:
-        log.info("Single calculator")
-        MLcalc = MLCalculator(models[0],cutoff=cutoff)
-    else:
-        raise RuntimeError("No models found!")
-    # Setup the universal logger
-    PE = PrintEnergy(config.uncertainty,log)
+    if len(model) > 1:
+        model = EnsembleModel(model)
+    MLcalc = MLCalculator(model)
 
-    # Initiate simulators
-    if config.simulator.method == "md":
-        from curator.simulate.md import MD
-        simulator = MD(config.simulator,MLcalc,PE)
-    
-    elif config.simulator.method == "neb":
-        from curator.simulate.neb import NEB
-        simulator = NEB(config.simulator,MLcalc,PE)
-    
-    elif config.simulator.method == "md_meta":
-        from curator.simulate.md_meta import MD_meta
-        simualte = MD_meta(config.simulator,MLcalc,PE)
-    
-    else:
-        raise NotImplementedError(f"Simulator <{config.simulator.method}> not implemented yet!")
+    # Setup simulator
+    simulator = instantiate(config.simulator, calculator=MLcalc)
+    simulator.run()
     
 @hydra.main(config_path="configs", config_name="select", version_base=None)   
 def select(config: DictConfig):
