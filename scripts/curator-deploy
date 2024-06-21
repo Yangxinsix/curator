@@ -1,5 +1,15 @@
 #!/usr/bin/env python3
 import curator.cli as cli
+import sys
 
 if __name__ == "__main__":
-    cli.deploy()
+    num_args = len(sys.argv)
+
+    if num_args == 2:
+        cli.deploy(sys.argv[1])
+    elif num_args == 3:
+        cli.deploy(sys.argv[1], sys.argv[2])
+    elif num_args == 4:
+        cli.deploy(sys.argv[1], sys.argv[2], sys.argv[3])
+    else:
+        raise RuntimeError("Invalid number of arguments")

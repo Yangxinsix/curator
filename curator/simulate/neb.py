@@ -19,12 +19,12 @@ import toml
 import argparse
 import logging
 
-from curator.simulator.optimizer import get_optimizer
-from curator.simulator import NEB_control2, MDControl, NEB_control
+from curator.simulate.optimizer import get_optimizer
+from curator.simulate import NEB_control2, MDControl, NEB_control
 import ase
 from omegaconf import DictConfig
 from ase.calculators.calculator import Calculator
-from curator.simulator import PrintEnergy
+from curator.simulate import PrintEnergy
 from typing import Tuple 
 
 def load_images(img_IS: Path, img_FS: Path) -> Tuple(ase.Atom, ase.Atom):

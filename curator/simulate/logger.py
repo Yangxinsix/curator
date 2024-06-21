@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
-from ase import Atoms
-from typing import Optional
+from ase import Atoms, units
+from ase.io import Trajectory
+from typing import Optional, Union
 from .uncertainty import BaseUncertainty
 import logging
 
@@ -9,12 +10,27 @@ class BaseLogger(ABC):
     def __init__(self):
         pass
 
-    def attach(self, uncertainty: Optional[BaseUncertainty]=None):
+    def attach_uncertainty(self, uncertainty: Optional[BaseUncertainty]=None):
         self.uncertainty_calc = uncertainty
+        if self.uncertainty_calc is not None:
+            self.add_error_handler()
+
+    def add_error_handler(self, filename: str='warning.log'):
+        error_handler_exists = any(isinstance(handler, logging.FileHandler) and handler.baseFilename == filename 
+                                   for handler in self.logger.handlers)
+        if not error_handler_exists:
+            errorHandler = logging.FileHandler(filename, mode='w')
+            errorHandler.setLevel(logging.WARNING)
+            errorHandler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
+            self.logger.addHandler(errorHandler)
 
 class MDLogger(BaseLogger):
     # Logger for molecular dynamics simulations
-    def __init__(self, logger: Optional[logging.Logger]=None, uncertainty: Optional[BaseUncertainty]=None):
+    def __init__(
+            self, 
+            logger: Optional[logging.Logger]=None, 
+            uncertainty: Optional[BaseUncertainty]=None,
+        ):
         """ Class to setup uncertainty method and print physical quantities in a simualtion.
         
         Args:
@@ -23,16 +39,21 @@ class MDLogger(BaseLogger):
 
         """
         self.calls = 0
-        self.uncertain_calls = 0
 
         self.logger = logger if logger is not None else logging.getLogger(__name__)
-        self.uncertainty_calc = uncertainty
-        if self.uncertainty_calc is not None:
-            errorHandler = logging.FileHandler('warning.log', mode='w')
-            errorHandler.setLevel(logging.WARNING)
-            errorHandler.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
-            self.logger.addHandler(errorHandler)
-    
+        if uncertainty is not None:
+            self.attach_uncertainty(uncertainty)
+
+    def __call__(self, atoms: Atoms, print_step: int=1):
+        """ Method to log physical quantities of a simulation.
+        
+        Args:
+            atoms (ase.Atoms): Atoms object
+            print_step (int): print step
+
+        """
+        self.log(atoms, print_step)    
+
     def log(self, atoms: Atoms, print_step: int=1):
         """ Method to log physical quantities of a simulation.
         
@@ -61,8 +82,5 @@ class MDLogger(BaseLogger):
             check_uncertainty = self.uncertainty_calc.check()
             if check_uncertainty > 0:
                 self.logger.warning(string)
-                self.uncertain_calls += check_uncertainty
-                if check_uncertainty > 1:
-                    raise RuntimeError("Uncertainty is too high! Stopping simulation!")
             else:
                 self.logger.info(string)

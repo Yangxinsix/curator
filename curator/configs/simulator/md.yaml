@@ -1,13 +1,18 @@
-method: md
-init_traj: null
-start_index: 0
-rattle: null
+defaults:
+  - logger: md_logger
+  - dynamics: langevin
+  - uncertainty: ensemble
+
+_target_: curator.simulate.simulator.MDSimulator
+_partial_: true
+start_index: -1
+rattle: false
 fix_under: null
-friction: 0.003
-temperature: 300 #K
-time_step: 1.0 #fs
 print_step: 1
 dump_step: 100
-min_steps: 1000
-max_steps: 10000
-num_uncertain: 100
+max_steps: 1000
+initialize_velocities: true
+
+# MD related parameters
+temperature: 298.15
+timestep: 0.5

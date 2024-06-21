@@ -1,4 +1,4 @@
-_target_: curator.simulator.EnsembleUncertainty
-threshold_key: forces_sd
+_target_: curator.simulate.uncertainty.EnsembleUncertainty
+threshold_key: force_sd
 high_threshold: 0.5
 low_threshold: 0.05
