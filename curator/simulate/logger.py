@@ -67,7 +67,7 @@ class MDLogger(BaseLogger):
         ekin = atoms.get_kinetic_energy()
         temp = ekin / (1.5 * units.kB) / atoms.get_global_number_of_atoms()
 
-        string = "Steps={:10d} Epot={:12.3g} Ekin={:12.3g} temperature={:8.2g} ".format(
+        string = "Steps={:10d} Epot={:12.3f} Ekin={:12.3f} temperature={:8.2f} ".format(
             self.calls * print_step,
             epot,
             ekin,
@@ -84,3 +84,5 @@ class MDLogger(BaseLogger):
                 self.logger.warning(string)
             else:
                 self.logger.info(string)
+        else:
+            self.logger.info(string)

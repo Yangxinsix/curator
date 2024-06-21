@@ -3,6 +3,7 @@ from .nequip import NequipModel
 from .mace import MACE
 from .base import (
     NeuralNetworkPotential,
+    EnsembleModel,
     ModelOutput,
     LitNNP,
 )

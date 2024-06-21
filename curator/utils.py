@@ -11,10 +11,10 @@ from pathlib import Path
 from typing import Optional
 
 def register_resolvers():
-    OmegaConf.register_new_resolver("multiply", lambda x, y: x * y)
-    OmegaConf.register_new_resolver("divide", lambda x, y: x / y)
-    OmegaConf.register_new_resolver("multiply_fs", lambda x: x * units.fs)
-    OmegaConf.register_new_resolver("divide_by_fs", lambda x: x / units.fs)
+    OmegaConf.register_new_resolver("multiply", lambda x, y: x * y, replace=True)
+    OmegaConf.register_new_resolver("divide", lambda x, y: x / y, replace=True)
+    OmegaConf.register_new_resolver("multiply_fs", lambda x: x * units.fs, replace=True)
+    OmegaConf.register_new_resolver("divide_by_fs", lambda x: x / units.fs, replace=True)
 
 def load_model(model_file, device):
     if model_file.suffix == '.pt':
@@ -88,7 +88,7 @@ def get_all_pairs(d, keys=()):
         yield (keys, d)
 
 # Ugly workaround for specifying config files outside of the package
-def read_user_config(filepath: Optional[str]=None, config_path="configs", config_name="train.yaml"):    
+def read_user_config(filepath: Optional[str]=None, config_path="configs", config_name="train.yaml"):
     # get override list
     override_list = []
     if filepath is not None:
@@ -107,6 +107,14 @@ def read_user_config(filepath: Optional[str]=None, config_path="configs", config
                 value = 'null'
             override_list.append(f'++{key}={value}')
     
+    # command line overrides
+    try:
+        cli_overrides = hydra.core.hydra_config.HydraConfig.get().overrides.task
+    except:
+        cli_overrides = []
+    finally:
+        override_list.extend(cli_overrides)
+
     # reload hyperparameters         
     hydra.core.global_hydra.GlobalHydra.instance().clear()
     with initialize(version_base=None, config_path=config_path):

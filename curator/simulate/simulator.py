@@ -31,10 +31,11 @@ class MDSimulator(BaseSimulator):
     def __init__(
             self, 
             init_traj: str,
-            calculator, 
+            calculator,
             logger: BaseLogger,
             dynamics: MolecularDynamics,
             uncertainty: Optional[BaseUncertainty] = None,
+            md_traj: str = 'MD.traj',
             start_index: int = -1,
             rattle: bool = False,
             fix_under: Optional[float] = None,
@@ -48,6 +49,7 @@ class MDSimulator(BaseSimulator):
         ):
         # initialize parameters
         self.init_traj = init_traj
+        self.md_traj = md_traj
         self.start_index = start_index
         self.rattle = rattle
         self.fix_under = fix_under
@@ -61,8 +63,11 @@ class MDSimulator(BaseSimulator):
         self.calculator = calculator
         self.logger = logger.logger
         self.md_logger = logger
-        if self.md_logger.uncertainty_calc is None:
-            self.md_logger.uncertainty_calc = uncertainty
+        if uncertainty is not None:
+            if hasattr(self.md_logger, 'uncertainty_calc'):
+                self.logger.warning("Warning! Uncertainty calculator will be overrided.")
+            self.md_logger.attach_uncertainty(uncertainty)
+            
         self.dynamics = dynamics
         self.atoms = None
 
@@ -107,7 +112,7 @@ class MDSimulator(BaseSimulator):
         # set up MD dynamics
         self.dynamics = self.dynamics(self.atoms)
         self.dynamics.attach(self.run_md_step(), interval=self.print_step)
-        traj = Trajectory('MD.traj', 'w')
+        traj = Trajectory(self.md_traj, 'w', self.atoms)
         self.dynamics.attach(traj.write, interval=self.dump_step)
 
         # run MD
