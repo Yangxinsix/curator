@@ -24,7 +24,7 @@ class GradientOutput(torch.nn.Module):
         return self._compute_forces
 
     @compute_forces.setter
-    def compute_forces(self, value):
+    def compute_forces(self, value: bool):
         self._compute_forces = value
         self.update_model_outputs()
 
@@ -33,7 +33,7 @@ class GradientOutput(torch.nn.Module):
         return self._compute_stress
 
     @compute_stress.setter
-    def compute_stress(self, value):
+    def compute_stress(self, value: bool):
         self._compute_stress = value
         self.update_model_outputs()
 
@@ -102,7 +102,7 @@ class GradientOutput(torch.nn.Module):
                         atomic_stress = -i_stress + j_stress          
                         stress = torch.zeros_like(cell).index_add(0, image_idx, atomic_stress)
                         stress = stress / volumes[:, None, None] / 2
-                        data[properties.stress] = full_3x3_to_voigt_6_stress(stress)
+                        data[properties.stress] = stress
             
         elif self.grad_on_positions:
             energy = data[properties.energy]

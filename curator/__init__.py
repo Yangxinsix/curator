@@ -3,5 +3,5 @@ from curator import (
     layer,
     model,
     selection,
-    simulator,
+    simulate,
 )

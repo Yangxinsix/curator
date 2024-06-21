@@ -1,8 +1,8 @@
 import numpy as np
 import ase
+import sys
 from ase.calculators.calculator import Calculator
-from typing import Dict
-from typing import Optional
+from typing import Dict, Optional, Union
 from abc import ABC, abstractmethod
 from curator.data import properties
 
@@ -25,11 +25,20 @@ class EnsembleUncertainty(BaseUncertainty):
             high_threshold: float = 0.5, 
             low_threshold: float = 0.05,
             calculator: Optional[Calculator] = None,
+            save_uncertain_atoms: Optional[str] = 'warning_struct.traj',
+            max_uncertain_calls: int = sys.maxsize,
         ):
         self.threshold_key = threshold_key
         self.high_threshold = high_threshold
         self.low_threshold = low_threshold
         self.calc = calculator
+
+        # error control
+        self.uncertain_calls = 0
+        self.max_uncertain_calls = max_uncertain_calls
+        self.save_uncertain_atoms = save_uncertain_atoms
+        if self.save_uncertain_atoms is not None:
+            self.uncertain_traj = ase.io.Trajectory(self.save_uncertain_atoms, 'w')
 
     def __call__(self, atoms: ase.Atoms) -> Dict:
         return self.calculate(atoms)
@@ -40,6 +49,17 @@ class EnsembleUncertainty(BaseUncertainty):
         else:
             self.calc.calculate(atoms)
             self.uncertainty = self.calc.results[properties.uncertainty]
+        
+        check = self.check()
+        if check > 0:
+            self.uncertain_calls += 1
+            if self.save_uncertain_atoms is not None:
+                self.uncertain_traj.write(atoms)
+            
+            if check == 2:
+                raise RuntimeError(f"{self.threshold_key}: {self.uncertainty[self.threshold_key]} > {self.high_threshold}! Uncertainty is too high!")
+            if self.uncertain_calls > self.max_uncertain_calls:
+                raise ValueError('Max number {self.max_uncertain_calls} of uncertain structures collected. Exiting.')
         return self.uncertainty
 
     def check(self, low_threshold: Optional[float]=None, high_threshold: Optional[float]=None):

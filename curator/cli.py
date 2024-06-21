@@ -5,10 +5,11 @@ from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf, open_dict
 import sys, os, json
 from pathlib import Path
-from .utils import read_user_config, CustomFormatter
+from .utils import read_user_config, CustomFormatter, register_resolvers
 import logging
 import socket
 import contextlib
+from typing import Optional
 
 # very ugly solution for solving pytorch lighting and myqueue conflictions
 if "SLURM_NTASKS" in os.environ:
@@ -19,6 +20,9 @@ if "SLURM_JOB_NAME" in os.environ:
 # Set up logger for the different tasks 
 log = logging.getLogger('curator')
 log.setLevel(logging.DEBUG)
+
+# register omegaconf resolvers
+register_resolvers()
 
 # Trainining with Pytorch Lightning (only with weights and biasses)
 @hydra.main(config_path="configs", config_name="train", version_base=None)
@@ -342,8 +346,7 @@ def tmp_train(config: DictConfig):
         log.info(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
 
 # Deploy the model and save a compiled model
-@hydra.main(config_path="configs", config_name="train", version_base=None)   
-def deploy(config: DictConfig):
+def deploy(model_path: str, compiled_model_path: str = 'compiled_model.pt', cfg_path: Optional[str] = None):
     """ Deploy the model and save a compiled model.
 
     Args:
@@ -356,39 +359,31 @@ def deploy(config: DictConfig):
     from curator.model import LitNNP
     from e3nn.util.jit import script
 
-
-    # Load the arguments
-    if config.cfg is not None:
-        config = read_user_config(config.cfg, config_path="configs", config_name="train")
-
-    # Set up datamodule and load training and validation set
-    if not os.path.isfile(config.data.datapath):
-        raise RuntimeError("Please provide valid data path!")
-    datamodule = instantiate(config.data)
-    datamodule.setup()
-    
-    # Set up model, optimizer and scheduler
-    model = instantiate(config.model)
-    model.initialize_modules(datamodule)
-   
     # Load model
-    model_path = [str(f) for f in Path(f"{config.run_path}").rglob("best_model.pth*")]
-    val_loss = float('inf')
-    index = 0
-    for i, p in enumerate(model_path):
-        loss = float(p.split('=')[-1].rstrip('.ckpt'))
-        if loss < val_loss:
-            val_loss = loss
-            index = i
-    model_path = model_path[index]
-    loaded_model = torch.load(model_path, map_location=torch.device(config.device))
-    model.load_state_dict(loaded_model["model"])
+    loaded_model = torch.load(model_path)
+
+    if 'model' in loaded_model:
+        model = loaded_model['model']
+    else:
+        # Load the arguments
+        config = read_user_config(cfg_path, config_path="configs", config_name="train")
+
+        # Set up datamodule and load training and validation set
+        if not os.path.isfile(config.data.datapath):
+            raise RuntimeError("Please provide valid data path!")
+        datamodule = instantiate(config.data)
+        datamodule.setup()
+        
+        # Set up model, optimizer and scheduler
+        model = instantiate(config.model)
+        model.initialize_modules(datamodule)
+        model.load_state_dict(loaded_model["state_dict"])
 
     # Compile the model
     model_compiled = script(model)
     metadata = {"cutoff": str(model_compiled.representation.cutoff).encode("ascii")}
-    model_compiled.save(f"{config.run_path}/compiled_model.pt", _extra_files=metadata)
-    log.info(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
+    model_compiled.save(compiled_model_path, _extra_files=metadata)
+    log.info(f"Deploying compiled model at <{compiled_model_path}>")
 
 # Simulate with the model
 @hydra.main(config_path="configs", config_name="simulate", version_base=None)
@@ -401,8 +396,7 @@ def simulate(config: DictConfig):
         None
     """
     import torch
-    from curator.simulator.calculator import MLCalculator, EnsembleCalculator
-    from curator.simulator import PrintEnergy
+    from .utils import load_models
 
     # Load the arguments
     if config.cfg is not None:
@@ -425,48 +419,8 @@ def simulate(config: DictConfig):
         log.info("Seed randomly...")
     
     # Load model. Uses a compiled model, if any, otherwise a uncompiled model
-    if isinstance(config.model_path, list):
-        model_pt = []
-        for model_path in config.model_path:
-            if model_path.endswith('.pt') or model_path.endswith('.pth'):
-                model_pt.append(model_path)
-            else:
-                log.warning(f'Invalid model path is given: {model_path}! Trying to find models in the directory...')
-
-                model_pt += list(Path(model_path).rglob('*compiled_model.pt'))
-    elif isinstance(config.model_path, str):
-        if config.model_path.endswith('.pt') or config.model_path.endswith('.pth'):
-            model_pt = [config.model_path]
-        else:
-            log.warning(f'Invalid model path is given: {config.model_path}! Trying to find models in the directory...')
-            model_pt = list(Path(config.model_path).rglob('*best_model.pth'))
-
-    model_pt = Path(config.model_path).rglob('*compiled_model.pt')
-    models = [torch.jit.load(each, map_location=torch.device(config.device)) for each in model_pt]
-    
-    if len(models)==0:
-        model_pt = Path(config.model_path).rglob('*best_model.pth')
-        #models = [torch.load(each,map_location=torch.device(config.device)) for each in model_pt]
-        models = []
-        for each in model_pt:
-            model_dict = torch.load(each, map_location=torch.device(config.device))
-            datamodule = instantiate(model_dict['data_params'])
-            datamodule.setup()
-            model = instantiate(model_dict['model_params'])
-            model.initialize_modules(datamodule)
-            model.load_state_dict(model_dict['model'])
-            models.append(model)
-        
-        if len(models)==0:
-            raise RuntimeError("No compiled or not complied models found!")
-        else:
-            log.info("Uses not compiled model!")
-            #cutoff = float(models[0]['model']['cutoff'])
-            cutoff = float(model_dict['data_params']['cutoff'])
-    else:
-        log.info("Uses compiled model!")
-        cutoff = models[0].representation.cutoff
-    
+    log.info("Using model from <{}>".format(config.model_path))
+    models = load_models(config.model_path, config.device)
     
     # Set up calculator
     if len(models) >1:
@@ -482,15 +436,15 @@ def simulate(config: DictConfig):
 
     # Initiate simulators
     if config.simulator.method == "md":
-        from curator.simulator.md import MD
+        from curator.simulate.md import MD
         simulator = MD(config.simulator,MLcalc,PE)
     
     elif config.simulator.method == "neb":
-        from curator.simulator.neb import NEB
+        from curator.simulate.neb import NEB
         simulator = NEB(config.simulator,MLcalc,PE)
     
     elif config.simulator.method == "md_meta":
-        from curator.simulator.md_meta import MD_meta
+        from curator.simulate.md_meta import MD_meta
         simualte = MD_meta(config.simulator,MLcalc,PE)
     
     else:

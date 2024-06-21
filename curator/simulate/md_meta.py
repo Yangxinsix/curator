@@ -13,10 +13,10 @@ import argparse
 from pathlib import Path
 import logging
 from ase.constraints import FixAtoms
-from curator.simulator import MDControl
+from curator.simulate import MDControl
 from omegaconf import DictConfig
 from ase.calculators.calculator import Calculator
-from curator.simulator import PrintEnergy
+from curator.simulate import PrintEnergy
 
 def MD_meta(config: DictConfig, MLcalc: Calculator,PE: PrintEnergy) -> None:
     """ MD simulation with meta dynamics. Requires plumed installed.
