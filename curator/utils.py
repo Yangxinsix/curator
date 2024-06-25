@@ -7,8 +7,8 @@ from hydra.utils import instantiate
 from collections import abc
 import logging
 from ase import units
-from pathlib import Path
-from typing import Optional
+from pathlib import Path, PosixPath
+from typing import Optional, Union
 
 def register_resolvers():
     OmegaConf.register_new_resolver("multiply", lambda x, y: x * y, replace=True)
@@ -16,28 +16,31 @@ def register_resolvers():
     OmegaConf.register_new_resolver("multiply_fs", lambda x: x * units.fs, replace=True)
     OmegaConf.register_new_resolver("divide_by_fs", lambda x: x / units.fs, replace=True)
 
-def load_model(model_file, device):
-    if model_file.suffix == '.pt':
+def load_model(model_file, device, load_compiled: bool=True):
+    if model_file.suffix == '.pt' and load_compiled:
         model = torch.jit.load(model_file, map_location=torch.device(device))
     else:
         model_dict = torch.load(model_file, map_location=torch.device(device))
-        datamodule = instantiate(model_dict['data_params'])
-        datamodule.setup()
-        model = instantiate(model_dict['model_params'])
-        model.initialize_modules(datamodule)
-        model.load_state_dict(model_dict['model'])
+        if 'model' in model_dict:
+            model = model_dict['model']
+        else:
+            datamodule = instantiate(model_dict['data_params'])
+            datamodule.setup()
+            model = instantiate(model_dict['model_params'])
+            model.initialize_modules(datamodule)
+            model.load_state_dict(model_dict['model'])
     
     return model
 
-def load_models(model_paths, device):
+def load_models(model_paths, device, load_compiled: bool=True):
     if isinstance(model_paths, str):
         model_paths = [model_paths]
     
     models = []
     for model_path in model_paths:
         path = Path(model_path)
-        if path.is_file() and (path.suffix == '.pt' or path.suffix == '.pth'):
-            models.append(load_model(path, device))
+        if path.is_file() and (path.suffix == '.pt' or path.suffix == '.pth' or path.suffix == '.ckpt'):
+            models.append(load_model(path, device, load_compiled))
     
     return models
 
@@ -88,24 +91,28 @@ def get_all_pairs(d, keys=()):
         yield (keys, d)
 
 # Ugly workaround for specifying config files outside of the package
-def read_user_config(filepath: Optional[str]=None, config_path="configs", config_name="train.yaml"):
-    # get override list
+def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_path="configs", config_name="train.yaml"):
+    # load cfg
+    if isinstance(cfg, DictConfig):
+        user_cfg = cfg
+    elif isinstance(cfg, (PosixPath, str)):
+        user_cfg = OmegaConf.load(cfg)
+    else:
+        user_cfg = OmegaConf.create()
+
     override_list = []
-    if filepath is not None:
-        # load user defined config file
-        user_cfg = OmegaConf.load(filepath)
-        if "defaults" in user_cfg:
-            default_list = user_cfg.pop("defaults")
-            for d in default_list:
-                for k, v in d.items():
-                    override_list.append(f"{k}={v}")
-        
-        for k, v in get_all_pairs(user_cfg):
-            key = ".".join(k)
-            value = str(v).replace("'", "")
-            if value == 'None':
-                value = 'null'
-            override_list.append(f'++{key}={value}')
+    if "defaults" in user_cfg:
+        default_list = user_cfg.pop("defaults")
+        for d in default_list:
+            for k, v in d.items():
+                override_list.append(f"{k}={v}")
+    
+    for k, v in get_all_pairs(user_cfg):
+        key = ".".join(k)
+        value = str(v).replace("'", "")
+        if value == 'None':
+            value = 'null'
+        override_list.append(f'++{key}={value}')
     
     # command line overrides
     try:

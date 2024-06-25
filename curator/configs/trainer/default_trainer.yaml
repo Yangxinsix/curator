@@ -1,3 +1,6 @@
+defaults:
+  - logger: csv
+
 _target_: pytorch_lightning.Trainer
 
 devices: 1
@@ -46,8 +49,3 @@ callbacks:
   - _target_: curator.train.ExponentialMovingAverage
     decay: 0.995
     use_num_updates: true
-
-logger:
-  _target_: pytorch_lightning.loggers.WandbLogger
-  save_dir: ${run_path}/logs
-  name: curator-train-${oc.env:PWD}

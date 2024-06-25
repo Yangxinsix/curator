@@ -1,5 +1,8 @@
 _target_: curator.data.AtomsDataModule
-datapath: ${datapath}
+datapath: null
+train_path: null
+val_path: null
+test_path: null
 batch_size: 8
 compute_neighbor_list: False
 cutoff: 5.0

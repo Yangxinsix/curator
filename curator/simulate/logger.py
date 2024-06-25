@@ -77,7 +77,7 @@ class MDLogger(BaseLogger):
         if self.uncertainty_calc is not None:
             uncertainty = self.uncertainty_calc(atoms)
             for key, value in uncertainty.items():
-                string += f"{key}={value:12.3g} "
+                string += f"{key}={value:12.3f} "
             # check uncertainty
             check_uncertainty = self.uncertainty_calc.check()
             if check_uncertainty > 0:

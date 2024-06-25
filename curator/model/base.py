@@ -99,9 +99,9 @@ class EnsembleModel(nn.Module):
 
         if self.compute_uncertainty:
             uncertainty = {
-                properties.e_var: torch.var(energy, dim=0),
                 properties.e_max: torch.max(energy).unsqueeze(-1),
                 properties.e_min: torch.min(energy).unsqueeze(-1),
+                properties.e_var: torch.var(energy, dim=0),
                 properties.e_sd: torch.std(energy, dim=0),
                 properties.f_var: f_scatter.index_add(0, data[properties.image_idx], torch.var(forces, dim=0).mean(dim=1)) / data[properties.n_atoms],
             }
@@ -125,6 +125,9 @@ class EnsembleModel(nn.Module):
             result_dict[properties.error] = error
 
         return result_dict
+
+class DropoutModel(nn.Module):
+    pass
 
 class ModelOutput(nn.Module):
     """ Base class for model outputs."""

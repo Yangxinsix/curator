@@ -2,6 +2,7 @@ from curator import (
     data,
     layer,
     model,
-    selection,
+    select,
     simulate,
+    label,
 )
