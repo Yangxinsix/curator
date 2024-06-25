@@ -6,6 +6,9 @@ from curator.data import collate_atomsdata
 from .select import *
 from .kernel import *
 from curator.data import properties
+import logging
+
+logger = logging.getLogger(__name__)
 
 class FeatureExtractor(nn.Module):
     """Extract features from neural networks"""
@@ -68,59 +71,46 @@ class FeatureStatistics:
         self,
         models: List[nn.Module],
         dataset: torch.utils.data.Dataset,
-        random_projections: List[RandomProjections],
+        n_random_features: int=500,
+        random_projections: Optional[List[RandomProjections]] = None,
         batch_size: int=8,
+        device: Optional[str]=None,
+        debug: bool=False,
     ):
         self.models = models
         self.batch_size = batch_size
         self.dataset = dataset
-        self.random_projections = random_projections
-        self.device = next(models[0].parameters()).device
+        if random_projections is None:
+            self.random_projections = [RandomProjections(model, n_random_features) for model in self.models]
+        else:
+            self.random_projections = random_projections
+        self.device = device or next(models[0].parameters()).device
         self.g = None
         self.ens_stats = None
         self.Fisher = None
         self.F_reg_inv = None
+        self.debug = debug
+
+        self.ensemble = None
     
-    def _compute_ens_stats(self, model_inputs: Dict[str, torch.Tensor], labeled_data: bool=False) -> Dict[str, torch.Tensor]:
+    def _compute_ens_stats(self, model_inputs: Dict[str, torch.Tensor], method: str = "ensemble") -> Dict[str, torch.Tensor]:
         """Compute energy variance, forces variance, energy absolute error, and forces absolute error"""
-        ens_stats = defaultdict(list)
-        predictions = defaultdict(list)
-        for model in self.models:
-            model_results = model(model_inputs)
-            predictions['energy'].append(model_results["energy"].detach())
-            predictions['forces'].append(model_results["forces"].detach())
-        
-        predictions = {k: torch.stack(v) for k, v in predictions.items()}
-        
-        image_idx = torch.arange(
-            model_inputs[properties.n_atoms].shape[0],
-            device=model_inputs[properties.n_atoms].device,                                   
-        )
-        image_idx = torch.repeat_interleave(image_idx, model_inputs[properties.n_atoms])
-
-        if len(self.models) > 1:
-            E_var = torch.var(predictions['energy'], dim=0)
-            F_var_pera = torch.var(predictions['forces'], dim=0)
-            F_var = torch.zeros((model_inputs[properties.n_atoms].shape[0],), device=model_inputs[properties.n_atoms].device) 
-            F_var = F_var.index_add(0, image_idx, F_var_pera) / model_inputs[properties.n_atoms]
-            ens_stats['Energy-Var'] = E_var
-            ens_stats['Forces-Var'] = F_var
-
-        if labeled_data:
-            E_AE = torch.abs(model_inputs['energy'] - torch.mean(predictions['energy'], dim=0))
-            F_AE_pera = torch.abs(model_inputs['forces'] - torch.mean(predictions['forces'], dim=0))
-            F_AE = torch.zeros((model_inputs[properties.n_atoms].shape[0],), device=model_inputs[properties.n_atoms].device) 
-            F_AE = F_AE.index_add(0, image_idx, F_AE_pera) / model_inputs[properties.n_atoms]
-            
-            ens_stats['Energy-AE'] = E_AE
-            ens_stats['Forces-AE'] = F_AE
+        ens_stats = {}
+        if method == "ensemble":
+            result_dict = self.ensemble(model_inputs)
+            if properties.uncertainty in result_dict:
+                for k, v in result_dict[properties.uncertainty].items():
+                    ens_stats[k] = v
+            if properties.error in result_dict:
+                for k, v in result_dict[properties.error].items():
+                    ens_stats[k] = v
         
         return ens_stats
                 
     def _compute_features(
         self, 
         feature_extractor: FeatureExtractor, 
-        model_inputs: torch.tensor,
+        model_inputs: Dict[str, torch.Tensor],
         random_projection: RandomProjections,
         kernel: str='ll-gradient',
         to_cpu: bool=True,
@@ -236,17 +226,19 @@ class FeatureStatistics:
             self.g = None
 
         if self.g == None:
-            dataloader = torch.utils.data.DataLoader(
-                dataset=dataset,
-                batch_size=self.batch_size,
-                collate_fn=collate_atomsdata,
-            )
+            # dataloader = torch.utils.data.DataLoader(
+            #     dataset=dataset,
+            #     batch_size=self.batch_size,
+            #     collate_fn=collate_atomsdata,
+            # )
             global_g = []
             for i, model in enumerate(self.models):
                 feat_extract = FeatureExtractor(model)
                 model_g = []
-                for batch in dataloader:
+                for b, batch in enumerate(dataset):
                     batch = {k: v.to(self.device) for k, v in batch.items()}
+                    if self.debug:
+                        logger.info(f"Predicting {b}th sample for {i}th model.")
                     model_g.append(self._compute_features(
                         feat_extract, 
                         batch, 
@@ -274,18 +266,18 @@ class FeatureStatistics:
         else:
             self.dataset = dataset
         num_atoms = []
-        dataloader = torch.utils.data.DataLoader(
-            dataset=dataset,
-            batch_size=self.batch_size,
-            collate_fn=collate_atomsdata,
-        )
-        for batch in dataloader:
+        # dataloader = torch.utils.data.DataLoader(
+        #     dataset=dataset,
+        #     batch_size=self.batch_size,
+        #     collate_fn=collate_atomsdata,
+        # )
+        for batch in dataset:
             batch = {k: v.to(self.device) for k, v in batch.items()}
             num_atoms.append(batch[properties.n_atoms])
         
         return torch.cat(num_atoms)
             
-    def get_ens_stats(self, dataset: Optional[torch.utils.data.Dataset]=None) -> Dict[str, torch.Tensor]:
+    def get_ens_stats(self, dataset: Optional[torch.utils.data.Dataset]=None, method="ensemble") -> Dict[str, torch.Tensor]:
         """
         :return: Dict of energy statistics
         """
@@ -295,17 +287,26 @@ class FeatureStatistics:
             self.dataset = dataset
             self.ens_stats = None
             
-        if self.ens_stats == None:
-            dataloader = torch.utils.data.DataLoader(
-                dataset=dataset,
-                batch_size=self.batch_size,
-                collate_fn=collate_atomsdata,
-            )
+        if self.ens_stats is None:
+            if method == "ensemble":
+                from curator.model import EnsembleModel
+                if self.ensemble is None:
+                    self.ensemble = EnsembleModel(self.models)
+            else:
+                raise NotImplementedError(f"Method {method} is not implemented.")
+
+            # dataloader = torch.utils.data.DataLoader(
+            #     dataset=dataset,
+            #     batch_size=self.batch_size,
+            #     collate_fn=collate_atomsdata,
+            # )
+            # Simply using dataset is faster?
             ens_stats = []
-            for batch in dataloader:
+            for i, batch in enumerate(dataset):
+                if self.debug:
+                    logger.info(f"Predicting {i}th sample.")
                 batch = {k: v.to(self.device) for k, v in batch.items()}
-                labeled_data = True if 'energy' in batch.keys() else False
-                ens_stats.append(self._compute_ens_stats(batch, labeled_data))
+                ens_stats.append(self._compute_ens_stats(batch, method))
 
             self.ens_stats = {k: torch.cat([ens[k] for ens in ens_stats]) for k in ens_stats[0].keys()}
             
@@ -365,10 +366,9 @@ class GeneralActiveLearning:
             self.kernel == 'ae-force' or self.kernel == 'random') and self.selection != 'max_diag':
             raise RuntimeError(f'{self.kernel} kernel can only be used with max_diag selection method,'
                                f' not with {self.selection}!')
-        random_projections = [RandomProjections(model, self.n_random_features) for model in models]
         
         stats = {
-            key: FeatureStatistics(models, ds, random_projections, batch_size)
+            key: FeatureStatistics(models, ds, self.n_random_features, batch_size=batch_size)
             for key, ds in datasets.items()
         }
         
@@ -395,7 +395,6 @@ class GeneralActiveLearning:
             
         return idxs.cpu().tolist()
 
-    
     def _get_kernel_matrix(self, pool_stats: FeatureStatistics, train_stats: Optional[FeatureStatistics]=None) -> KernelMatrix:
         stats_list = [pool_stats] if train_stats == None else [pool_stats, train_stats]
         

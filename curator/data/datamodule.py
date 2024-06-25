@@ -18,9 +18,9 @@ class AtomsDataModule(pl.LightningDataModule):
         self,
         batch_size: int,
         datapath: Union[List[str], str, None] = None,
-        train_datapath: Union[List[str], str, None] = None,
-        val_datapath: Union[List[str], str, None] = None,
-        test_datapath: Union[List[str], str, None] = None,
+        train_path: Union[List[str], str, None] = None,
+        val_path: Union[List[str], str, None] = None,
+        test_path: Union[List[str], str, None] = None,
         cutoff: Optional[float] = None,
         compute_neighbor_list: bool = True,
         val_batch_size: Optional[int] = None,
@@ -46,9 +46,9 @@ class AtomsDataModule(pl.LightningDataModule):
         super().__init__()
         
         self.datapath = datapath
-        self.train_datapath = train_datapath
-        self.val_datapath = val_datapath
-        self.test_datapath = test_datapath
+        self.train_path = train_path
+        self.val_path = val_path
+        self.test_path = test_path
         self.transforms = transforms
         self.cutoff = cutoff
         self.compute_neighbor_list = compute_neighbor_list
@@ -97,26 +97,26 @@ class AtomsDataModule(pl.LightningDataModule):
         if self._train_dataset is None:
             # differentiate datasets
             # if separate data files are provided
-            if self.train_datapath is not None:
-                assert self.datapath is None, "Datapath should be None if train_datapath is provided."
+            if self.train_path is not None:
+                assert self.datapath is None, "Datapath should be None if train_path is provided."
                 self._train_dataset = AseDataset(
-                    self.train_datapath,
+                    self.train_path,
                     cutoff=self.cutoff,
                     compute_neighbor_list = self.compute_neighbor_list, 
                     transforms = self.transforms,
                 )
                 self.num_train = len(self._train_dataset)
-            if self.val_datapath is not None:
+            if self.val_path is not None:
                 self._val_dataset = AseDataset(
-                    self.val_datapath,
+                    self.val_path,
                     cutoff=self.cutoff,
                     compute_neighbor_list = self.compute_neighbor_list, 
                     transforms = self.transforms,
                 )
                 self.num_val = len(self._val_dataset)
-            if self.test_datapath is not None:
+            if self.test_path is not None:
                 self._test_dataset = AseDataset(
-                    self.test_datapath,
+                    self.test_path,
                     cutoff=self.cutoff,
                     compute_neighbor_list = self.compute_neighbor_list, 
                     transforms = self.transforms,

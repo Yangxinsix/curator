@@ -1,0 +1,5 @@
+# @package _global_
+annotator:
+  inspector:
+    _target_: curator.label.inspector.VASPInspector
+    nelm: ${annotator.calculator.nelm}

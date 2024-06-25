@@ -63,8 +63,8 @@ def train(config: DictConfig) -> None:
         log.debug("Seed randomly...")
     
     # Initiate the datamodule
-    log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_datapath}")
-    if not os.path.isfile(config.data.datapath or config.data.train_datapath):
+    log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_path}")
+    if not os.path.isfile(config.data.datapath or config.data.train_path):
         raise RuntimeError("Please provide valid data path!")
     datamodule: LightningDataModule = hydra.utils.instantiate(config.data)
     
@@ -395,7 +395,6 @@ def simulate(config: DictConfig):
     Returns:
         None
     """
-    import torch
     from .utils import load_models
     from curator.model import EnsembleModel
     from curator.simulate import MLCalculator
@@ -425,8 +424,7 @@ def simulate(config: DictConfig):
     model = load_models(config.model_path, config.device)
     
     # Set up calculator
-    if len(model) > 1:
-        model = EnsembleModel(model)
+    model = EnsembleModel(model) if len(model) > 1 else model[0]
     MLcalc = MLCalculator(model)
 
     # Setup simulator
@@ -442,16 +440,26 @@ def select(config: DictConfig):
     Returns:
         None
     """
+    from curator.data import read_trajectory
     import torch
     from ase.io import read
-    from curator.selection import GeneralActiveLearning
+    from curator.select import GeneralActiveLearning
     import json
     from curator.data import AseDataset
+    from .utils import load_models
 
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="select")
     
+    # set up logger
+    # set logger
+    fh = logging.FileHandler(os.path.join(config.run_path, "selection.log"), mode="w")
+    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
+    fh.setLevel(logging.DEBUG)
+    log.addHandler(fh)
+    log.info("Running on host: " + str(socket.gethostname()))
+
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
     log.info("Running on host: " + str(socket.gethostname()))
@@ -461,50 +469,36 @@ def select(config: DictConfig):
         log.info(f"Seed with <{config.seed}>")
     else:
         log.info("Seed randomly...")
-
-    # Load the arguments
-    if config.cfg is not None:
-        config = read_user_config(config.cfg, config_path="configs", config_name="select")
     
     # Set up datamodule and load training and validation set
     # The active learning only works for uncompiled model at the moment
-    model_pt = list(Path(config.model_path).rglob('*best_model.pth'))
-    models = []
-    for each in model_pt:
-        model_dict = torch.load(each, map_location=torch.device(config.device))
-        datamodule = instantiate(model_dict['data_params'])
-        datamodule.setup()
-        model = instantiate(model_dict['model_params'])
-        model.initialize_modules(datamodule)
-        model.load_state_dict(model_dict['model'])
-        models.append(model)
-
+    log.info("Using model from <{}>".format(config.model_path))
+    models = load_models(config.model_path, config.device, load_compiled=False)
     cutoff = models[0].representation.cutoff
 
     # Load the pool data set and training data set
-    if config.pool_set and config.train_set:
-        if isinstance(config.pool_set, list):
-            pool_set = []
-            for traj in config.pool_set:
-                if Path(traj).stat().st_size > 0:
-                    pool_set += read(traj, index=':') 
-        else:
-            pool_set = read(config.pool_set, index=':')
+    if config.dataset and config.split_file:
+        dataset = AseDataset(read_trajectory(config.dataset), cutoff=cutoff)
+        with open(config.split_file) as f:
+            split = json.load(f)
+        data_dict = {}
+        for k in split:
+            data_dict[k] = torch.utils.data.Subset(dataset, split[k])
+    elif config.pool_set:
+        data_dict = {'pool': AseDataset(read_trajectory(config.pool_set), cutoff=cutoff)}
+        if config.train_set:
+            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff)
     else:
         raise RuntimeError("Please give valid pool data set for selection!")
-    
-    data_dict = {
-            'pool': AseDataset(pool_set, cutoff=cutoff),
-            'train': AseDataset(config.train_set, cutoff=cutoff),
-        }
-    
+
+
     # Check the size of pool data set
     if len(data_dict['pool']) < config.batch_size * 10: 
-            log.warning(f"""The pool data set ({len(data_dict['pool'])}) is not large enough for selection!
-            It should be larger than 10 times batch size ({config.batch_size*10}).
-            Check your MD simulation!""")
+            log.warning(f"The pool data set ({len(data_dict['pool'])}) is not large enough for selection! " 
+                + f"It should be larger than 10 times batch size ({config.batch_size*10}). "
+                + "Check your simulation!")
     elif len(data_dict['pool']) < config.batch_size:
-        raise RuntimeError(f"""The pool data set ({len(data_dict['pool'])}) is not large enough for selection! Add more data or change batch size {config.selection.batch_size}.""")
+        raise RuntimeError(f"""The pool data set ({len(data_dict['pool'])}) is not large enough for selection! Add more data or change batch size {config.batch_size}.""")
 
     # Select structures based on the active learning method
     al = GeneralActiveLearning(
@@ -518,11 +512,13 @@ def select(config: DictConfig):
     al_info = {
         'kernel': config.kernel,
         'selection': config.method,
-        'dataset': config.pool_set,
+        'dataset': config.dataset if config.dataset and config.split_file else config.pool_set,
         'selected': indices,
     }
     with open(config.run_path+'/selected.json', 'w') as f:
         json.dump(al_info, f)
+    
+    log.info(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for selected structures!")
 
 # Label the dataset selected by active learning
 @hydra.main(config_path="configs", config_name="label", version_base=None)   
@@ -534,14 +530,23 @@ def label(config: DictConfig):
     Returns:
         None
     """
+    from curator.data import read_trajectory
     from ase.db import connect
-    from ase.io import read, Trajectory
+    from ase.io import Trajectory
     import json
     import numpy as np
+    from curator.select import AtomsAnnotator
 
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="label")
+
+    # set up logger
+    # set logger
+    fh = logging.FileHandler(os.path.join(config.run_path, "labelling.log"), mode="w")
+    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
+    fh.setLevel(logging.DEBUG)
+    log.addHandler(fh)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
@@ -553,16 +558,10 @@ def label(config: DictConfig):
     
     # get images and set parameters
     if config.label_set:
-        images = read(config.label_set, index = ':')
+        images = read_trajectory(config.label_set)
+        log.info(f"Labeling the structures in {config.label_set}")
     elif config.pool_set:
-        if isinstance(config.pool_set, list):
-            pool_traj = []
-            for pool_path  in config.pool_set:
-                if Path(pool_path).stat().st_size > 0:
-                    pool_traj += read(pool_path, ':')
-        else:
-            pool_traj = Trajectory(config.pool_set)
-    
+        pool_traj = read_trajectory(config.pool_set)
         # Use active learning indices if provided
         if config.al_info:
             with open(config.al_info) as f:
@@ -575,30 +574,25 @@ def label(config: DictConfig):
         if db_al_ind:
             _,rm,_ = np.intersect1d(indices, db_al_ind,return_indices=True)
             indices = np.delete(indices,rm)
-        images = [pool_traj[i] for i in indices]      
+        images = [pool_traj[i] for i in indices]
+        log.info(f"Labeling {len(images)} structures in pool set: {config.pool_set}")    
     else:
         raise RuntimeError('Valid configarations for DFT calculation should be provided!')
     
     # Set up calculator
-    if config.labeling_method.method == 'vasp':
-        from curator.labeling.vasp import VASP
-        label = VASP(config.labeling_method.parameters)
-    elif config.labeling_method.method== 'gpaw':
-        from curator.labeling.gpaw import GPAW
-        label = GPAW(config.labeling_method.parameters)
-    elif config.user_method:
-        raise NotImplementedError('User defined method is not implemented yet!')
+    annotator = instantiate(config.annotator)
     
     # Label the structures
     for i, atoms in enumerate(images):
         # Label the structure with the choosen method
-        check_result = label.label(atoms)
+        converged = annotator.annotate(atoms)
         # Save the labeled structure with the index it comes from.
         al_ind = indices[i]
-        db.write(atoms, al_ind=al_ind, converged=check_result)
+        db.write(atoms, al_ind=al_ind, converged=converged)
     
+    # write to datapath
     if config.datapath is not None:
+        log.info(f"Write atoms to {config.datapath}") 
         total_dataset = Trajectory(config.datapath, 'a')
-        atoms = []
         for row in db.select([('converged','=','True')]):
             total_dataset.write(row.toatoms())
