@@ -1,6 +1,6 @@
 import torch
 from e3nn.util.jit import script
-from omegaconf import open_dict, OmegaConf, DictConfig
+from omegaconf import open_dict, OmegaConf, DictConfig, ListConfig
 from hydra import compose, initialize
 import hydra
 from hydra.utils import instantiate
@@ -43,6 +43,17 @@ def load_models(model_paths, device, load_compiled: bool=True):
             models.append(load_model(path, device, load_compiled))
     
     return models
+
+def find_best_model(run_path):
+    model_path = [f for f in Path(run_path).rglob("best_model*.ckpt")]
+    val_loss = float('inf')
+    index = 0
+    for i, p in enumerate(model_path):
+        loss = float(p.split('=')[-1].rstrip('.ckpt'))
+        if loss < val_loss:
+            val_loss = loss
+            index = i
+    return model_path[index], val_loss
 
 class CustomFormatter(logging.Formatter):
     format = "%(asctime)s: %(message)s"
@@ -109,7 +120,8 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     
     for k, v in get_all_pairs(user_cfg):
         key = ".".join(k)
-        value = str(v).replace("'", "")
+        # process value
+        value = str(escape_all(v)).replace("'", "")
         if value == 'None':
             value = 'null'
         override_list.append(f'++{key}={value}')
@@ -131,3 +143,21 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     OmegaConf.set_struct(cfg, False)
         
     return cfg
+
+def escape_special_characters(value: str) -> str:
+    special_characters = r"\()[]{}:=,"
+    for char in special_characters:
+        if char in value:
+            value = f'"{value}"'
+            break
+    return value
+
+def escape_all(data):
+    if isinstance(data, str):
+        return escape_special_characters(data)
+    elif isinstance(data, (dict, DictConfig)):
+        return {k: escape_all(v) for k, v in data.items()}
+    elif isinstance(data, (list, ListConfig)):
+        return [escape_all(item) for item in data]
+    else:
+        return data

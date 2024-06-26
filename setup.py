@@ -18,7 +18,7 @@ setup(
         "scripts/curator-workflow",
     ],
     install_requires=[
-        'myqueue==22.7.1',
+        'myqueue',
         'torch>=1.10',
         'ase',
         'asap3',
