@@ -5,7 +5,7 @@ defaults:
 
 _target_: curator.simulate.simulator.MDSimulator
 init_traj: null                        # must be specified
-md_traj: ${run_path}/MD.traj
+out_traj: ${run_path}/MD.traj
 start_index: -1
 rattle: false
 fix_under: null

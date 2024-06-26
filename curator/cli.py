@@ -5,7 +5,12 @@ from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf, open_dict
 import sys, os, json
 from pathlib import Path
-from .utils import read_user_config, CustomFormatter, register_resolvers
+from .utils import (
+    read_user_config, 
+    CustomFormatter, 
+    register_resolvers,
+    find_best_model,
+)
 import logging
 import socket
 import contextlib
@@ -64,8 +69,6 @@ def train(config: DictConfig) -> None:
     
     # Initiate the datamodule
     log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_path}")
-    if not os.path.isfile(config.data.datapath or config.data.train_path):
-        raise RuntimeError("Please provide valid data path!")
     datamodule: LightningDataModule = hydra.utils.instantiate(config.data)
     
     # Initiate the model
@@ -100,16 +103,8 @@ def train(config: DictConfig) -> None:
     # Deploy model to a compiled model
     if config.deploy_model:
         # Load the model
-        model_path = [str(f) for f in Path(f"{config.run_path}").rglob("best_model_epoch*")]
-        val_loss = float('inf')
-        index = 0
-        for i, p in enumerate(model_path):
-            loss = float(p.split('=')[-1].rstrip('.ckpt'))
-            if loss < val_loss:
-                val_loss = loss
-                index = i
-        model_path = model_path[index]
-          
+        model_path, val_loss = find_best_model(run_path=config.run_path)
+        
         # Compile the model
         outputs = torch.load(model_path)['outputs']
         log.debug(f"Deploy trained model from {model_path} with validation loss of {val_loss:.3f}")

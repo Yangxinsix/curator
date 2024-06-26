@@ -124,7 +124,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 self.num_test = len(self._test_dataset)
                 
             if self.datapath is not None:
-                if self.datapath.endswith('npz'):
+                if isinstance(self.datapath, str) and self.datapath.endswith('npz'):
                     self.dataset = NumpyDataset(
                         self.datapath, 
                         cutoff=self.cutoff,

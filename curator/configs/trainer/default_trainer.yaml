@@ -38,7 +38,7 @@ callbacks:
     dirpath: ${run_path}/model_path
     save_top_k: 1
     monitor: val_total_loss
-    filename: best_model_{epoch}-{step}-{val_total_loss:.2f}
+    filename: best_model_{epoch}_{step}_{val_total_loss:.2f}
   - _target_: pytorch_lightning.callbacks.EarlyStopping
     monitor: val_total_loss
     min_delta: 0.0
