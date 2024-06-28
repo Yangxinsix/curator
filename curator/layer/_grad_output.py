@@ -1,5 +1,5 @@
 import torch
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Callable
 from curator.data import properties
 from ase.stress import full_3x3_to_voigt_6_stress
         
@@ -10,12 +10,14 @@ class GradientOutput(torch.nn.Module):
         grad_on_positions: bool = False,
         compute_forces: bool = True,
         compute_stress: bool = False,
+        update_callback: Optional[Callable] = None,  # Add a callback parameter
     ) -> None:
         super().__init__()
         self.grad_on_edge_diff = grad_on_edge_diff
         self.grad_on_positions = grad_on_positions
         self._compute_forces = compute_forces
         self._compute_stress = compute_stress
+        self.update_callback = update_callback
         self.model_outputs = []
         self.update_model_outputs()
     
@@ -27,6 +29,8 @@ class GradientOutput(torch.nn.Module):
     def compute_forces(self, value: bool):
         self._compute_forces = value
         self.update_model_outputs()
+        if self.update_callback:
+            self.update_callback()
 
     @property
     def compute_stress(self):
@@ -36,6 +40,8 @@ class GradientOutput(torch.nn.Module):
     def compute_stress(self, value: bool):
         self._compute_stress = value
         self.update_model_outputs()
+        if self.update_callback:
+            self.update_callback()
 
     def update_model_outputs(self):
         if self._compute_forces:
@@ -89,19 +95,20 @@ class GradientOutput(torch.nn.Module):
                 if self.compute_stress:
                     if properties.cell in data:
                         image_idx = data[properties.image_idx]
-                        atomic_stress = torch.einsum("ij, ik -> ijk", edge_diff, dE_ddiff)           # I'm quite not sure if a negative sign should be added before dE_ddiff, but I think it should be right
+                        atomic_virial = torch.einsum("ij, ik -> ijk", edge_diff, dE_ddiff)           # I'm quite not sure if a negative sign should be added before dE_ddiff, but I think it should be right
                         cell = data[properties.cell].view(-1, 3, 3)
                         volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1)
-                        i_stress = torch.zeros(
+                        # stress = torch.zeros_like(cell).index_add(0, , atomic_stress)
+                        atomic_virial = torch.zeros(
                             (forces_dim, 3, 3),                                         
                             dtype=forces.dtype,
                             # it seens like the calculation is not very right... because f_ij is not absolutely right here. Maybe we need to do something like in force calculation
                             # add i_stress and j_stress together then it is the total stress. need verification
-                            device=forces.device).index_add(0, edge_idx[:, 0], atomic_stress)
-                        j_stress = torch.zeros_like(i_stress).index_add(0, edge_idx[:, 1], atomic_stress)
-                        atomic_stress = -i_stress + j_stress          
-                        stress = torch.zeros_like(cell).index_add(0, image_idx, atomic_stress)
-                        stress = stress / volumes[:, None, None] / 2
+                            device=forces.device).index_add(0, edge_idx[:, 0], atomic_virial)
+                        # j_stress = torch.zeros_like(i_stress).index_add(0, edge_idx[:, 1], -atomic_stress)
+                        # atomic_stress = i_stress + j_stress          
+                        virial = torch.zeros_like(cell).index_add(0, image_idx, atomic_virial)  # don't need to divide by two
+                        stress = - virial / volumes[:, None, None]
                         data[properties.stress] = stress
             
         elif self.grad_on_positions:

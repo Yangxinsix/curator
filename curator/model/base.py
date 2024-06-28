@@ -38,6 +38,10 @@ class NeuralNetworkPotential(nn.Module):
         self.model_outputs: Optional[List[str]] = None
         self._initialized: bool = False
         self.collect_outputs()
+
+        for module in self.output_modules:
+            if hasattr(module, 'update_callback'):
+                module.update_callback = self.collect_outputs
         
     def forward(self, data: properties.Type) -> properties.Type:
         data = data.copy()
@@ -70,6 +74,10 @@ class NeuralNetworkPotential(nn.Module):
     def extract_outputs(self, data: properties.Type) -> properties.Type:
         results = {k: data[k] for k in self.model_outputs}
         return results
+    
+    # used to update model outputs
+    def register_callbacks(self, module: nn.Module) -> None:
+        module.update_callback = self.collect_outputs
 
 class EnsembleModel(nn.Module):
     """
