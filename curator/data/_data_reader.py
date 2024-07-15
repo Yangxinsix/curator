@@ -128,8 +128,8 @@ class AseDataReader(DataReader):
         positions = atoms.get_positions()
         
         atoms_data = {
-            properties.n_atoms: torch.tensor([n_atoms]),
-            properties.Z: torch.tensor(atomic_numbers),
+            properties.n_atoms: torch.tensor([n_atoms], dtype=torch.long),
+            properties.Z: torch.tensor(atomic_numbers, dtype=torch.long),
             properties.positions: torch.tensor(positions, dtype=self.default_dtype),
             properties.image_idx: torch.zeros((n_atoms,), dtype=torch.long),                 # used for scatter add
         }

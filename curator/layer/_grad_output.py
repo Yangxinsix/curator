@@ -109,6 +109,7 @@ class GradientOutput(torch.nn.Module):
                         # atomic_stress = i_stress + j_stress          
                         virial = torch.zeros_like(cell).index_add(0, image_idx, atomic_virial)  # don't need to divide by two
                         stress = - virial / volumes[:, None, None]
+                        data[properties.virial] = virial
                         data[properties.stress] = stress
             
         elif self.grad_on_positions:
