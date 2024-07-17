@@ -8,12 +8,12 @@ References:
 
 #ifdef PAIR_CLASS
 
-PairStyle(painn,PairPAINN)
+PairStyle(painn,PairCURATOR)
 
 #else
 
-#ifndef LMP_PAIR_PAINN_H
-#define LMP_PAIR_PAINN_H
+#ifndef LMP_PAIR_CURATOR_H
+#define LMP_PAIR_CURATOR_H
 
 #include "pair.h"
 
@@ -21,10 +21,10 @@ PairStyle(painn,PairPAINN)
 
 namespace LAMMPS_NS {
     
-class PairPAINN : public Pair {
+class PairCURATOR : public Pair {
  public:
-  PairPAINN(class LAMMPS *);
-  virtual ~PairPAINN();
+  PairCURATOR(class LAMMPS *);
+  virtual ~PairCURATOR();
   virtual void compute(int, int);
   void settings(int, char **);
   virtual void coeff(int, char **);

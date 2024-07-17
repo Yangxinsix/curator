@@ -21,7 +21,7 @@ CURATOR is a toolbox for constructing machine learning interatomic potentials vi
 
 .. toctree::
    :maxdepth: 2
-   :caption: 
+   :caption: Interface
 
    interface/lammps.rst
    interface/openmm.rst

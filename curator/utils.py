@@ -29,7 +29,8 @@ def load_model(model_file, device, load_compiled: bool=True):
             model = instantiate(model_dict['model_params'])
             model.initialize_modules(datamodule)
             model.load_state_dict(model_dict['model'])
-    
+    model.to(device)
+
     return model
 
 def load_models(model_paths, device, load_compiled: bool=True):
