@@ -6,7 +6,7 @@ References:
 
 ------------------------------------------------------------------------- */
 
-#include <pair_painn.h>
+#include <pair_curator.h>
 #include "atom.h"
 #include "comm.h"
 #include "domain.h"
@@ -33,7 +33,7 @@ References:
 
 using namespace LAMMPS_NS;
 
-PairPAINN::PairPAINN(LAMMPS *lmp) : Pair(lmp) {
+PairCURATOR::PairCURATOR(LAMMPS *lmp) : Pair(lmp) {
   restartinfo = 0;
   manybody_flag = 1;
 
@@ -46,12 +46,12 @@ PairPAINN::PairPAINN(LAMMPS *lmp) : Pair(lmp) {
   std::cout << "curator is using device " << device << "\n";
 
   if(const char* env_p = std::getenv("curator_DEBUG")){
-    std::cout << "PairPAINN is in DEBUG mode, since curator_DEBUG is in env\n";
+    std::cout << "PairCURATOR is in DEBUG mode, since curator_DEBUG is in env\n";
     debug_mode = 1;
   }
 }
 
-PairPAINN::~PairPAINN(){
+PairCURATOR::~PairCURATOR(){
   if (allocated) {
     memory->destroy(setflag);
     memory->destroy(cutsq);
@@ -59,9 +59,9 @@ PairPAINN::~PairPAINN(){
   }
 }
 
-void PairPAINN::init_style(){
+void PairCURATOR::init_style(){
   if (atom->tag_enable == 0)
-    error->all(FLERR,"Pair style painn requires atom IDs");
+    error->all(FLERR,"Pair style curator requires atom IDs");
 
   // need a full neighbor list
   neighbor->add_request(this, NeighConst::REQ_FULL);
@@ -71,15 +71,15 @@ void PairPAINN::init_style(){
   // on the "real" atoms, with no need for reverse "communication".
   // May not matter, since f[j] will be 0 for the ghost atoms anyways.
   if (force->newton_pair == 1)
-    error->all(FLERR,"Pair style painn requires newton pair off");
+    error->all(FLERR,"Pair style curator requires newton pair off");
 }
 
-double PairPAINN::init_one(int i, int j)
+double PairCURATOR::init_one(int i, int j)
 {
   return cutoff;
 }
 
-void PairPAINN::allocate()
+void PairCURATOR::allocate()
 {
   allocated = 1;
   int n = atom->ntypes;
@@ -90,7 +90,7 @@ void PairPAINN::allocate()
 
 }
 
-void PairPAINN::settings(int narg, char **arg) {
+void PairCURATOR::settings(int narg, char **arg) {
   // "ensemble" should be the only word after "pair_style" in the input file.
   if (narg > 1)
     error->all(FLERR, "Illegal pair_style command");  
@@ -100,7 +100,7 @@ void PairPAINN::settings(int narg, char **arg) {
   } 
 }
 
-void PairPAINN::coeff(int narg, char **arg) {
+void PairCURATOR::coeff(int narg, char **arg) {
 
   if (!allocated)
     allocate();
@@ -158,7 +158,7 @@ void PairPAINN::coeff(int narg, char **arg) {
 }
 
 // Force and energy computation
-void PairPAINN::compute(int eflag, int vflag){
+void PairCURATOR::compute(int eflag, int vflag){
   ev_init(eflag, vflag);
 
   // Get info from lammps:
@@ -178,7 +178,7 @@ void PairPAINN::compute(int eflag, int vflag){
   int newton_pair = force->newton_pair;
   // Should probably be off.
   if (newton_pair==1)
-    error->all(FLERR, "Pair style painn requires 'newton off'");
+    error->all(FLERR, "Pair style curator requires 'newton off'");
 
   // Number of local/real atoms
   int inum = list->inum;

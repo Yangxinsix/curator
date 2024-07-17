@@ -21,6 +21,7 @@
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
+    <link rel="next" title="LAMMPS interface" href="../interface/lammps.html" />
     <link rel="prev" title="Installation" href="../install.html" /> 
 </head>
 
@@ -54,6 +55,11 @@
 </ul>
 </li>
 </ul>
+<p class="caption" role="heading"><span class="caption-text">Interface</span></p>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../interface/lammps.html">LAMMPS interface</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../interface/openmm.html">OpenMM interface</a></li>
+</ul>
 
         </div>
       </div>
@@ -86,14 +92,19 @@
 <h2>Preparing data<a class="headerlink" href="#preparing-data" title="Link to this heading"></a></h2>
 <p>Training equivariant neural network potentials can be super easy with <cite>curator</cite> for new beginners. We defined every default hyperparameters except the <cite>datapath</cite>.
 Therefore, the only thing you need to train a new model is the ab-initio dataset. CURATOR uses ASE’s api for reading atomistic data, so any formats supported by ASE will work in <cite>curator</cite>.</p>
-<p>For example, you can provide an <cite>OUTCAR</cite> file from <a class="reference external" href="https://www.vasp.at/">VASP</a> calculation or use <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/install.html">ASE</a> recommended <cite>.traj</cite> file as the training dataset.
+<p>For example, you can provide an <strong>OUTCAR</strong> file from <a class="reference external" href="https://www.vasp.at/">VASP</a> calculation or use <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/install.html">ASE</a> recommended <cite>.traj</cite> file as the training dataset.
 A simple training task can be executed by running:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curator-train<span class="w"> </span>data.datapath<span class="o">=</span>water.traj
 </pre></div>
 </div>
+<p>The parameters will use the default settings in CURATOR and the default GNN architechture is <a class="reference external" href="https://arxiv.org/abs/2102.03150">PaiNN</a> model.
+If you want to specify hyperparameters by yourself, you can choose to use command line interface like <code class="docutils literal notranslate"><span class="pre">curator-train</span> <span class="pre">model/representation=nequip</span></code>, or resort to external configuration file like:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curator-train<span class="w"> </span><span class="nv">cfg</span><span class="o">=</span>user_cfg.yaml
 </pre></div>
 </div>
+<p>You can select any parameters you want to use inside this file. The meanings of different parameters can be found in <code class="docutils literal notranslate"><span class="pre">curator/configs</span></code> folder.
+And a <cite>config.yaml</cite> file containing all hyperparameters used in the task will also be generated once the user run any jobs. The users can refer to this file for setting up their own training tasks.
+Except for training, all other tasks can be initiated in both ways.</p>
 </section>
 </section>
 
@@ -102,6 +113,7 @@ A simple training task can be executed by running:</p>
           </div>
           <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
         <a href="../install.html" class="btn btn-neutral float-left" title="Installation" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
+        <a href="../interface/lammps.html" class="btn btn-neutral float-right" title="LAMMPS interface" accesskey="n" rel="next">Next <span class="fa fa-arrow-circle-right" aria-hidden="true"></span></a>
     </div>
 
   <hr/>

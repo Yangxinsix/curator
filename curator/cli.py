@@ -355,7 +355,7 @@ def deploy(model_path: str, compiled_model_path: str = 'compiled_model.pt', cfg_
     from e3nn.util.jit import script
 
     # Load model
-    loaded_model = torch.load(model_path)
+    loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
 
     if 'model' in loaded_model:
         model = loaded_model['model']
