@@ -1,5 +1,5 @@
 import torch
-from typing import Tuple, Optional, List, Callable
+from typing import Tuple, Optional, List, Callable, Union
 from curator.data import properties
 from ase.stress import full_3x3_to_voigt_6_stress
         
@@ -8,55 +8,25 @@ class GradientOutput(torch.nn.Module):
         self,
         grad_on_edge_diff: bool = True,
         grad_on_positions: bool = False,
-        compute_forces: bool = True,
-        compute_stress: bool = False,
+        model_outputs: List[str] = ['forces'],       # properties that need to be calculated, can be forces, stress, virial, etc.
         update_callback: Optional[Callable] = None,  # Add a callback parameter
     ) -> None:
+        # TODO: define a set for allowed model outputs
         super().__init__()
         self.grad_on_edge_diff = grad_on_edge_diff
         self.grad_on_positions = grad_on_positions
-        self._compute_forces = compute_forces
-        self._compute_stress = compute_stress
         self.update_callback = update_callback
-        self.model_outputs = []
-        self.update_model_outputs()
-    
-    @property
-    def compute_forces(self):
-        return self._compute_forces
+        self.model_outputs = model_outputs
 
-    @compute_forces.setter
-    def compute_forces(self, value: bool):
-        self._compute_forces = value
-        self.update_model_outputs()
+    @torch.jit.ignore
+    def update_model_outputs(self, outputs: Union[List[str], str]):
+        if isinstance(outputs, str):
+            self.model_outputs.append(outputs)
+        else:
+            self.model_outputs.extend(outputs)
+        # update parent model
         if self.update_callback:
             self.update_callback()
-
-    @property
-    def compute_stress(self):
-        return self._compute_stress
-
-    @compute_stress.setter
-    def compute_stress(self, value: bool):
-        self._compute_stress = value
-        self.update_model_outputs()
-        if self.update_callback:
-            self.update_callback()
-
-    def update_model_outputs(self):
-        if self._compute_forces:
-            if "forces" not in self.model_outputs:
-                self.model_outputs.append("forces")
-        else:
-            if "forces" in self.model_outputs:
-                self.model_outputs.remove("forces")
-
-        if self._compute_stress:
-            if "stress" not in self.model_outputs:
-                self.model_outputs.append("stress")
-        else:
-            if "stress" in self.model_outputs:
-                self.model_outputs.remove("stress")
 
     def forward(
         self,

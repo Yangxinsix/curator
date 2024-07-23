@@ -341,7 +341,11 @@ def tmp_train(config: DictConfig):
         log.info(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
 
 # Deploy the model and save a compiled model
-def deploy(model_path: str, compiled_model_path: str = 'compiled_model.pt', cfg_path: Optional[str] = None):
+def deploy(
+        model_path: str, 
+        compiled_model_path: str = 'compiled_model.pt', 
+        cfg_path: Optional[str] = None
+    ):
     """ Deploy the model and save a compiled model.
 
     Args:
@@ -357,7 +361,7 @@ def deploy(model_path: str, compiled_model_path: str = 'compiled_model.pt', cfg_
     # Load model
     loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
 
-    if 'model' in loaded_model:
+    if 'model' in loaded_model and cfg_path is None:
         model = loaded_model['model']
     else:
         # Load the arguments
