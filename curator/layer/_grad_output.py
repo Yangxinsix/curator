@@ -17,6 +17,7 @@ class GradientOutput(torch.nn.Module):
         self.grad_on_positions = grad_on_positions
         self.update_callback = update_callback
         self.model_outputs = model_outputs
+        self.check_outputs()
 
     @torch.jit.ignore
     def update_model_outputs(self, outputs: Union[List[str], str]):
@@ -27,6 +28,12 @@ class GradientOutput(torch.nn.Module):
         # update parent model
         if self.update_callback:
             self.update_callback()
+        self.check_outputs()
+
+    @torch.jit.ignore
+    def check_outputs(self):
+        self.compute_forces = True if 'forces' in self.model_outputs else False
+        self.compute_stress = True if 'stress' in self.model_outputs else False
 
     def forward(
         self,
