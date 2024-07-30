@@ -47,13 +47,13 @@ def train(
             run_path = Path(train_path) / f'iter_{iteration}' / name
             run_path.mkdir(parents=True, exist_ok=True)
             cfg.run_path = str(run_path.resolve())
-            model_path.append(cfg.run_path + '/model_path/best_model.ckpt')
+            model_path.append(cfg.run_path + '/model_path')
             # parse node resources
             job_resources = cfg.pop('resources')
 
             # TODO: load old model
             if iteration > 0:
-                old_model_path = Path(train_path) / f'iter_{iteration-1}' / name / 'model_path' / 'best_model.ckpt'
+                old_model_path = Path(train_path) / f'iter_{iteration-1}' / name / 'model_path'
                 cfg.model_path = str(old_model_path.resolve())
 
             # save config file
@@ -249,8 +249,8 @@ def label(
     return tasks
 
 
-def workflow():
-    cfg = OmegaConf.load('user_cfg.yaml')
+def workflow(cfg='user_cfg.yaml'):
+    cfg = OmegaConf.load(cfg)
     label_tasks = []
 
     for iteration in range(10):

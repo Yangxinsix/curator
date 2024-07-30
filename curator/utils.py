@@ -58,11 +58,14 @@ def load_models(model_paths, device, load_compiled: bool=True):
         path = Path(model_path)
         if path.is_file() and (path.suffix == '.pt' or path.suffix == '.pth' or path.suffix == '.ckpt'):
             models.append(load_model(path, device, load_compiled))
+        else:
+            model_path = find_best_model(run_path=model_path)
+            models.append(load_model(model_path, device, load_compiled))
     
     return models
 
 def find_best_model(run_path):
-    model_path = [f for f in Path(run_path).rglob("best_model*.ckpt")]
+    model_path = [f for f in Path(run_path).glob("best_model*.ckpt")]
     val_loss = float('inf')
     index = 0
     for i, p in enumerate(model_path):
