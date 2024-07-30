@@ -43,4 +43,4 @@ class ExponentialMovingAverage(Callback):
                 self.ema.load_state_dict(state_dict["ema"])
 
     def state_dict(self):
-        return {"ema": self.ema.state_dict()}
+        return {"ema": self.ema.state_dict() if self.ema is not None else None}
