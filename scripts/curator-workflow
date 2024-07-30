@@ -3,7 +3,7 @@ from myqueue.workflow import run
 from myqueue.task import Task
 from typing import Optional, Dict, Tuple, Final
 from omegaconf import DictConfig, OmegaConf
-from curator.utils import read_user_config, register_resolvers, find_best_model
+from curator.utils import read_user_config, register_resolvers
 from pathlib import Path
 
 register_resolvers()
@@ -53,8 +53,7 @@ def train(
 
             # TODO: load old model
             if iteration > 0:
-                old_model_path = Path(train_path) / f'iter_{iteration-1}' / name / 'model_path'
-                old_model_path, _ = find_best_model(old_model_path)
+                old_model_path = Path(train_path) / f'iter_{iteration-1}' / name / 'model_path' / 'best_model.ckpt'
                 cfg.model_path = str(old_model_path.resolve())
 
             # save config file
@@ -210,9 +209,6 @@ def label(
             # load parameters, create run directory, and save user_cfg file
             job_config = OmegaConf.merge(general, job_config)
             cfg = read_user_config(job_config, config_name='label.yaml')
-            run_path = Path(label_path) / f'iter_{iteration}' / name
-            run_path.mkdir(parents=True, exist_ok=True)
-            cfg.run_path = str(run_path.resolve())
 
             # parse node resources
             job_resources = cfg.pop('resources')
@@ -220,16 +216,36 @@ def label(
             # TODO: get atoms that need to be labelled, possibly overall datapath in training
             cfg.pool_set = pool_path[name]
             cfg.al_info = al_info[name]
-            OmegaConf.save(cfg, run_path / 'select.yaml', resolve=True)
 
-            tasks.append(run(
-                shell='curator-label',
-                deps=[deps[name]],
-                args=arguments,
-                folder=run_path,
-                name=name,
-                **job_resources,
-            ))
+            # split jobs if needed
+            if cfg.split_jobs is not None:
+                for i in range(cfg.split_jobs):
+                    run_path = Path(label_path) / f'iter_{iteration}' / name / f'{i}'
+                    run_path.mkdir(parents=True, exist_ok=True)
+                    cfg.job_order = i
+                    cfg.run_path = str(run_path.resolve())
+                    OmegaConf.save(cfg, run_path / 'select.yaml', resolve=True)
+                    tasks.append(run(
+                        shell='curator-label',
+                        deps=[deps[name]],
+                        args=arguments,
+                        folder=run_path,
+                        name=name,
+                        **job_resources,
+                    ))
+            else:
+                run_path = Path(label_path) / f'iter_{iteration}' / name
+                run_path.mkdir(parents=True, exist_ok=True)
+                cfg.run_path = str(run_path.resolve())
+                OmegaConf.save(cfg, run_path / 'select.yaml', resolve=True)
+                tasks.append(run(
+                    shell='curator-label',
+                    deps=[deps[name]],
+                    args=arguments,
+                    folder=run_path,
+                    name=name,
+                    **job_resources,
+                ))
     return tasks
 
 

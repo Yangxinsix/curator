@@ -49,3 +49,6 @@ callbacks:
   - _target_: curator.train.ExponentialMovingAverage
     decay: 0.995
     use_num_updates: true
+  - _target_: pytorch_lightning.callbacks.BatchSizeFinder
+    mode: binsearch
+    steps_per_trial: 5

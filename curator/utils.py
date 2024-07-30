@@ -16,6 +16,22 @@ def register_resolvers():
     OmegaConf.register_new_resolver("multiply_fs", lambda x: x * units.fs, replace=True)
     OmegaConf.register_new_resolver("divide_by_fs", lambda x: x / units.fs, replace=True)
 
+def split_list(lst, chunk_or_num, by_chunk_size=False):
+    if by_chunk_size:
+        num_chunks, remainder = divmod(len(lst), chunk_or_num)
+    else:
+        chunk_or_num, remainder = divmod(len(lst), chunk_or_num)
+    if by_chunk_size:
+        return [
+            lst[i * chunk_or_num + min(i, remainder):(i + 1) * chunk_or_num + min(i + 1, remainder)]
+            for i in range(num_chunks)
+        ]
+    else:
+        return [
+            lst[i * (chunk_or_num + (1 if i < remainder else 0)):(i + 1) * (chunk_or_num + (1 if i < remainder else 0))]
+            for i in range(chunk_or_num)
+        ]
+
 def load_model(model_file, device, load_compiled: bool=True):
     if model_file.suffix == '.pt' and load_compiled:
         model = torch.jit.load(model_file, map_location=torch.device(device))
