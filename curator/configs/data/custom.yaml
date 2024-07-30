@@ -15,7 +15,7 @@ train_val_split: random
 shuffle: true
 num_workers: 0
 pin_memory: True
-species: None
+species: null
 avg_num_neighbors: auto
 atomic_energies: null
 normalization: True

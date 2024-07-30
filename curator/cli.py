@@ -72,7 +72,7 @@ def train(config: DictConfig) -> None:
     datamodule: LightningDataModule = hydra.utils.instantiate(config.data)
     
     # Initiate the model
-    log.debug(f"Instantiating model <{config.model._target_}>")
+    log.debug(f"Instantiating model <{config.model._target_}> with GNN representation <{config.model.representation._target_}>")
     model = hydra.utils.instantiate(config.model)
     log.debug(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,d}")
     
