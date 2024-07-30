@@ -578,6 +578,30 @@ def label(config: DictConfig):
     else:
         raise RuntimeError('Valid configarations for DFT calculation should be provided!')
     
+    # split jobs if needed to accelerate labelling if you have a lot of resources
+    if config.split_jobs or config.imgs_per_job:
+        def split_list(lst, chunk_or_num, by_chunk_size=False):
+            if by_chunk_size:
+                num_chunks, remainder = divmod(len(lst), chunk_or_num)
+            else:
+                chunk_or_num, remainder = divmod(len(lst), chunk_or_num)
+            if by_chunk_size:
+                return [
+                    lst[i * chunk_or_num + min(i, remainder):(i + 1) * chunk_or_num + min(i + 1, remainder)]
+                    for i in range(num_chunks)
+                ]
+            else:
+                return [
+                    lst[i * (chunk_or_num + (1 if i < remainder else 0)):(i + 1) * (chunk_or_num + (1 if i < remainder else 0))]
+                    for i in range(chunk_or_num)
+                ]
+
+        if config.split_jobs:
+            images = split_list(images, config.split_jobs)        
+        if config.imgs_per_job:
+            images = split_list(images, config.imgs_per_job, by_chunk_size=True)
+        images = images[config.job_order]          # specify which parts of the images to label
+
     # Set up calculator
     annotator = instantiate(config.annotator)
     
