@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 from myqueue.workflow import run
 from myqueue.task import Task
-from typing import Optional, Dict, Tuple, Final
+from typing import Optional, Dict, Tuple, Final, Union
 from omegaconf import DictConfig, OmegaConf
 from curator.utils import read_user_config, register_resolvers
 from pathlib import Path
 
 register_resolvers()
+
+# TODO: manage restart all job
 
 # paths for jobs
 train_path: Final = 'train'
@@ -15,6 +17,31 @@ select_path: Final = 'select'
 label_path: Final = 'label'
 
 # keys inferred in workflow: model_path, init_traj, pool_set, al_info
+
+path_set = set([
+    'run_path', 
+    'datapath',
+    'train_path',
+    'val_path',
+    'test_path',
+    'model_path',
+    'load_model',       # used to load specific model but not model trained in workflow
+    'init_traj',
+    'read_traj',        # used to load specific initial trajectory but not trajectory generated in workflow
+])
+
+def resolve_paths(config: Union[DictConfig, dict], base_dir='.', path_set=path_set):
+    # resolve absolute paths inside path_set
+    for key, value in config.items():
+        if key in path_set:
+            if isinstance(value, str):
+                abs_path = Path(base_dir) / value
+                config[key] = str(abs_path.resolve())
+            elif isinstance(value, list):
+                abs_paths = [str((Path(base_dir) / l).resolve()) for l in list]
+                config[key] = abs_paths
+        elif isinstance(value, (dict, DictConfig)):
+            resolve_paths(value, base_dir, path_set)
 
 def train(
     deps: list[Task],
@@ -35,6 +62,8 @@ def train(
 
     # get general keys
     general = config.pop('general')
+    switch_gpus = general.pop('switch_gpus', False)
+    gpus_per_node = general.pop('gpus_per_node', 1)
 
     # load multiple models
     for name, job_config in config.items():
@@ -53,8 +82,9 @@ def train(
 
             # TODO: load old model
             if iteration > 0:
+                model_path = cfg.pop('load_model', None)           # load_specific model
                 old_model_path = Path(train_path) / f'iter_{iteration-1}' / name / 'model_path'
-                cfg.model_path = str(old_model_path.resolve())
+                cfg.model_path = model_path or str(old_model_path.resolve())
 
             # save config file
             OmegaConf.save(cfg, run_path / 'train.yaml', resolve=True)
@@ -251,6 +281,7 @@ def label(
 
 def workflow(cfg='user_cfg.yaml'):
     cfg = OmegaConf.load(cfg)
+    resolve_paths(cfg, base_dir=cfg.get('run_path', '.'))
     label_tasks = []
 
     for iteration in range(10):

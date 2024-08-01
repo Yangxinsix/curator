@@ -80,9 +80,10 @@ def train(config: DictConfig) -> None:
     log.debug(f"Instantiating task <{config.task._target_}>")
     task: LitNNP = hydra.utils.instantiate(config.task, model=model)
     if config.model_path is not None:
-        log.debug(f"Loading trained model from {config.model_path}")
         # When using CSVlogger and save_hyperparameters() together, the code will report pickle error.
         # So we choose to save the entire model and outputs in LitNNP and then reload it
+        config.model_path = find_best_model(config.model_path)[0]
+        log.debug(f"Loading trained model from {config.model_path}")
         if config.task.load_entire_model:
             state_dict = torch.load(config.model_path)
             model = state_dict['model']
