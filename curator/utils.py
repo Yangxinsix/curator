@@ -59,20 +59,24 @@ def load_models(model_paths, device, load_compiled: bool=True):
         if path.is_file() and (path.suffix == '.pt' or path.suffix == '.pth' or path.suffix == '.ckpt'):
             models.append(load_model(path, device, load_compiled))
         else:
-            model_path = find_best_model(run_path=model_path)
+            model_path, _ = find_best_model(run_path=model_path)
             models.append(load_model(model_path, device, load_compiled))
     
     return models
 
 def find_best_model(run_path):
-    model_path = [f for f in Path(run_path).glob("best_model*.ckpt")]
-    val_loss = float('inf')
-    index = 0
-    for i, p in enumerate(model_path):
-        loss = float(p.split('=')[-1].rstrip('.ckpt'))
-        if loss < val_loss:
-            val_loss = loss
-            index = i
+    # return best model path if a path is provided, else checkpoint itself
+    if Path(run_path).suffix == '.ckpt':
+        return run_path, None
+    else:
+        model_path = [f for f in Path(run_path).glob("best_model*.ckpt")]
+        val_loss = float('inf')
+        index = 0
+        for i, p in enumerate(model_path):
+            loss = float(p.split('=')[-1].rstrip('.ckpt'))
+            if loss < val_loss:
+                val_loss = loss
+                index = i
     return model_path[index], val_loss
 
 class CustomFormatter(logging.Formatter):
