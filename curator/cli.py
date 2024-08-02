@@ -104,15 +104,11 @@ def train(config: DictConfig) -> None:
     # Deploy model to a compiled model
     if config.deploy_model:
         # Load the model
-        model_path, val_loss = find_best_model(run_path=config.run_path)
+        model_path, val_loss = find_best_model(run_path=config.run_path + '/model_path')
         
         # Compile the model
-        outputs = torch.load(model_path)['outputs']
         log.debug(f"Deploy trained model from {model_path} with validation loss of {val_loss:.3f}")
-        task = LitNNP.load_from_checkpoint(checkpoint_path=f"{model_path}", model=model, outputs=outputs)
-        model_compiled = script(task.model)
-        metadata = {"cutoff": str(model_compiled.representation.cutoff).encode("ascii")}
-        model_compiled.save(f"{config.run_path}/compiled_model.pt", _extra_files=metadata)
+        deploy(model_path, f"{config.run_path}/compiled_model.pt")
         log.debug(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
 
 # Training without Pytorch Lightning
