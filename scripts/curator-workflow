@@ -62,11 +62,9 @@ def train(
 
     # get general keys
     general = config.pop('general')
-    switch_gpus = general.pop('switch_gpus', False)
-    gpus_per_node = general.pop('gpus_per_node', 1)
 
     # load multiple models
-    for name, job_config in config.items():
+    for i, (name, job_config) in enumerate(config.items()):
         # define start_iteration:
         start_iteration = job_config.pop('start_iteration', 0)
         if iteration >= start_iteration:
@@ -134,7 +132,7 @@ def simulate(
             # parse node resources
             job_resources = cfg.pop('resources')
 
-            # TODO: load old model and init_traj
+            # TODO: load old model, init_traj, load compiled model
             cfg.model_path = model_path
             if iteration > 0:
                 init_traj = cfg.simulator.pop('read_traj', None)
