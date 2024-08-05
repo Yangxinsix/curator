@@ -73,7 +73,7 @@ def find_best_model(run_path):
         val_loss = float('inf')
         index = 0
         for i, p in enumerate(model_path):
-            loss = float(p.split('=')[-1].rstrip('.ckpt'))
+            loss = float(str(p).split('=')[-1].rstrip('.ckpt'))
             if loss < val_loss:
                 val_loss = loss
                 index = i
