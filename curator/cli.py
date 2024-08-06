@@ -508,7 +508,7 @@ def select(config: DictConfig):
     al_info = {
         'kernel': config.kernel,
         'selection': config.method,
-        'dataset': config.dataset if config.dataset and config.split_file else config.pool_set,
+        'dataset': list(config.dataset) if config.dataset and config.split_file else list(config.pool_set),
         'selected': indices,
     }
     with open(config.run_path+'/selected.json', 'w') as f:
