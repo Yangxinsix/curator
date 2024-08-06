@@ -24,11 +24,11 @@ def read_trajectory(ase_db):
         if all(isinstance(item, Atoms) for item in ase_db):
             db = ase_db
         elif all(isinstance(item, (str, PosixPath)) and str(item).endswith('.traj') for item in ase_db):
-            db = Trajectory([str(item) for item in ase_db if not os.path.getsize(item)])
+            db = Trajectory([str(item) for item in ase_db if os.path.getsize(item)])
         else:
             db = []
             for item in ase_db:
-                if isinstance(item, (str, PosixPath)) and not os.path.getsize(item):
+                if isinstance(item, (str, PosixPath)) and os.path.getsize(item):
                     item = str(item)  # Convert PosixPath to string if necessary
                     db += read(item, ':')
     elif isinstance(ase_db, TrajectoryReader):
