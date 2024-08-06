@@ -59,11 +59,6 @@ class EnsembleUncertainty(BaseUncertainty):
             self.uncertain_calls += 1
             if self.save_uncertain_atoms is not None:
                 self.uncertain_traj.write(atoms)
-            
-            if check == 2:
-                raise RuntimeError(f"{self.threshold_key}: {self.uncertainty[self.threshold_key]} > {self.high_threshold}! Uncertainty is too high!")
-            if self.uncertain_calls > self.max_uncertain_calls:
-                raise ValueError('Max number {self.max_uncertain_calls} of uncertain structures collected. Exiting.')
         return self.uncertainty
 
     def check(self, low_threshold: Optional[float]=None, high_threshold: Optional[float]=None):
