@@ -4,6 +4,7 @@ from ase.io import Trajectory
 from typing import Optional, Union
 from .uncertainty import BaseUncertainty
 import logging
+import sys
 
 class BaseLogger(ABC):
     # Abstract class for logging simulation results
@@ -30,6 +31,7 @@ class MDLogger(BaseLogger):
             self, 
             logger: Optional[logging.Logger]=None, 
             uncertainty: Optional[BaseUncertainty]=None,
+            min_calls: int = 0,          # if uncertaint_calls > min_calls and meets stop criteria, just stop the simulation, else raise errors.
         ):
         """ Class to setup uncertainty method and print physical quantities in a simualtion.
         
@@ -39,6 +41,7 @@ class MDLogger(BaseLogger):
 
         """
         self.calls = 0
+        self.min_calls = min_calls
 
         self.logger = logger if logger is not None else logging.getLogger(__name__)
         if uncertainty is not None:
@@ -82,6 +85,20 @@ class MDLogger(BaseLogger):
             check_uncertainty = self.uncertainty_calc.check()
             if check_uncertainty > 0:
                 self.logger.warning(string)
+
+                # error control
+                if check_uncertainty == 2:
+                    if self.calls > self.min_calls:
+                        self.logger.warning(f"{self.uncertainty_calc.threshold_key}: {self.uncertainty_calc.uncertainty[self.uncertainty_calc.threshold_key]} > {self.uncertainty_calc.high_threshold}! Uncertainty is too high!")
+                        sys.exit(0)
+                    else:
+                        raise RuntimeError(f"{self.uncertainty_calc.threshold_key}: {self.uncertainty_calc.uncertainty[self.uncertainty_calc.threshold_key]} > {self.uncertainty_calc.high_threshold}! Uncertainty is too high!")
+                elif check_uncertainty == 1 and self.uncertainty_calc.uncertain_calls > self.uncertainty_calc.max_uncertain_calls:
+                    if self.calls > self.min_calls:
+                        self.logger.warning("Max number {self.uncertainty_calc.max_uncertain_calls} of uncertain structures collected. Exiting.")
+                        sys.exit(0)
+                    else:
+                        raise RuntimeError("Max number {self.uncertainty_calc.max_uncertain_calls} of uncertain structures collected. Exiting.")
             else:
                 self.logger.info(string)
         else:
