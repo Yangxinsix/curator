@@ -355,6 +355,7 @@ class GeneralActiveLearning:
         datasets: Dict[str, torch.utils.data.Dataset], 
         batch_size: int = 8, 
         al_batch_size: int = 100,
+        debug: bool = False,
     ):
         """
         models: pytorch models,
@@ -368,7 +369,7 @@ class GeneralActiveLearning:
                                f' not with {self.selection}!')
         
         stats = {
-            key: FeatureStatistics(models, ds, self.n_random_features, batch_size=batch_size)
+            key: FeatureStatistics(models, ds, self.n_random_features, batch_size=batch_size, debug=debug)
             for key, ds in datasets.items()
         }
         
