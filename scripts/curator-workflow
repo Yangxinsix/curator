@@ -252,7 +252,7 @@ def label(
                     run_path.mkdir(parents=True, exist_ok=True)
                     cfg.job_order = i
                     cfg.run_path = str(run_path.resolve())
-                    OmegaConf.save(cfg, run_path / 'select.yaml', resolve=True)
+                    OmegaConf.save(cfg, run_path / 'label.yaml', resolve=True)
                     tasks.append(run(
                         shell='curator-label',
                         deps=[deps[name]],
@@ -265,7 +265,7 @@ def label(
                 run_path = Path(label_path) / f'iter_{iteration}' / name
                 run_path.mkdir(parents=True, exist_ok=True)
                 cfg.run_path = str(run_path.resolve())
-                OmegaConf.save(cfg, run_path / 'select.yaml', resolve=True)
+                OmegaConf.save(cfg, run_path / 'label.yaml', resolve=True)
                 tasks.append(run(
                     shell='curator-label',
                     deps=[deps[name]],
