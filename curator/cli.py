@@ -531,7 +531,7 @@ def label(config: DictConfig):
     from ase.io import Trajectory
     import json
     import numpy as np
-    from curator.select import AtomsAnnotator
+    from curator.label import AtomsAnnotator
 
     # Load the arguments
     if config.cfg is not None:
