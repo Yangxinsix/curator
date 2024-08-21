@@ -603,9 +603,11 @@ def label(config: DictConfig):
     annotator = instantiate(config.annotator)
     
     # Label the structures
+    all_converged = []
     for i, atoms in enumerate(images):
         # Label the structure with the choosen method
         converged = annotator.annotate(atoms)
+        all_converged.append(converged)
         # Save the labeled structure with the index it comes from.
         al_ind = indices[i]
         db.write(atoms, al_ind=al_ind, converged=converged)
@@ -616,3 +618,6 @@ def label(config: DictConfig):
         total_dataset = Trajectory(config.datapath, 'a')
         for row in db.select([('converged','=','True')]):
             total_dataset.write(row.toatoms())
+    
+    if not all(all_converged):
+        raise RuntimeError(f'Structures {[i for i, converged in enumerate(all_converged) if not converged]} have been converged!')

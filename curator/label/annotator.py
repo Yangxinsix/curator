@@ -33,6 +33,7 @@ class AtomsAnnotator:
                 status = self.inspector.post_process()
             else:
                 status = True
+            self.logger.info(f"Finish labelling {self.count}th structure.")
         except CalculationFailed:
             self.logger.warning(f"Caculation failed for {self.count}th structure.")
             status = False
