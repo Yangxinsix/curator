@@ -620,4 +620,4 @@ def label(config: DictConfig):
             total_dataset.write(row.toatoms())
     
     if not all(all_converged):
-        raise RuntimeError(f'Structures {[i for i, converged in enumerate(all_converged) if not converged]} have been converged!')
+        raise RuntimeError(f'Structures {[i for i, converged in enumerate(all_converged) if not converged]} are not converged!')
