@@ -79,6 +79,8 @@ def train(config: DictConfig) -> None:
     # Initiate the task and load old model, if any
     log.debug(f"Instantiating task <{config.task._target_}>")
     task: LitNNP = hydra.utils.instantiate(config.task, model=model)
+
+    # TODO: enable loading existing optimizers and schedulers
     if config.model_path is not None:
         # When using CSVlogger and save_hyperparameters() together, the code will report pickle error.
         # So we choose to save the entire model and outputs in LitNNP and then reload it
@@ -89,8 +91,16 @@ def train(config: DictConfig) -> None:
             model = state_dict['model']
             outputs = state_dict['outputs']
         else:
+            model.load_state_dict(state_dict['state_dict'])
             outputs = instantiate(config.task.outputs)
-        task = LitNNP.load_from_checkpoint(checkpoint_path=config.model_path, model=model, outputs=outputs)
+        if config.task.load_weights_only:
+            task = instantiate(config.task, model=model)
+        else:
+            task = LitNNP.load_from_checkpoint(
+                checkpoint_path=config.model_path, 
+                model=model, 
+                outputs=outputs,
+            )
     # Save extra arguments in checkpoint
     task.save_configuration(config)
     

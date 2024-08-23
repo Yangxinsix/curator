@@ -270,7 +270,7 @@ class LitNNP(pl.LightningModule):
             warmup_steps (int, optional): Warmup steps. Defaults to 0.
         """
         super().__init__()
-        self.save_hyperparameters(ignore=['model', 'outputs', 'optimizer', 'scheduler'])
+        self.save_hyperparameters(ignore=['model', 'outputs'])
         self.model = model
         self.outputs = nn.ModuleList(outputs)
         self.optimizer = optimizer
@@ -471,6 +471,7 @@ class LitNNP(pl.LightningModule):
         checkpoint['data_params'] = self.config.data
         checkpoint['model_params'] = self.config.model
         checkpoint['outputs'] = self.outputs
+        checkpoint['optimizer'] = self.optimizer
         if self.save_entire_model:
             checkpoint['model'] = self.model
     

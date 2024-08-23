@@ -8,6 +8,7 @@ scheduler_monitor: val_total_loss
 warmup_steps: 0
 save_entire_model: True
 load_entire_model: False
+load_weights_only: True
 
 # customize loss ratios
 energy_weight: 1
