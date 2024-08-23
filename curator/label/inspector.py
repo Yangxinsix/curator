@@ -23,8 +23,6 @@ class VASPInspector(Inspector):
 
     def post_process(self) -> bool:
         copy('OSZICAR', f'OSZICAR_{self.count}')
-        os.remove('WAVECAR')
-        os.remove('CHGCAR')
         converged = self.is_converged()
         if not converged:
             self.logger.warning(f"Structure {self.count} is not converged.")
@@ -32,6 +30,10 @@ class VASPInspector(Inspector):
 
         return converged
     
+    def sweep(self) -> None:
+        os.remove('WAVECAR')
+        os.remove('CHGCAR')
+
     def initialize_from_calculator(self, calculator: Calculator):
         self.nelm = calculator.parameters.get('nelm', 500)
         self.logger.info(f"NELM is set to {self.nelm}.")

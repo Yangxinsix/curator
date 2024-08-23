@@ -40,3 +40,7 @@ class AtomsAnnotator:
         finally:
             self.count += 1
             return status
+        
+    def sweep(self):
+        if self.inspector is not None:
+            self.inspector.sweep()

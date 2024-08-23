@@ -621,3 +621,6 @@ def label(config: DictConfig):
     
     if not all(all_converged):
         raise RuntimeError(f'Structures {[i for i, converged in enumerate(all_converged) if not converged]} are not converged!')
+    else:
+        # sweep all unnessary files after labeling
+        annotator.sweep()
