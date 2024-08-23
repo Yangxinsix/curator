@@ -3,7 +3,7 @@ import torch
 from typing import Union, Optional, List, Dict, Callable, Tuple
 from ._transform import Transform
 from ._neighborlist import NeighborListTransform, TorchNeighborList
-from .dataset import collate_atomsdata, AseDataset, NumpyDataset
+from .dataset import collate_atomsdata, AseDataset
 import math
 from . import properties
 from ase.data import chemical_symbols, atomic_numbers
@@ -17,6 +17,7 @@ class AtomsDataModule(pl.LightningDataModule):
     def __init__(
         self,
         batch_size: int,
+        data_type: str = 'AseDataset',         # select from ['AseDataset', 'NumpyDataset', 'BambooDataset']
         datapath: Union[List[str], str, None] = None,
         train_path: Union[List[str], str, None] = None,
         val_path: Union[List[str], str, None] = None,
@@ -46,6 +47,7 @@ class AtomsDataModule(pl.LightningDataModule):
         super().__init__()
         
         self.datapath = datapath
+        self.data_type = data_type
         self.train_path = train_path
         self.val_path = val_path
         self.test_path = test_path
@@ -99,46 +101,17 @@ class AtomsDataModule(pl.LightningDataModule):
             # if separate data files are provided
             if self.train_path is not None:
                 assert self.datapath is None, "Datapath should be None if train_path is provided."
-                self._train_dataset = AseDataset(
-                    self.train_path,
-                    cutoff=self.cutoff,
-                    compute_neighbor_list = self.compute_neighbor_list, 
-                    transforms = self.transforms,
-                )
+                self._train_dataset = self.setup_dataset(self.data_type, self.train_path)
                 self.num_train = len(self._train_dataset)
             if self.val_path is not None:
-                self._val_dataset = AseDataset(
-                    self.val_path,
-                    cutoff=self.cutoff,
-                    compute_neighbor_list = self.compute_neighbor_list, 
-                    transforms = self.transforms,
-                )
+                self._val_dataset = self.setup_dataset(self.data_type, self.val_path)
                 self.num_val = len(self._val_dataset)
             if self.test_path is not None:
-                self._test_dataset = AseDataset(
-                    self.test_path,
-                    cutoff=self.cutoff,
-                    compute_neighbor_list = self.compute_neighbor_list, 
-                    transforms = self.transforms,
-                )
+                self._test_dataset = self.setup_dataset(self.data_type, self.test_path)
                 self.num_test = len(self._test_dataset)
                 
             if self.datapath is not None:
-                if isinstance(self.datapath, str) and self.datapath.endswith('npz'):
-                    self.dataset = NumpyDataset(
-                        self.datapath, 
-                        cutoff=self.cutoff,
-                        compute_neighbor_list = self.compute_neighbor_list, 
-                        transforms = self.transforms,
-                    )
-                else:
-                    self.dataset = AseDataset(
-                        self.datapath, 
-                        cutoff=self.cutoff,
-                        compute_neighbor_list = self.compute_neighbor_list, 
-                        transforms = self.transforms,
-                    )
-                
+                self.dataset = self.setup_dataset(self.data_type, self.datapath)
                 self.datalen = len(self.dataset)
                 
                 if self.train_idx is None:
@@ -162,7 +135,29 @@ class AtomsDataModule(pl.LightningDataModule):
                     self._train_dataset = torch.utils.data.Subset(self.dataset, self.train_idx)
                 if self.test_idx is not None:
                     self._test_dataset = torch.utils.data.Subset(self.dataset, self.test_idx)
+    
+    def setup_dataset(self, data_type: str, datapath: str) -> None:
+        if data_type == 'AseDataset':
+            dataset = AseDataset(
+                datapath,
+                cutoff=self.cutoff,
+                compute_neighbor_list=self.compute_neighbor_list,
+                transforms=self.transforms,
+            )
+        elif data_type == 'NumpyDataset':
+            from .dataset import NumpyDataset
+            dataset = NumpyDataset(
+                datapath,
+                cutoff=self.cutoff,
+                compute_neighbor_list=self.compute_neighbor_list,
+                transforms=self.transforms,
+            )
+        elif data_type == 'BambooDataset':
+            from .dataset import BambooDataset
+            dataset = BambooDataset(datapath)
         
+        return dataset
+
     @property
     def train_dataset(self) -> torch.utils.data.Dataset:
         return self._train_dataset
