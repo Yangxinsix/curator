@@ -28,12 +28,6 @@ class GradientOutput(torch.nn.Module):
         # update parent model
         if self.update_callback:
             self.update_callback()
-        self.check_outputs()
-
-    @torch.jit.ignore
-    def check_outputs(self):
-        self.compute_forces = True if 'forces' in self.model_outputs else False
-        self.compute_stress = True if 'stress' in self.model_outputs else False
 
     def forward(
         self,
@@ -46,7 +40,7 @@ class GradientOutput(torch.nn.Module):
             edge_diff = data[properties.edge_diff]
             forces_dim = int(torch.sum(data[properties.n_atoms]))
             edge_idx = data[properties.edge_idx]
-            if self.compute_forces:
+            if 'forces' in self.model_outputs:
                 grad_outputs : List[Optional[torch.Tensor]] = [torch.ones_like(energy)]    # for model deploy
                 dE_ddiff = torch.autograd.grad(
                     [energy,],
@@ -69,7 +63,7 @@ class GradientOutput(torch.nn.Module):
                 # Reference: https://en.wikipedia.org/wiki/Virial_stress
                 # This method calculates virials by giving pair-wise force components
                 
-                if self.compute_stress:
+                if 'stress' in self.model_outputs or 'virial' in self.model_outputs:
                     if properties.cell in data:
                         image_idx = data[properties.image_idx]
                         atomic_virial = torch.einsum("ij, ik -> ijk", edge_diff, dE_ddiff)           # I'm quite not sure if a negative sign should be added before dE_ddiff, but I think it should be right
@@ -92,7 +86,7 @@ class GradientOutput(torch.nn.Module):
         elif self.grad_on_positions:
             energy = data[properties.energy]
             grad_outputs : List[Optional[torch.Tensor]] = [torch.ones_like(energy)]
-            if self.compute_forces:
+            if 'forces' in self.model_outputs:
                 grad_inputs = [data[properties.positions]]
                 if self.compute_stress:
                     grad_inputs.append(data[properties.strain])
@@ -108,7 +102,7 @@ class GradientOutput(torch.nn.Module):
                     dEdR = torch.zeros_like(data[properties.positions])
                 data[properties.forces] = -dEdR
                     
-                if self.compute_stress:
+                if 'stress' in self.model_outputs:
                     if properties.cell in data:
                         stress = grads[1]
                         if stress is None:
