@@ -56,8 +56,8 @@ class AtomsDataModule(pl.LightningDataModule):
         self.compute_neighbor_list = compute_neighbor_list
         # batch size parameters
         self.batch_size = batch_size
-        self.val_batch_size = val_batch_size or test_batch_size or batch_size
-        self.test_batch_size = test_batch_size or val_batch_size or batch_size
+        self.val_batch_size = val_batch_size or test_batch_size or batch_size // 2
+        self.test_batch_size = test_batch_size or val_batch_size or batch_size // 2
         
         # splitting parameters
         self.split_file = split_file
