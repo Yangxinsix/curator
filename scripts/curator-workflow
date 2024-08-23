@@ -56,7 +56,7 @@ def train(
         - Run task
     '''
     tasks = []
-    model_path = []              # collect models for simulation and active learning
+    model_paths = []              # collect models for simulation and active learning
     arguments = ['cfg=train.yaml']
     config = config.copy()
 
@@ -74,7 +74,7 @@ def train(
             run_path = Path(train_path) / f'iter_{iteration}' / name
             run_path.mkdir(parents=True, exist_ok=True)
             cfg.run_path = str(run_path.resolve())
-            model_path.append(cfg.run_path + '/model_path')
+            model_paths.append(cfg.run_path + '/model_path')
             # parse node resources
             job_resources = cfg.pop('resources')
 
@@ -95,7 +95,7 @@ def train(
                 name='train',
                 **job_resources,
             ))
-    return tasks, model_path
+    return tasks, model_paths
 
 def simulate(
     deps: list[Task],
