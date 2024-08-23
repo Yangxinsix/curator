@@ -53,7 +53,7 @@ class BambooDataset(torch.utils.data.Dataset):
                 self.data['pos'][self.data['edge_index'][left_e:right_e, 0]],
             properties.energy: self.data['energy'][index].unsqueeze(0),
             properties.forces: self.data['forces'][left_a:right_a],
-            properties.virial: self.data['virial'][index],
+            properties.virial: self.data['virial'][index].flatten()[[0, 4, 8, 5, 2, 1]].unsqueeze(0),
         }
 
         return atoms_dict
