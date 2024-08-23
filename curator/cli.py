@@ -91,7 +91,6 @@ def train(config: DictConfig) -> None:
             model = state_dict['model']
             outputs = state_dict['outputs']
         else:
-            model.load_state_dict(state_dict['state_dict'])
             outputs = instantiate(config.task.outputs)
         if config.task.load_weights_only:
             task = instantiate(config.task, model=model)
