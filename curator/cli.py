@@ -548,10 +548,6 @@ def label(config: DictConfig):
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
     log.info("Running on host: " + str(socket.gethostname()))
 
-    # Set up dataframe and load possible converged data id's
-    db = connect(config.run_path+'/dft_structures.db')
-    db_al_ind = [row.al_ind for row in db.select([('converged','=','True')])] #
-    
     # get images and set parameters
     if config.label_set:
         images = read_trajectory(config.label_set)
@@ -566,10 +562,6 @@ def label(config: DictConfig):
             indices = config.indices
         else:
             raise RuntimeError('Valid index for labeling set should be provided!')
-        # Remove converged structures from the label set
-        if db_al_ind:
-            _,rm,_ = np.intersect1d(indices, db_al_ind,return_indices=True)
-            indices = np.delete(indices,rm)
         images = [pool_traj[i] for i in indices]
         log.info(f"Labeling {len(images)} structures in pool set: {config.pool_set}")    
     else:
@@ -599,6 +591,12 @@ def label(config: DictConfig):
             images = split_list(images, config.imgs_per_job, by_chunk_size=True)
         images = images[config.job_order]          # specify which parts of the images to label
 
+    # create or read existing ase database
+    db = connect(config.run_path+'/dft_structures.db')
+    db.metadata ={
+        'path': config.run_path+'/dft_structures.db',
+    }
+
     # Set up calculator
     annotator = instantiate(config.annotator)
     
@@ -606,18 +604,31 @@ def label(config: DictConfig):
     all_converged = []
     for i, atoms in enumerate(images):
         # Label the structure with the choosen method
-        converged = annotator.annotate(atoms)
-        all_converged.append(converged)
-        # Save the labeled structure with the index it comes from.
-        al_ind = indices[i]
-        db.write(atoms, al_ind=al_ind, converged=converged)
+        try:
+            existing_converged = db[i+1].get('converged')
+            if not existing_converged:
+                converged = annotator.annotate(atoms)
+                db.update(id=i+1, atoms=atoms, converged=converged)
+                all_converged.append(converged)
+                log.info(f"Recomputing structure {i} converged: {converged}")
+            else:
+                log.info(f"Structure {i} converged. Skipping...")
+        except KeyError:
+            converged = annotator.annotate(atoms)
+            db.write(atoms, converged=converged)
+            all_converged.append(converged)
     
     # write to datapath
     if config.datapath is not None:
-        log.info(f"Write atoms to {config.datapath}") 
+        log.info(f"Write atoms to {config.datapath}.") 
         total_dataset = Trajectory(config.datapath, 'a')
-        for row in db.select([('converged','=','True')]):
-            total_dataset.write(row.toatoms())
+        for row in db.select(converged=True):
+            if row.get('stored'):
+                log.info(f"Structure {row.id - 1} is already stored in <{config.datapath}>. Skipping...")
+            else:
+                db.update(id=row.id, stored=True)
+                log.info(f"Write structure {row.id - 1} to <{config.datapath}>")
+                total_dataset.write(row.toatoms())
     
     if not all(all_converged):
         raise RuntimeError(f'Structures {[i for i, converged in enumerate(all_converged) if not converged]} are not converged!')
