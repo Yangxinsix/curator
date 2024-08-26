@@ -16,7 +16,8 @@ simulate_path: Final = 'simulate'
 select_path: Final = 'select'
 label_path: Final = 'label'
 
-# keys inferred in workflow: model_path, init_traj, pool_set, al_info
+# keys inferred in workflow: model_path, init_traj, pool_set, al_info, start_index
+# user specified arguments that can be different from worflow defaults: read_traj (init_traj), image_index (start_index)
 
 path_set = set([
     'run_path', 
@@ -134,9 +135,12 @@ def simulate(
 
             # TODO: load old model, init_traj, load compiled model
             cfg.model_path = model_path
+            # load user specified arguments: read_traj, image_index
             if iteration > 0:
-                init_traj = cfg.simulator.pop('read_traj', None)
-                cfg.simulator.init_traj = init_traj or cfg.simulator.out_traj.replace(f'iter_{iteration}', f'iter_{iteration-1}')
+                init_traj = cfg.simulator.pop('read_traj', cfg.simulator.out_traj.replace(f'iter_{iteration}', f'iter_{iteration-1}'))   #use traj from last iteration if no new traj is specified
+                start_index = cfg.simulator.pop('image_index', -1)  # use last image if not specified
+                cfg.simulator.init_traj = init_traj
+                cfg.simulator.start_index = start_index
 
             pool_path[name] = [cfg.simulator.out_traj]
             try:
