@@ -154,8 +154,9 @@ class AseDataReader(DataReader):
             pass
         
         try: 
-            stress = torch.tensor(atoms.get_stress(apply_constraint=False), dtype=self.default_dtype)
-            atoms_data[properties.stress] = stress.unsqueeze(0)
+            stress = torch.tensor(atoms.get_stress(apply_constraint=False), dtype=self.default_dtype).unsqueeze(0)
+            atoms_data[properties.stress] = stress
+            atoms_data[properties.virial] = stress * atoms.get_volume()
         except (AttributeError, RuntimeError):
             pass
         
