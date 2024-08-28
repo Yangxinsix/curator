@@ -25,12 +25,13 @@ class VASPInspector(Inspector):
         copy('OSZICAR', f'OSZICAR_{self.count}')
         converged = self.is_converged()
         if not converged:
-            self.logger.warning(f"Structure {self.count} is not converged.")
+            self.logger.warning(f"Structure {self.count} is not converged over {self.nelm} electronic steps. Try to increase max steps.")
         self.count += 1
 
         return converged
     
     def sweep(self) -> None:
+        self.logger.info("Sweeping files: WAVECAR, CHGCAR...")
         os.remove('WAVECAR')
         os.remove('CHGCAR')
 
