@@ -1,0 +1,5 @@
+_target_: curator.simulate.calculator
+_partial: true
+transforms: []
+energy_scale: 1.0
+forces_scale: 1.0
