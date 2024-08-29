@@ -3,12 +3,10 @@ from torch import nn
 import torch.nn.functional as F
 from typing import List, Optional, Dict, Type, Any
 from curator.data import properties
+from curator.train.model_output import ModelOutput
 from pytorch_lightning.utilities.types import STEP_OUTPUT
 import warnings
 import pytorch_lightning as pl
-import torchmetrics
-from torchmetrics import Metric
-import copy
 from pytorch_lightning import LightningDataModule
 from omegaconf import DictConfig
 import logging
@@ -137,114 +135,8 @@ class EnsembleModel(nn.Module):
 class DropoutModel(nn.Module):
     pass
 
-class ModelOutput(nn.Module):
-    """ Base class for model outputs."""
-    def __init__(
-        self,
-        name: str,
-        loss_fn: Optional[nn.Module] = None,
-        loss_weight: float = 1.0,
-        metrics: Optional[Dict[str, Metric]] = None,
-        target_property: Optional[str]=None,
-        # per_species_loss: bool=False,
-        # per_species_metrics: bool=False,
-    ) -> None:
-        """ Base class for model outputs. 
-
-        Args:
-            name (str): Name of the output
-            loss_fn (Optional[nn.Module], optional): Loss function. Defaults to None.
-            loss_weight (float, optional): Loss weight. Defaults to 1.0.
-            metrics (Optional[Dict[str, Metric]], optional): Metrics. Defaults to None.
-            target_property (Optional[str], optional): Target property. Defaults to None.
-        """
-        super().__init__()
-        self.name = name
-        self.target_property = target_property or name
-        self.loss_fn = loss_fn
-        self.loss_weight = loss_weight
-        self.train_metrics = nn.ModuleDict(metrics)
-        self.val_metrics = nn.ModuleDict({k: copy.copy(v) for k, v in metrics.items()})
-        self.test_metrics = nn.ModuleDict({k: copy.copy(v) for k, v in metrics.items()})
-        
-        # here we found a serious bug that deepcopy is not working in hydra instantiate!!!
-        self.metrics = {
-            "train": self.train_metrics,
-            "val": self.val_metrics,
-            "test": self.test_metrics,
-        }
-        
-        # self.per_species_loss = per_species_loss
-        # self.per_species_metrics = per_species_metrics
-    
-    def calculate_loss(self, pred: Dict, target: Dict, return_num_obs=True) -> torch.Tensor:
-        if self.loss_weight == 0 or self.loss_fn is None:
-            return 0.0
-
-        loss = self.loss_weight * self.loss_fn(
-            pred[self.name], target[self.target_property]
-        )
-        num_obs = target[self.target_property].view(-1).shape[0]
-        
-        if return_num_obs:
-            return loss, num_obs
-        
-        return loss
-
-    def update_metrics(self, pred: Dict, target: Dict, subset: str) -> None:
-        for metric in self.metrics[subset].values():
-            metric(pred[self.name], target[self.target_property])
-
-    def calculate_metrics(self, pred: Dict, target: Dict, subset: str) -> None:
-        batch_val = OrderedDict()
-        # if self.per_species_metrics:
-        #     pass
-        for k in self.metrics[subset]:
-            metric = self.metrics[subset][k]
-            if isinstance(metric, torchmetrics.Metric):
-                metric(pred[self.name].detach(), target[self.target_property].detach())
-            else:
-                metric = metric(pred[self.name].detach(), target[self.target_property].detach())
-            batch_val[f"{subset}_{self.name}_{k}"] = metric
-        
-        return batch_val
-    
-    def reset_loss(self, subset: Optional[str]=None) -> None:
-        if subset is None:
-            for k in self.loss:
-                self.loss[k] = 0.0
-                self.num_obs[k] = 0
-        else:
-            self.loss[subset] = 0.0
-            self.num_obs[subset] = 0
-    
-    def reset_metrics(self, subset: Optional[str]=None) -> None:
-        if subset is None:
-            for k1 in self.metrics:
-                for k2 in self.metrics[k1]:
-                    self.metrics[k1][k2].reset()
-        else:
-            for k in self.metrics[subset]:
-                self.metrics[subset][k].reset()
-    
-    # # def register_key(self,)
-    
-    # def add_metrics(self, name: str, metric: Metric, subset: Optional[str]=None) -> None:
-    #     if subset is None:
-    #         for k1 in self.metrics:
-    #             self.metrics[k1][name] = metric
-    #     else:
-    #         self.metrics[subset][name] = metric
-    
-    # def update_metrics(self, metric_dict: Dict[str, Metric], subset: Optional[str]=None) -> None:
-    #     if subset is None:
-    #         for k1 in self.metrics:
-    #             self.metrics[k1].update(metric_dict)
-    #     else:
-    #         self.metrics[subset].update(metric_dict)
-
-
 logger = logging.getLogger(__name__)    # console output
+# ligtning model
 class LitNNP(pl.LightningModule):
     """ Base class for neural network potentials using PyTorch Lightning."""
     def __init__(
@@ -278,6 +170,11 @@ class LitNNP(pl.LightningModule):
         self.scheduler_monitor = scheduler_monitor
         self.warmup_steps = warmup_steps
         self.save_entire_model = save_entire_model
+
+        # metrics related things
+        self.metric_names_initialized = False          # for first batch
+        self.metric_names_logged = False               # for first batch logging
+        self.metric_names = None                       # for epoches
         
     def setup(self, stage: Optional[str]=None) -> None:
         if stage == "fit":
@@ -322,17 +219,17 @@ class LitNNP(pl.LightningModule):
     #             output.metrics[subset][k].reset()
     
     
-    def _get_metrics_key(self, subset: str):
-        msgs = [f'{"total_loss":>16s}']
-        msgs += [output.name + '_loss' for output in self.outputs]
-        msgs += [output.name + '_' + metric for output in self.outputs for metric in output.metrics[subset]]
-        msgs = [f'{msg:>16s}' for msg in msgs]
-        return msgs
+    # def _get_metrics_key(self, subset: str):
+    #     msgs = [f'{"total_loss":>16s}']
+    #     msgs += [output.name + '_loss' for output in self.outputs]
+    #     msgs += [output.name + '_' + metric for output in self.outputs for metric in output.metrics[subset]]
+    #     msgs = [f'{msg:>16s}' for msg in msgs]
+    #     return msgs
     
-    def _get_metrics(self):
-        forward_cache = [f'{metric._forward_cache:>16.3g}' for metric in self.trainer._results.values()]
-        return forward_cache
-    
+    # def _get_metrics(self):
+    #     forward_cache = [f'{metric._forward_cache:>16.3g}' for metric in self.trainer._results.values()]
+    #     return forward_cache
+
     def on_train_start(self):
         logger.info("\n")
         logger.debug("Start training model")
@@ -347,22 +244,23 @@ class LitNNP(pl.LightningModule):
     def on_train_epoch_start(self):
         logger.info("\n")
         logger.debug("Training")
-        head = [f'# epoch      batch']
-        logger.info("".join(head + self._get_metrics_key(subset='train')))
+        if self.metric_names is not None:
+            head = [f'# epoch      batch']
+            logger.info("".join(head + [f'{m:>16s}' for m in self.metric_names]))
         
     def on_validation_epoch_start(self):
         torch.set_grad_enabled(True)
         logger.info("\n")
         logger.debug("Validating")
         head = [f'# epoch      batch']
-        logger.info("".join(head + self._get_metrics_key(subset='train')))
+        logger.info("".join(head + [f'{m:>16s}' for m in self.metric_names]))
     
     def on_test_epoch_start(self):
         torch.set_grad_enabled(True)
         logger.info("\n")
         logger.debug("Testing")
         head = [f'# epoch      batch']
-        logger.info("".join(head + self._get_metrics_key(subset='train')))
+        logger.info("".join(head + [f'{m:>16s}' for m in self.metric_names]))
     
     def training_step(self, batch: Dict, batch_idx: List[int]) -> torch.Tensor:
         pred = self.model(batch)
@@ -379,14 +277,32 @@ class LitNNP(pl.LightningModule):
         # when calculate metrics pred need to be scaled to get real units
         for layer in self.rescale_layers[::-1]:
             scaled_pred = layer.scale(pred, force_process=True)
-        for output in self.outputs:
-            batch_metrics = output.calculate_metrics(scaled_pred, batch, 'train')
-            self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False)
         
-        # # logging metric keys
-        # if self.current_epoch == 0 and not self._train_log_head:
-        #     logger.info("".join(self._get_metrics_key(subset='train')))
-        #     self._train_log_head = True
+        all_metrics = {}
+        for output in self.outputs:
+            for k, v in output.calculate_metrics(scaled_pred, batch, 'train').items():
+                all_metrics[k] = v
+        self.log_dict(all_metrics, on_step=True, on_epoch=True, prog_bar=False)
+        
+        # get metric names for first epoch
+        if not self.metric_names_initialized:
+            metric_names = [k.replace('train_', '') for k in loss_dict.keys()]
+            metric_names += [k.replace('train_', '') for k in all_metrics.keys()]
+
+            # collect metric names
+            if self.metric_names is None:
+                self.metric_names = metric_names
+            else:
+                for name in metric_names:
+                    if name not in self.metric_names:
+                        self.metric_names.append(name)
+
+            if not self.metric_names_logged:
+                metric_names = "".join([f'{m:>16s}' for m in self.metric_names])
+                metric_names = f'# epoch      batch' + metric_names
+                logger.info(metric_names)
+                self.metric_names_logged = True
+
         # logging metrics to console
         if batch_idx % self.trainer.log_every_n_steps == 0:
             msgs = [f'{self.current_epoch:>7d}', f'{batch_idx:>11d}']
@@ -394,7 +310,7 @@ class LitNNP(pl.LightningModule):
             logger.info("".join(msgs + forward_cache))
             
         return loss_dict['train_total_loss']
-    
+
     def validation_step(self, batch: Dict, batch_idx: List[int]) -> torch.Tensor:
         pred = self.model(batch)
         pred.update({k: v for k, v in batch.items() if k not in pred.keys()})
@@ -447,18 +363,27 @@ class LitNNP(pl.LightningModule):
         return loss_dict['test_loss']
     
     def on_train_epoch_end(self):
-        msgs = ['Train       # epoch'] + self._get_metrics_key(subset='train')
+        msgs = ['Train       # epoch'] + [f'{m:>16s}' for m in self.metric_names]
         metrics = [f'{self.current_epoch:>19d}']
         metrics += [f'{metric.compute():>16.3g}' for metric in self.trainer._results.values()]
+        # reset metrics
+        for output in self.outputs:
+            output.reset_metrics(subset='train')
+        # skip collecting metric names after first epoch
+        if not self.metric_names_initialized:
+            self.metric_names_initialized = True
+
         logger.info("".join(msgs))
         logger.info("".join(metrics))
     
     def on_validation_epoch_end(self):
         # validation end goes before train epoch
-        msgs = ['Validation  # epoch'] + self._get_metrics_key(subset='val')
+        msgs = ['Validation  # epoch'] + [f'{m:>16s}' for m in self.metric_names]
         metrics = [f'{self.current_epoch:>19d}']
         metrics += [f'{metric.compute():>16.3g}' for metric in self.trainer._results.values()]
-        
+        # reset metrics
+        for output in self.outputs:
+            output.reset_metrics(subset='val')
         logger.info("\n")
         logger.debug("Epoch summary:")
         logger.info("".join(msgs))
