@@ -1,4 +1,4 @@
-- _target_: curator.model.ModelOutput
+- _target_: curator.train.ModelOutput
   name: energy
   loss_fn:
     _target_: torch.nn.MSELoss
@@ -9,7 +9,7 @@
     rmse:
       _target_: torchmetrics.regression.MeanSquaredError
       squared: false
-- _target_: curator.model.ModelOutput
+- _target_: curator.train.ModelOutput
   name: forces
   loss_fn:
     _target_: torch.nn.MSELoss

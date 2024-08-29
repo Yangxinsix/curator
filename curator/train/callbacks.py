@@ -1,6 +1,5 @@
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import Callback
-from curator.model import LitNNP
 from torch_ema import ExponentialMovingAverage as EMA
 
 class ExponentialMovingAverage(Callback):
@@ -10,7 +9,7 @@ class ExponentialMovingAverage(Callback):
         self.use_num_updates = use_num_updates
         self._to_load = None
 
-    def on_fit_start(self, trainer: "pl.Trainer", pl_module: LitNNP):
+    def on_fit_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule"):
         if self.ema is None:
             self.ema = EMA(pl_module.model.parameters(), decay=self.decay, use_num_updates=self.use_num_updates)
         if self._to_load is not None:
@@ -26,11 +25,11 @@ class ExponentialMovingAverage(Callback):
     ) -> None:
         self.ema.restore()
 
-    def on_train_batch_end(self, trainer, pl_module: LitNNP, *args, **kwargs):
+    def on_train_batch_end(self, trainer, pl_module, *args, **kwargs):
         self.ema.update()
 
     def on_validation_epoch_start(
-        self, trainer: "pl.Trainer", pl_module: LitNNP, *args, **kwargs
+        self, trainer: "pl.Trainer", pl_module, *args, **kwargs
     ):
         self.ema.store()
         self.ema.copy_to()

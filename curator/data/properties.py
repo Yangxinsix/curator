@@ -6,15 +6,15 @@ import torch
 Type = Dict[str, torch.Tensor]
 
 # basic properties
-atomic_numbers: Final[str] = "_atomic_number"
+atomic_numbers: Final[str] = "atomic_number"
 Z: Final[str] = atomic_numbers
-positions: Final[str] = "_positions"
+positions: Final[str] = "positions"
 R: Final[str] = positions
-cell: Final[str] = "_cell"
-n_atoms : Final[str] = "_n_atoms"
+cell: Final[str] = "cell"
+n_atoms : Final[str] = "n_atoms"
 n_types : Final[str] = "_n_types"              # read from config file, useful for onehot embedding in nequip
 atomic_types: Final[str] = "_atomic_types"     # map chemical symbols to numbers
-symbols: Final[str] = "_symbols"
+symbols: Final[str] = "symbols"
 image_idx: Final[str] = "_image_index"             # image index of atoms in a batch
 
 # neighbor list related properties
