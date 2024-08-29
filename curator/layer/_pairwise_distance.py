@@ -8,7 +8,7 @@ def get_pair_distance(data: properties.Type, force_process: bool=False) -> prope
         pos = data[properties.positions]
         edge = data[properties.edge_idx]
         edge_diff = pos[edge[:, 1]] - pos[edge[:, 0]]
-        if properties.cell in data:
+        if properties.cell_displacements in data:
             edge_diff += data[properties.cell_displacements]
         data[properties.edge_diff] = edge_diff 
         data[properties.edge_dist] = torch.linalg.norm(edge_diff, dim=1)
@@ -44,6 +44,7 @@ class PairwiseDistance(torch.nn.Module):
             
         if self.compute_distance_from_R:
             if self.batch_nl is None:
+                data[properties.positions].requires_grad_()
                 data = get_pair_distance(data, force_process=True)
         else:
             if self.compute_forces:

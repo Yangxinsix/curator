@@ -35,6 +35,41 @@ class AseDataset(torch.utils.data.Dataset):
         atoms_data = self.atoms_reader(atoms)
         return atoms_data
 
+class BambooDataset(torch.utils.data.Dataset):
+    def __init__(self, datapath):
+        # cutoff is 5.0 A
+        self.data = torch.load(datapath, map_location='cpu')
+
+    def __getitem__(self, index):
+        left_a, right_a = self.data['cumsum_atom'][index], self.data['cumsum_atom'][index+1]
+        left_e, right_e = self.data['cumsum_edge'][index], self.data['cumsum_edge'][index+1]
+        atoms_dict = {
+            properties.Z: self.data['atom_types'][left_a:right_a],
+            properties.R: self.data['pos'][left_a:right_a],
+            properties.n_atoms: (right_a - left_a).unsqueeze(0),
+            properties.n_pairs: (right_e - left_e).unsqueeze(0),
+            properties.edge_idx: self.data['edge_index'][left_e:right_e] - self.data['cumsum_atom'][index],
+            properties.edge_diff: self.data['pos'][self.data['edge_index'][left_e:right_e, 1]] - \
+                self.data['pos'][self.data['edge_index'][left_e:right_e, 0]],
+            properties.energy: self.data['energy'][index].unsqueeze(0),
+            properties.forces: self.data['forces'][left_a:right_a],
+            properties.virial: self.data['virial'][index].flatten()[[0, 4, 8, 5, 2, 1]].unsqueeze(0),
+        }
+
+        return atoms_dict
+
+    def to_ase_atoms(self, index):
+        atoms_dict = self.__getitem__(index)
+        atoms = Atoms(
+            symbols=atoms_dict[properties.Z].numpy(),
+            positions=atoms_dict[properties.R].numpy(),
+        )
+
+        return atoms
+
+    def __len__(self):
+        return len(self.data['energy'])
+
 class NumpyDataset(torch.utils.data.Dataset):
     def __init__(
         self, 

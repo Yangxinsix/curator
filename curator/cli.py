@@ -5,7 +5,12 @@ from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf, open_dict
 import sys, os, json
 from pathlib import Path
-from .utils import read_user_config, CustomFormatter, register_resolvers
+from .utils import (
+    read_user_config, 
+    CustomFormatter, 
+    register_resolvers,
+    find_best_model,
+)
 import logging
 import socket
 import contextlib
@@ -63,30 +68,38 @@ def train(config: DictConfig) -> None:
         log.debug("Seed randomly...")
     
     # Initiate the datamodule
-    log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_datapath}")
-    if not os.path.isfile(config.data.datapath or config.data.train_datapath):
-        raise RuntimeError("Please provide valid data path!")
+    log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_path}")
     datamodule: LightningDataModule = hydra.utils.instantiate(config.data)
     
     # Initiate the model
-    log.debug(f"Instantiating model <{config.model._target_}>")
+    log.debug(f"Instantiating model <{config.model._target_}> with GNN representation <{config.model.representation._target_}>")
     model = hydra.utils.instantiate(config.model)
     log.debug(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,d}")
     
     # Initiate the task and load old model, if any
     log.debug(f"Instantiating task <{config.task._target_}>")
     task: LitNNP = hydra.utils.instantiate(config.task, model=model)
+
+    # TODO: enable loading existing optimizers and schedulers
     if config.model_path is not None:
-        log.debug(f"Loading trained model from {config.model_path}")
         # When using CSVlogger and save_hyperparameters() together, the code will report pickle error.
         # So we choose to save the entire model and outputs in LitNNP and then reload it
+        config.model_path = find_best_model(config.model_path)[0]
+        log.debug(f"Loading trained model from {config.model_path}")
         if config.task.load_entire_model:
             state_dict = torch.load(config.model_path)
             model = state_dict['model']
             outputs = state_dict['outputs']
         else:
             outputs = instantiate(config.task.outputs)
-        task = LitNNP.load_from_checkpoint(checkpoint_path=config.model_path, model=model, outputs=outputs)
+        if config.task.load_weights_only:
+            task = instantiate(config.task, model=model)
+        else:
+            task = LitNNP.load_from_checkpoint(
+                checkpoint_path=config.model_path, 
+                model=model, 
+                outputs=outputs,
+            )
     # Save extra arguments in checkpoint
     task.save_configuration(config)
     
@@ -100,23 +113,11 @@ def train(config: DictConfig) -> None:
     # Deploy model to a compiled model
     if config.deploy_model:
         # Load the model
-        model_path = [str(f) for f in Path(f"{config.run_path}").rglob("best_model_epoch*")]
-        val_loss = float('inf')
-        index = 0
-        for i, p in enumerate(model_path):
-            loss = float(p.split('=')[-1].rstrip('.ckpt'))
-            if loss < val_loss:
-                val_loss = loss
-                index = i
-        model_path = model_path[index]
-          
+        model_path, val_loss = find_best_model(run_path=config.run_path + '/model_path')
+        
         # Compile the model
-        outputs = torch.load(model_path)['outputs']
         log.debug(f"Deploy trained model from {model_path} with validation loss of {val_loss:.3f}")
-        task = LitNNP.load_from_checkpoint(checkpoint_path=f"{model_path}", model=model, outputs=outputs)
-        model_compiled = script(task.model)
-        metadata = {"cutoff": str(model_compiled.representation.cutoff).encode("ascii")}
-        model_compiled.save(f"{config.run_path}/compiled_model.pt", _extra_files=metadata)
+        deploy(model_path, f"{config.run_path}/compiled_model.pt")
         log.debug(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
 
 # Training without Pytorch Lightning
@@ -346,7 +347,11 @@ def tmp_train(config: DictConfig):
         log.info(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
 
 # Deploy the model and save a compiled model
-def deploy(model_path: str, compiled_model_path: str = 'compiled_model.pt', cfg_path: Optional[str] = None):
+def deploy(
+        model_path: str, 
+        compiled_model_path: str = 'compiled_model.pt', 
+        cfg_path: Optional[str] = None
+    ):
     """ Deploy the model and save a compiled model.
 
     Args:
@@ -360,9 +365,9 @@ def deploy(model_path: str, compiled_model_path: str = 'compiled_model.pt', cfg_
     from e3nn.util.jit import script
 
     # Load model
-    loaded_model = torch.load(model_path)
+    loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
 
-    if 'model' in loaded_model:
+    if 'model' in loaded_model and cfg_path is None:
         model = loaded_model['model']
     else:
         # Load the arguments
@@ -395,7 +400,6 @@ def simulate(config: DictConfig):
     Returns:
         None
     """
-    import torch
     from .utils import load_models
     from curator.model import EnsembleModel
     from curator.simulate import MLCalculator
@@ -425,8 +429,7 @@ def simulate(config: DictConfig):
     model = load_models(config.model_path, config.device)
     
     # Set up calculator
-    if len(model) > 1:
-        model = EnsembleModel(model)
+    model = EnsembleModel(model) if len(model) > 1 else model[0]
     MLcalc = MLCalculator(model)
 
     # Setup simulator
@@ -442,16 +445,26 @@ def select(config: DictConfig):
     Returns:
         None
     """
+    from curator.data import read_trajectory
     import torch
     from ase.io import read
-    from curator.selection import GeneralActiveLearning
+    from curator.select import GeneralActiveLearning
     import json
     from curator.data import AseDataset
+    from .utils import load_models
 
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="select")
     
+    # set up logger
+    # set logger
+    fh = logging.FileHandler(os.path.join(config.run_path, "selection.log"), mode="w")
+    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
+    fh.setLevel(logging.DEBUG)
+    log.addHandler(fh)
+    log.info("Running on host: " + str(socket.gethostname()))
+
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
     log.info("Running on host: " + str(socket.gethostname()))
@@ -461,50 +474,36 @@ def select(config: DictConfig):
         log.info(f"Seed with <{config.seed}>")
     else:
         log.info("Seed randomly...")
-
-    # Load the arguments
-    if config.cfg is not None:
-        config = read_user_config(config.cfg, config_path="configs", config_name="select")
     
     # Set up datamodule and load training and validation set
     # The active learning only works for uncompiled model at the moment
-    model_pt = list(Path(config.model_path).rglob('*best_model.pth'))
-    models = []
-    for each in model_pt:
-        model_dict = torch.load(each, map_location=torch.device(config.device))
-        datamodule = instantiate(model_dict['data_params'])
-        datamodule.setup()
-        model = instantiate(model_dict['model_params'])
-        model.initialize_modules(datamodule)
-        model.load_state_dict(model_dict['model'])
-        models.append(model)
-
+    log.info("Using model from <{}>".format(config.model_path))
+    models = load_models(config.model_path, config.device, load_compiled=False)
     cutoff = models[0].representation.cutoff
 
     # Load the pool data set and training data set
-    if config.pool_set and config.train_set:
-        if isinstance(config.pool_set, list):
-            pool_set = []
-            for traj in config.pool_set:
-                if Path(traj).stat().st_size > 0:
-                    pool_set += read(traj, index=':') 
-        else:
-            pool_set = read(config.pool_set, index=':')
+    if config.dataset and config.split_file:
+        dataset = AseDataset(read_trajectory(config.dataset), cutoff=cutoff)
+        with open(config.split_file) as f:
+            split = json.load(f)
+        data_dict = {}
+        for k in split:
+            data_dict[k] = torch.utils.data.Subset(dataset, split[k])
+    elif config.pool_set:
+        data_dict = {'pool': AseDataset(read_trajectory(config.pool_set), cutoff=cutoff)}
+        if config.train_set:
+            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff)
     else:
         raise RuntimeError("Please give valid pool data set for selection!")
-    
-    data_dict = {
-            'pool': AseDataset(pool_set, cutoff=cutoff),
-            'train': AseDataset(config.train_set, cutoff=cutoff),
-        }
-    
+
+
     # Check the size of pool data set
     if len(data_dict['pool']) < config.batch_size * 10: 
-            log.warning(f"""The pool data set ({len(data_dict['pool'])}) is not large enough for selection!
-            It should be larger than 10 times batch size ({config.batch_size*10}).
-            Check your MD simulation!""")
+            log.warning(f"The pool data set ({len(data_dict['pool'])}) is not large enough for selection! " 
+                + f"It should be larger than 10 times batch size ({config.batch_size*10}). "
+                + "Check your simulation!")
     elif len(data_dict['pool']) < config.batch_size:
-        raise RuntimeError(f"""The pool data set ({len(data_dict['pool'])}) is not large enough for selection! Add more data or change batch size {config.selection.batch_size}.""")
+        raise RuntimeError(f"""The pool data set ({len(data_dict['pool'])}) is not large enough for selection! Add more data or change batch size {config.batch_size}.""")
 
     # Select structures based on the active learning method
     al = GeneralActiveLearning(
@@ -512,17 +511,19 @@ def select(config: DictConfig):
         selection=config.method, 
         n_random_features=config.n_random_features,
     )
-    indices = al.select(models, data_dict, al_batch_size=config.batch_size)
+    indices = al.select(models, data_dict, al_batch_size=config.batch_size, debug=config.debug)
 
     # Save the selected indices
     al_info = {
         'kernel': config.kernel,
         'selection': config.method,
-        'dataset': config.pool_set,
+        'dataset': list(config.dataset) if config.dataset and config.split_file else list(config.pool_set),
         'selected': indices,
     }
     with open(config.run_path+'/selected.json', 'w') as f:
         json.dump(al_info, f)
+    
+    log.info(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for selected structures!")
 
 # Label the dataset selected by active learning
 @hydra.main(config_path="configs", config_name="label", version_base=None)   
@@ -534,35 +535,34 @@ def label(config: DictConfig):
     Returns:
         None
     """
+    from curator.data import read_trajectory
     from ase.db import connect
-    from ase.io import read, Trajectory
+    from ase.io import Trajectory
     import json
     import numpy as np
+    from curator.label import AtomsAnnotator
 
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="label")
 
+    # set up logger
+    # set logger
+    fh = logging.FileHandler(os.path.join(config.run_path, "labelling.log"), mode="w")
+    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
+    fh.setLevel(logging.DEBUG)
+    log.addHandler(fh)
+
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
     log.info("Running on host: " + str(socket.gethostname()))
 
-    # Set up dataframe and load possible converged data id's
-    db = connect(config.run_path+'/dft_structures.db')
-    db_al_ind = [row.al_ind for row in db.select([('converged','=','True')])] #
-    
     # get images and set parameters
     if config.label_set:
-        images = read(config.label_set, index = ':')
+        images = read_trajectory(config.label_set)
+        log.info(f"Labeling the structures in {config.label_set}")
     elif config.pool_set:
-        if isinstance(config.pool_set, list):
-            pool_traj = []
-            for pool_path  in config.pool_set:
-                if Path(pool_path).stat().st_size > 0:
-                    pool_traj += read(pool_path, ':')
-        else:
-            pool_traj = Trajectory(config.pool_set)
-    
+        pool_traj = read_trajectory(config.pool_set)
         # Use active learning indices if provided
         if config.al_info:
             with open(config.al_info) as f:
@@ -571,34 +571,76 @@ def label(config: DictConfig):
             indices = config.indices
         else:
             raise RuntimeError('Valid index for labeling set should be provided!')
-        # Remove converged structures from the label set
-        if db_al_ind:
-            _,rm,_ = np.intersect1d(indices, db_al_ind,return_indices=True)
-            indices = np.delete(indices,rm)
-        images = [pool_traj[i] for i in indices]      
+        images = [pool_traj[i] for i in indices]
+        log.info(f"Labeling {len(images)} structures in pool set: {config.pool_set}")    
     else:
         raise RuntimeError('Valid configarations for DFT calculation should be provided!')
     
+    # split jobs if needed to accelerate labelling if you have a lot of resources
+    if config.split_jobs or config.imgs_per_job:
+        def split_list(lst, chunk_or_num, by_chunk_size=False):
+            if by_chunk_size:
+                num_chunks, remainder = divmod(len(lst), chunk_or_num)
+            else:
+                chunk_or_num, remainder = divmod(len(lst), chunk_or_num)
+            if by_chunk_size:
+                return [
+                    lst[i * chunk_or_num + min(i, remainder):(i + 1) * chunk_or_num + min(i + 1, remainder)]
+                    for i in range(num_chunks)
+                ]
+            else:
+                return [
+                    lst[i * (chunk_or_num + (1 if i < remainder else 0)):(i + 1) * (chunk_or_num + (1 if i < remainder else 0))]
+                    for i in range(chunk_or_num)
+                ]
+
+        if config.split_jobs:
+            images = split_list(images, config.split_jobs)        
+        if config.imgs_per_job:
+            images = split_list(images, config.imgs_per_job, by_chunk_size=True)
+        images = images[config.job_order]          # specify which parts of the images to label
+
+    # create or read existing ase database
+    db = connect(config.run_path+'/dft_structures.db')
+    db.metadata ={
+        'path': config.run_path+'/dft_structures.db',
+    }
+
     # Set up calculator
-    if config.labeling_method.method == 'vasp':
-        from curator.labeling.vasp import VASP
-        label = VASP(config.labeling_method.parameters)
-    elif config.labeling_method.method== 'gpaw':
-        from curator.labeling.gpaw import GPAW
-        label = GPAW(config.labeling_method.parameters)
-    elif config.user_method:
-        raise NotImplementedError('User defined method is not implemented yet!')
+    annotator = instantiate(config.annotator)
     
     # Label the structures
+    all_converged = []
     for i, atoms in enumerate(images):
         # Label the structure with the choosen method
-        check_result = label.label(atoms)
-        # Save the labeled structure with the index it comes from.
-        al_ind = indices[i]
-        db.write(atoms, al_ind=al_ind, converged=check_result)
+        try:
+            existing_converged = db[i+1].get('converged')
+            if not existing_converged:
+                converged = annotator.annotate(atoms)
+                db.update(id=i+1, atoms=atoms, converged=converged)
+                all_converged.append(converged)
+                log.info(f"Recomputing structure {i} converged: {converged}")
+            else:
+                log.info(f"Structure {i} converged. Skipping...")
+        except KeyError:
+            converged = annotator.annotate(atoms)
+            db.write(atoms, converged=converged)
+            all_converged.append(converged)
     
+    # write to datapath
     if config.datapath is not None:
+        log.info(f"Write atoms to {config.datapath}.") 
         total_dataset = Trajectory(config.datapath, 'a')
-        atoms = []
-        for row in db.select([('converged','=','True')]):
-            total_dataset.write(row.toatoms())
+        for row in db.select(converged=True):
+            if row.get('stored'):
+                log.info(f"Structure {row.id - 1} is already stored in <{config.datapath}>. Skipping...")
+            else:
+                db.update(id=row.id, stored=True)
+                log.info(f"Write structure {row.id - 1} to <{config.datapath}>")
+                total_dataset.write(row.toatoms())
+    
+    if not all(all_converged):
+        raise RuntimeError(f'Structures {[i for i, converged in enumerate(all_converged) if not converged]} are not converged!')
+    else:
+        # sweep all unnessary files after labeling
+        annotator.sweep()

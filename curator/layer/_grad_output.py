@@ -1,5 +1,5 @@
 import torch
-from typing import Tuple, Optional, List
+from typing import Tuple, Optional, List, Callable, Union
 from curator.data import properties
 from ase.stress import full_3x3_to_voigt_6_stress
         
@@ -8,49 +8,25 @@ class GradientOutput(torch.nn.Module):
         self,
         grad_on_edge_diff: bool = True,
         grad_on_positions: bool = False,
-        compute_forces: bool = True,
-        compute_stress: bool = False,
+        model_outputs: List[str] = ['forces'],       # properties that need to be calculated, can be forces, stress, virial, etc.
+        update_callback: Optional[Callable] = None,  # Add a callback parameter
     ) -> None:
+        # TODO: define a set for allowed model outputs
         super().__init__()
         self.grad_on_edge_diff = grad_on_edge_diff
         self.grad_on_positions = grad_on_positions
-        self._compute_forces = compute_forces
-        self._compute_stress = compute_stress
-        self.model_outputs = []
-        self.update_model_outputs()
-    
-    @property
-    def compute_forces(self):
-        return self._compute_forces
+        self.update_callback = update_callback
+        self.model_outputs = model_outputs
 
-    @compute_forces.setter
-    def compute_forces(self, value: bool):
-        self._compute_forces = value
-        self.update_model_outputs()
-
-    @property
-    def compute_stress(self):
-        return self._compute_stress
-
-    @compute_stress.setter
-    def compute_stress(self, value: bool):
-        self._compute_stress = value
-        self.update_model_outputs()
-
-    def update_model_outputs(self):
-        if self._compute_forces:
-            if "forces" not in self.model_outputs:
-                self.model_outputs.append("forces")
+    @torch.jit.ignore
+    def update_model_outputs(self, outputs: Union[List[str], str]):
+        if isinstance(outputs, str):
+            self.model_outputs.append(outputs)
         else:
-            if "forces" in self.model_outputs:
-                self.model_outputs.remove("forces")
-
-        if self._compute_stress:
-            if "stress" not in self.model_outputs:
-                self.model_outputs.append("stress")
-        else:
-            if "stress" in self.model_outputs:
-                self.model_outputs.remove("stress")
+            self.model_outputs.extend(outputs)
+        # update parent model
+        if self.update_callback:
+            self.update_callback()
 
     def forward(
         self,
@@ -63,7 +39,7 @@ class GradientOutput(torch.nn.Module):
             edge_diff = data[properties.edge_diff]
             forces_dim = int(torch.sum(data[properties.n_atoms]))
             edge_idx = data[properties.edge_idx]
-            if self.compute_forces:
+            if 'forces' in self.model_outputs:
                 grad_outputs : List[Optional[torch.Tensor]] = [torch.ones_like(energy)]    # for model deploy
                 dE_ddiff = torch.autograd.grad(
                     [energy,],
@@ -86,30 +62,35 @@ class GradientOutput(torch.nn.Module):
                 # Reference: https://en.wikipedia.org/wiki/Virial_stress
                 # This method calculates virials by giving pair-wise force components
                 
-                if self.compute_stress:
-                    if properties.cell in data:
-                        image_idx = data[properties.image_idx]
-                        atomic_stress = torch.einsum("ij, ik -> ijk", edge_diff, dE_ddiff)           # I'm quite not sure if a negative sign should be added before dE_ddiff, but I think it should be right
+                if 'stress' in self.model_outputs or 'virial' in self.model_outputs:
+                    image_idx = data[properties.image_idx]
+                    atomic_virial = torch.einsum("ij, ik -> ijk", edge_diff, dE_ddiff)           # I'm quite not sure if a negative sign should be added before dE_ddiff, but I think it should be right
+                    # stress = torch.zeros_like(cell).index_add(0, , atomic_stress)
+                    atomic_virial = torch.zeros(
+                        (forces_dim, 3, 3),                                         
+                        dtype=forces.dtype,
+                        # it seens like the calculation is not very right... because f_ij is not absolutely right here. Maybe we need to do something like in force calculation
+                        # add i_stress and j_stress together then it is the total stress. need verification
+                        device=forces.device).index_add(0, edge_idx[:, 0], atomic_virial)
+                    # j_stress = torch.zeros_like(i_stress).index_add(0, edge_idx[:, 1], -atomic_stress)
+                    # atomic_stress = i_stress + j_stress          
+                    virial = torch.zeros(
+                        energy.shape[0], 3, 3, 
+                        dtype=forces.dtype, 
+                        device=forces.device).index_add(0, image_idx, atomic_virial)  # don't need to divide by two
+                    data[properties.virial] = virial.view(-1, 9)[:, [0, 4, 8, 5, 2, 1]]
+                    if properties.cell in data and 'stress' in self.model_outputs:
                         cell = data[properties.cell].view(-1, 3, 3)
                         volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1)
-                        i_stress = torch.zeros(
-                            (forces_dim, 3, 3),                                         
-                            dtype=forces.dtype,
-                            # it seens like the calculation is not very right... because f_ij is not absolutely right here. Maybe we need to do something like in force calculation
-                            # add i_stress and j_stress together then it is the total stress. need verification
-                            device=forces.device).index_add(0, edge_idx[:, 0], atomic_stress)
-                        j_stress = torch.zeros_like(i_stress).index_add(0, edge_idx[:, 1], atomic_stress)
-                        atomic_stress = -i_stress + j_stress          
-                        stress = torch.zeros_like(cell).index_add(0, image_idx, atomic_stress)
-                        stress = stress / volumes[:, None, None] / 2
-                        data[properties.stress] = stress
+                        stress = - virial / volumes[:, None, None]
+                        data[properties.stress] = stress.view(-1, 9)[:, [0, 4, 8, 5, 2, 1]]
             
         elif self.grad_on_positions:
             energy = data[properties.energy]
             grad_outputs : List[Optional[torch.Tensor]] = [torch.ones_like(energy)]
-            if self.compute_forces:
+            if 'forces' in self.model_outputs:
                 grad_inputs = [data[properties.positions]]
-                if self.compute_stress:
+                if 'stress' in self.model_outputs:
                     grad_inputs.append(data[properties.strain])
                 grads = torch.autograd.grad(
                     [energy,],
@@ -123,14 +104,15 @@ class GradientOutput(torch.nn.Module):
                     dEdR = torch.zeros_like(data[properties.positions])
                 data[properties.forces] = -dEdR
                     
-                if self.compute_stress:
+                if 'stress' in self.model_outputs:
                     if properties.cell in data:
                         stress = grads[1]
                         if stress is None:
                             stress = torch.zeros_like(data[properties.cell])
                         cell = data[properties.cell].view(-1, 3, 3)
                         volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1)
-                        data[properties.stress] = stress / volumes[:, None, None]
+                        stress /= volumes[:, None, None]
+                        data[properties.stress] = stress.view(-1, 9)[:, [0, 4, 8, 5, 2, 1]] 
         
         else:
             raise ValueError("Gradients must be calculated with respect to positions or R_ij. Nothing is given!")

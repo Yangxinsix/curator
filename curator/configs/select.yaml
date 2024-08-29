@@ -1,12 +1,15 @@
 
 cfg: null
-seed: 0
+seed: 123
 run_path: .
 model_path: null
 device: cuda
+dataset: null
+split_file: null
 train_set: null
 pool_set: null # This can also be a list
-batch_size: 10
+batch_size: 100
 kernel: full-g
 method: lcmd_greedy
 n_random_features: 500
+debug: false

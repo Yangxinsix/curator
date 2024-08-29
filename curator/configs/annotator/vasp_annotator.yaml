@@ -1,0 +1,5 @@
+defaults:
+  - calculator: vasp
+
+_target_: curator.label.annotator.AtomsAnnotator
+inspector: null

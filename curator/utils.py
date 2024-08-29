@@ -1,14 +1,14 @@
 import torch
 from e3nn.util.jit import script
-from omegaconf import open_dict, OmegaConf, DictConfig
+from omegaconf import open_dict, OmegaConf, DictConfig, ListConfig
 from hydra import compose, initialize
 import hydra
 from hydra.utils import instantiate
 from collections import abc
 import logging
 from ase import units
-from pathlib import Path
-from typing import Optional
+from pathlib import Path, PosixPath
+from typing import Optional, Union
 
 def register_resolvers():
     OmegaConf.register_new_resolver("multiply", lambda x, y: x * y, replace=True)
@@ -16,30 +16,68 @@ def register_resolvers():
     OmegaConf.register_new_resolver("multiply_fs", lambda x: x * units.fs, replace=True)
     OmegaConf.register_new_resolver("divide_by_fs", lambda x: x / units.fs, replace=True)
 
-def load_model(model_file, device):
-    if model_file.suffix == '.pt':
+def split_list(lst, chunk_or_num, by_chunk_size=False):
+    if by_chunk_size:
+        num_chunks, remainder = divmod(len(lst), chunk_or_num)
+    else:
+        chunk_or_num, remainder = divmod(len(lst), chunk_or_num)
+    if by_chunk_size:
+        return [
+            lst[i * chunk_or_num + min(i, remainder):(i + 1) * chunk_or_num + min(i + 1, remainder)]
+            for i in range(num_chunks)
+        ]
+    else:
+        return [
+            lst[i * (chunk_or_num + (1 if i < remainder else 0)):(i + 1) * (chunk_or_num + (1 if i < remainder else 0))]
+            for i in range(chunk_or_num)
+        ]
+
+def load_model(model_file, device, load_compiled: bool=True):
+    if model_file.suffix == '.pt' and load_compiled:
         model = torch.jit.load(model_file, map_location=torch.device(device))
     else:
         model_dict = torch.load(model_file, map_location=torch.device(device))
-        datamodule = instantiate(model_dict['data_params'])
-        datamodule.setup()
-        model = instantiate(model_dict['model_params'])
-        model.initialize_modules(datamodule)
-        model.load_state_dict(model_dict['model'])
-    
+        if 'model' in model_dict:
+            model = model_dict['model']
+        else:
+            datamodule = instantiate(model_dict['data_params'])
+            datamodule.setup()
+            model = instantiate(model_dict['model_params'])
+            model.initialize_modules(datamodule)
+            model.load_state_dict(model_dict['model'])
+    model.to(device)
+
     return model
 
-def load_models(model_paths, device):
+def load_models(model_paths, device, load_compiled: bool=True):
     if isinstance(model_paths, str):
         model_paths = [model_paths]
     
     models = []
     for model_path in model_paths:
         path = Path(model_path)
-        if path.is_file() and (path.suffix == '.pt' or path.suffix == '.pth'):
-            models.append(load_model(path, device))
+        if path.is_file() and (path.suffix == '.pt' or path.suffix == '.pth' or path.suffix == '.ckpt'):
+            models.append(load_model(path, device, load_compiled))
+        else:
+            model_path, _ = find_best_model(run_path=model_path)
+            models.append(load_model(model_path, device, load_compiled))
     
     return models
+
+def find_best_model(run_path):
+    # return best model path if a path is provided, else checkpoint itself
+    if Path(run_path).suffix == '.ckpt':
+        return run_path, None
+    else:
+        model_path = [f for f in Path(run_path).glob("best_model*.ckpt")]
+        val_loss = float('inf')
+        index = 0
+        for i, p in enumerate(model_path):
+            loss = float(str(p).split('=')[-1].rstrip('.ckpt'))
+            if loss < val_loss:
+                val_loss = loss
+                index = i
+    return model_path[index], val_loss
 
 class CustomFormatter(logging.Formatter):
     format = "%(asctime)s: %(message)s"
@@ -88,24 +126,29 @@ def get_all_pairs(d, keys=()):
         yield (keys, d)
 
 # Ugly workaround for specifying config files outside of the package
-def read_user_config(filepath: Optional[str]=None, config_path="configs", config_name="train.yaml"):
-    # get override list
+def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_path="configs", config_name="train.yaml"):
+    # load cfg
+    if isinstance(cfg, DictConfig):
+        user_cfg = cfg
+    elif isinstance(cfg, (PosixPath, str)):
+        user_cfg = OmegaConf.load(cfg)
+    else:
+        user_cfg = OmegaConf.create()
+
     override_list = []
-    if filepath is not None:
-        # load user defined config file
-        user_cfg = OmegaConf.load(filepath)
-        if "defaults" in user_cfg:
-            default_list = user_cfg.pop("defaults")
-            for d in default_list:
-                for k, v in d.items():
-                    override_list.append(f"{k}={v}")
-        
-        for k, v in get_all_pairs(user_cfg):
-            key = ".".join(k)
-            value = str(v).replace("'", "")
-            if value == 'None':
-                value = 'null'
-            override_list.append(f'++{key}={value}')
+    if "defaults" in user_cfg:
+        default_list = user_cfg.pop("defaults")
+        for d in default_list:
+            for k, v in d.items():
+                override_list.append(f"{k}={v}")
+    
+    for k, v in get_all_pairs(user_cfg):
+        key = ".".join(k)
+        # process value
+        value = str(escape_all(v)).replace("'", "")
+        if value == 'None':
+            value = 'null'
+        override_list.append(f'++{key}={value}')
     
     # command line overrides
     try:
@@ -124,3 +167,21 @@ def read_user_config(filepath: Optional[str]=None, config_path="configs", config
     OmegaConf.set_struct(cfg, False)
         
     return cfg
+
+def escape_special_characters(value: str) -> str:
+    special_characters = r"\()[]{}:=,"
+    for char in special_characters:
+        if char in value:
+            value = f'"{value}"'
+            break
+    return value
+
+def escape_all(data):
+    if isinstance(data, str):
+        return escape_special_characters(data)
+    elif isinstance(data, (dict, DictConfig)):
+        return {k: escape_all(v) for k, v in data.items()}
+    elif isinstance(data, (list, ListConfig)):
+        return [escape_all(item) for item in data]
+    else:
+        return data

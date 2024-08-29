@@ -35,7 +35,7 @@ class MDSimulator(BaseSimulator):
             logger: BaseLogger,
             dynamics: MolecularDynamics,
             uncertainty: Optional[BaseUncertainty] = None,
-            md_traj: str = 'MD.traj',
+            out_traj: str = 'MD.traj',
             start_index: int = -1,
             rattle: bool = False,
             fix_under: Optional[float] = None,
@@ -49,7 +49,7 @@ class MDSimulator(BaseSimulator):
         ):
         # initialize parameters
         self.init_traj = init_traj
-        self.md_traj = md_traj
+        self.out_traj = out_traj
         self.start_index = start_index
         self.rattle = rattle
         self.fix_under = fix_under
@@ -112,7 +112,7 @@ class MDSimulator(BaseSimulator):
         # set up MD dynamics
         self.dynamics = self.dynamics(self.atoms)
         self.dynamics.attach(self.run_md_step(), interval=self.print_step)
-        traj = Trajectory(self.md_traj, 'w', self.atoms)
+        traj = Trajectory(self.out_traj, 'w', self.atoms)
         self.dynamics.attach(traj.write, interval=self.dump_step)
 
         # run MD

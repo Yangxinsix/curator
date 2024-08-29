@@ -10,6 +10,8 @@ from ._data_reader import Trajectory
 from ase import Atoms
 from pathlib import PosixPath
 from ase.io.trajectory import TrajectoryReader
+from omegaconf import ListConfig
+import os
 
 def read_trajectory(ase_db):
     if isinstance(ase_db, (str, PosixPath)):
@@ -17,18 +19,18 @@ def read_trajectory(ase_db):
         if ase_db.endswith('.traj'):
             db = Trajectory(ase_db)
         else:
-            db = read(ase_db)
-    elif isinstance(ase_db, list):
+            db = read(ase_db, ':')
+    elif isinstance(ase_db, (list, ListConfig)):
         if all(isinstance(item, Atoms) for item in ase_db):
             db = ase_db
         elif all(isinstance(item, (str, PosixPath)) and str(item).endswith('.traj') for item in ase_db):
-            db = Trajectory([str(item) for item in ase_db])
+            db = Trajectory([str(item) for item in ase_db if os.path.getsize(item)])
         else:
             db = []
             for item in ase_db:
-                if isinstance(item, (str, PosixPath)):
+                if isinstance(item, (str, PosixPath)) and os.path.getsize(item):
                     item = str(item)  # Convert PosixPath to string if necessary
-                    db += read(item)
+                    db += read(item, ':')
     elif isinstance(ase_db, TrajectoryReader):
         db = ase_db
 

@@ -1,18 +1,17 @@
-method: gpaw
-parameters:
-  xc: PBE
-  mode: 
-    name: pw
-    ecut: 520
-  eigensolver: 
-    name: dav
-    niter: 1
-  occupations: 
-    name: fermi-dirac 
-    width: 0.05
-    fixmagmom: true
-  maxiter: 200
-  kpts: [3,2,2]
+_target_: gpaw.GPAW
+xc: PBE
+mode: 
+  name: pw
+  ecut: 520
+eigensolver: 
+  name: dav
+  niter: 1
+occupations: 
+  name: fermi-dirac 
+  width: 0.05
+  fixmagmom: true
+maxiter: 200
+kpts: [3,2,2]
   
   #mode.name: pw
   #mode.ecut: 520

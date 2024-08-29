@@ -1,0 +1,44 @@
+- _target_: curator.train.ModelOutput
+  name: energy
+  loss_fn:
+    _target_: torch.nn.MSELoss
+  loss_weight: ${task.energy_weight}
+  metrics:
+    mae:
+      _target_: curator.train.PerAtomMAE
+      size_key: n_atoms
+      value_key: ${...name}                       # relative interpolation
+    rmse:
+      _target_: curator.train.PerAtomRMSE
+      size_key: n_atoms
+      value_key: ${...name}
+- _target_: curator.train.ModelOutput
+  name: forces
+  loss_fn:
+    _target_: torch.nn.MSELoss
+  loss_weight: ${task.forces_weight}
+  metrics:
+    mae:
+      _target_: curator.train.PerSpeciesMAE
+      label_key: atomic_number
+      value_key: ${...name}
+      compute_overall: true
+    rmse:
+      _target_: curator.train.PerSpeciesRMSE
+      label_key: atomic_number
+      value_key: ${...name}
+      compute_overall: true
+- _target_: curator.train.ModelOutput
+  name: stress
+  loss_fn:
+    _target_: torch.nn.MSELoss
+  loss_weight: ${task.energy_weight}
+  metrics:
+    mae:
+      _target_: curator.train.PerAtomMAE
+      size_key: n_atoms
+      value_key: ${...name}                       # relative interpolation
+    rmse:
+      _target_: curator.train.PerAtomRMSE
+      size_key: n_atoms
+      value_key: ${...name}
