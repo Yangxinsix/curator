@@ -1,13 +1,14 @@
 defaults:
   - optimizer: adam
   - scheduler: reduce_on_plateau
-  - outputs: energy_force
+  - outputs: energy_force_per_species
 
 _target_: curator.model.LitNNP
 scheduler_monitor: val_total_loss
 warmup_steps: 0
 save_entire_model: True
 load_entire_model: False
+load_weights_only: True
 
 # customize loss ratios
 energy_weight: 1

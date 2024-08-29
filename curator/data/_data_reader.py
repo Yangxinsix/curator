@@ -128,8 +128,8 @@ class AseDataReader(DataReader):
         positions = atoms.get_positions()
         
         atoms_data = {
-            properties.n_atoms: torch.tensor([n_atoms]),
-            properties.Z: torch.tensor(atomic_numbers),
+            properties.n_atoms: torch.tensor([n_atoms], dtype=torch.long),
+            properties.Z: torch.tensor(atomic_numbers, dtype=torch.long),
             properties.positions: torch.tensor(positions, dtype=self.default_dtype),
             properties.image_idx: torch.zeros((n_atoms,), dtype=torch.long),                 # used for scatter add
         }
@@ -154,8 +154,9 @@ class AseDataReader(DataReader):
             pass
         
         try: 
-            stress = torch.tensor(atoms.get_stress(apply_constraint=False), dtype=self.default_dtype)
+            stress = torch.tensor(atoms.get_stress(apply_constraint=False), dtype=self.default_dtype).unsqueeze(0)
             atoms_data[properties.stress] = stress
+            atoms_data[properties.virial] = stress * atoms.get_volume()
         except (AttributeError, RuntimeError):
             pass
         

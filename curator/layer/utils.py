@@ -1,9 +1,34 @@
 from e3nn import o3
-from typing import Tuple, List, Union
+from typing import Tuple, List, Union, Dict
 import torch
 from e3nn.util.jit import compile_mode
 from e3nn import o3
 import collections
+from curator.data import properties
+
+# class BambooConverter:
+#     def __init__(self):
+#         self.input_keys = ['edge_index', ]
+        
+
+# def convert_to_bamboo_input(input_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+#     ''' 
+#     Used in LAMMPS inference
+
+#     Inputs: always float64. 
+#     ----------------
+#     edge_index: [2, Num_edges].
+#     edge_cell_shift: [Num_edges, 3]. Unit: Angstrom
+#     coul_edge_index: [2, Num_coul_edges]. 
+#     coul_edge_cell_shift: [Num_coul_edges, 3]. Unit: Angstrom
+#     disp_edge_index: [2, Num_disp_edges]. 
+#     disp_edge_cell_shift: [Num_disp_edges, 3]. Unit: Angstrom
+#     atom_types: [Num_atoms]. torch.long
+#     g_ewald: [1]. g_ewald parameter in LAMMPS
+#     '''
+
+#     input_dict[properties.edge_idx] = 
+
 
 @torch.jit.script
 def scatter_add(
