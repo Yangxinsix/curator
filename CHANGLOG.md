@@ -4,7 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-Nothing.
+### Added
+
+- Add new license as the code is transferred from original repository.
 
 ## [1.1.1] - 2024-08-29
 

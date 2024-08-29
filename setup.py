@@ -1,11 +1,16 @@
 from setuptools import setup, find_packages
 
+with open("README.md", "r") as f:
+  long_description = f.read()
+
 setup(
-    name="curator",
+    name="curator-torch",
     version="1.1.1",
-    description="Library for implementation of message passing neural networks in Pytorch",
+    short_description="Library for implementation of message passing neural networks in Pytorch",
+    long_description=long_description,
     author="xinyang",
     author_email="xinyang@dtu.dk",
+    license='MIT License',
     url = "https://github.com/dtu-energy/curator.git",
     packages=find_packages(include=["curator", "curator.*"]),
     scripts=[
