@@ -8,6 +8,11 @@ All notable changes to this project will be documented in this file.
 
 - Add new license as the code is transferred from original repository.
 
+### Changed
+
+- Now MLCalculator will calculate stress if only virial is given.
+- Now calculator will be instantiated from configuration file.
+
 ## [1.1.1] - 2024-08-29
 
 ### Added

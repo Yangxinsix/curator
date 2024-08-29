@@ -1,5 +1,6 @@
 defaults:
   - simulator: md
+  - calculator: default_calculator
   - _self_
 
 cfg: null

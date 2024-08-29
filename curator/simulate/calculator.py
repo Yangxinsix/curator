@@ -1,9 +1,9 @@
 from ase.calculators.calculator import Calculator, all_changes
-from curator.data import AseDataReader, TypeMapper
+from curator.data import AseDataReader, Transform
 import ase
 import numpy as np
 import torch
-from typing import Optional
+from typing import Optional, List
 
 class MLCalculator(Calculator):
     """ ML model calulator used for ASE applications """
@@ -12,9 +12,11 @@ class MLCalculator(Calculator):
         self,
         model: torch.nn.Module,
         cutoff: Optional[float] = None,
+        compute_neighbor_list: bool = True,
+        transforms: List[Transform] = [],
         energy_scale: float = 1.0,
         forces_scale: float = 1.0,
-#        stress_scale=1.0,
+        stress_scale: float = 1.0,
         **kwargs
     ) -> None:
         super().__init__(**kwargs)
@@ -36,10 +38,10 @@ class MLCalculator(Calculator):
                     break
         
         assert cutoff is not None, "Valid cutoff value should be given or inferred from model!"
-        self.ase_data_reader = AseDataReader(cutoff)
+        self.ase_data_reader = AseDataReader(cutoff, compute_neighbor_list=compute_neighbor_list, transforms=transforms)
         self.energy_scale = energy_scale
         self.forces_scale = forces_scale
-#        self.stress_scale = stress_scale
+        self.stress_scale = stress_scale
 
     def _convert_to_cpu(self, tensor):
         tensor = tensor.detach().cpu()
@@ -64,7 +66,7 @@ class MLCalculator(Calculator):
     def calculate(
             self, 
             atoms: ase.Atoms =None, 
-            properties: list = ["energy"], 
+            properties: list = ["energy", "forces", "stress"], 
             system_changes: list = all_changes,
             ) -> None:
         """
@@ -88,9 +90,17 @@ class MLCalculator(Calculator):
         # Run model
         self.results = self._process_results(self.model(model_inputs))
 
+        # calculate stress if get virial
+        if "virial" in self.results and "stress" not in self.results:
+            self.results["stress"] = - self.results["virial"] / self.atoms.get_volume()
+
         # Convert outputs to calculator format
-        self.results["forces"] *= self.forces_scale
-        self.results["energy"] *= self.energy_scale
+        if "energy" in self.results:
+            self.results["energy"] *= self.energy_scale
+        if "forces" in self.results:
+            self.results["forces"] *= self.forces_scale
+        if "stress" in self.results:
+            self.results["stress"] *= self.stress_scale
 
 class EnsembleCalculator(Calculator):
     """ Ensemble calulator for ML models used for ASE applications """
