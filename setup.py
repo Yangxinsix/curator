@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="curator",
-    version="1.1.0",
+    version="1.1.1",
     description="Library for implementation of message passing neural networks in Pytorch",
     author="xinyang",
     author_email="xinyang@dtu.dk",
