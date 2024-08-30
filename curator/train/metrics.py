@@ -1,6 +1,5 @@
 import torchmetrics
 from torchmetrics import Metric
-
 import torch
 from torchmetrics import Metric
 from ase.data import chemical_symbols
@@ -140,8 +139,8 @@ class SizeIndependentMetricBase(AtomsMetric):
 
     def update(self, preds: dict, targets: dict):
         # Assume preds and targets are dictionaries with 'size' and 'value' keys
-        normalized_pred = preds[self.value_key] / preds[self.size_key]
-        normalized_target = targets[self.value_key] / targets[self.size_key]
+        normalized_pred = self.safe_divide(preds[self.value_key], preds[self.size_key])
+        normalized_target = self.safe_divide(targets[self.value_key], targets[self.size_key])
 
         self.size_independent_error += self.compute_error(normalized_pred, normalized_target).sum()
         self.size_independent_count += preds[self.value_key].shape[0]
@@ -170,6 +169,14 @@ class SizeIndependentMetricBase(AtomsMetric):
         if self.compute_overall:
             self.size_dependent_error = torch.tensor(0.0, device=self.size_dependent_error.device)
             self.size_dependent_count = torch.tensor(0, device=self.size_dependent_count.device)
+
+    @staticmethod
+    def safe_divide(a: torch.Tensor, b: torch.Tensor):
+        # Ensure b is broadcastable with a
+        if a.dim() == 2 and b.dim() == 1:
+            b = b.unsqueeze(1)  # Convert b to shape (n, 1) to broadcast with (n, m)
+
+        return a / b
 
     def compute_error(self, pred, target):
         raise NotImplementedError("This method should be implemented by subclasses")
