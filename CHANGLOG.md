@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
 
 - Now MLCalculator will calculate stress if only virial is given.
 - Now calculator will be instantiated from configuration file.
+- Change default log directory. Optimize it for wandb.
+- Sync metrics for DDP training.
 
 ## [1.1.1] - 2024-08-29
 
