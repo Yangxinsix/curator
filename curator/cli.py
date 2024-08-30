@@ -621,6 +621,7 @@ def label(config: DictConfig):
                 all_converged.append(converged)
                 log.info(f"Recomputing structure {i} converged: {converged}")
             else:
+                all_converged.append(True)
                 log.info(f"Structure {i} converged. Skipping...")
         except KeyError:
             converged = annotator.annotate(atoms)
@@ -640,7 +641,7 @@ def label(config: DictConfig):
                 total_dataset.write(row.toatoms())
     
     if not all(all_converged):
-        raise RuntimeError(f'Structures {[i for i, converged in enumerate(all_converged) if not converged]} are not converged!')
+        raise RuntimeError(f'Structures {[row.id -1 for row in db.select(converged=False)]} are not converged!')
     else:
         # sweep all unnessary files after labeling
         annotator.sweep()
