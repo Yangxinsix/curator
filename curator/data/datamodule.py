@@ -66,6 +66,7 @@ class AtomsDataModule(pl.LightningDataModule):
             self.num_train = 1 - num_val
         self.num_val = num_val
         self.num_test = num_test
+        self.datalen = None
         self.train_idx = None
         self.val_idx = None
         self.test_idx = None
@@ -120,7 +121,7 @@ class AtomsDataModule(pl.LightningDataModule):
                         self.num_train = int(math.floor(self.num_train * self.datalen))
                     if self.num_val is not None and self.num_val < 1.0:
                         self.num_val = int(math.floor(self.num_val * self.datalen))
-                    if self.num_test is not None and self.num_test is not None:
+                    if self.num_test is not None:
                         if self.num_test < 1.0:
                             self.num_test = int(math.floor(self.num_test * self.datalen))
                     else:
@@ -129,12 +130,17 @@ class AtomsDataModule(pl.LightningDataModule):
                     assert self.num_train + self.num_val + self.num_test <= self.datalen, f"Number of train, validation, and test points exceed the total number of dataset."
                     self._split_data()
                     
-                if self.train_idx is not None:
+                if self.train_idx is not None and self._train_dataset is None:
                     self._train_dataset = torch.utils.data.Subset(self.dataset, self.train_idx)
-                if self.val_idx is not None:
-                    self._train_dataset = torch.utils.data.Subset(self.dataset, self.train_idx)
-                if self.test_idx is not None:
+                if self.val_idx is not None and self._val_dataset is None:
+                    self._val_dataset = torch.utils.data.Subset(self.dataset, self.val_idx)
+                if self.test_idx is not None and self._test_dataset is None:
                     self._test_dataset = torch.utils.data.Subset(self.dataset, self.test_idx)
+            
+        logger.debug(
+            f"Dataset size: {self.datalen or self.num_train + self.num_val + self.num_test}, training dataset size: {self.num_train}, validation dataset size: {self.num_val}, "
+            + f"test dataset size: {self.num_test}."
+        )
     
     def setup_dataset(self, data_type: str, datapath: str) -> None:
         if data_type == 'AseDataset':
@@ -232,13 +238,9 @@ class AtomsDataModule(pl.LightningDataModule):
             self.num_val = len(self.val_idx) if self.val_idx is not None else self.num_val
             self.num_test = len(self.test_idx) if self.test_idx is not None else self.num_test
             
-        logger.debug(
-            f"Dataset size: {self.datalen}, training dataset size: {self.num_train}, validation dataset size: {self.num_val}, "
-            + f"test dataset size: {self.num_test}."
-        )
-        self._train_dataset = torch.utils.data.Subset(self.dataset, self.train_idx)
-        self._val_dataset = torch.utils.data.Subset(self.dataset, self.val_idx)
-        self._test_dataset = torch.utils.data.Subset(self.dataset, self.test_idx) if self.num_test != 0 else None
+        self._train_dataset = self._train_dataset or torch.utils.data.Subset(self.dataset, self.train_idx)
+        self._val_dataset = self._val_dataset or torch.utils.data.Subset(self.dataset, self.val_idx)
+        self._test_dataset = self._test_dataset or torch.utils.data.Subset(self.dataset, self.test_idx) if self.num_test != 0 else None
 
     def _get_species(self) -> Optional[List[str]]:
         if self.species == "auto":
