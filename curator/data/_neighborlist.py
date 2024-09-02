@@ -12,6 +12,12 @@ try:
 except ModuleNotFoundError:
     warnings.warn("Failed to import asap3 module for fast neighborlist")
 
+try:
+    from matscipy.neighbours import neighbour_list
+except ModuleNotFoundError:
+    warnings.warn("Failed to import matscipy module for fast neighborlist")
+
+
 def wrap_positions(positions: torch.Tensor, cell: torch.Tensor, eps: float=1e-7) -> torch.Tensor:
     """Wrap positions into the unit cell"""
     # wrap atoms outside of the box
@@ -272,4 +278,37 @@ class Asap3NeighborList(NeighborListTransform):
         }
         if self.return_cell_displacements:
             outputs[properties.cell_displacements] = cell_displacements   
+        return outputs
+    
+class MatScipyNeighborList(NeighborListTransform):
+    def __init__(
+        self,
+        *args,
+        return_cell_displacements: bool = False,
+        **kwargs,  
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        if not ("matscipy" in sys.modules):
+            raise ModuleNotFoundError("This neighbor list implementation needs scipy module!")
+        self.return_cell_displacements = return_cell_displacements
+
+    def _build_neighbor_list(
+        self, 
+        pos: torch.Tensor, 
+        cell: torch.Tensor, 
+    ) -> properties.Type:
+        i, j, D, S = neighbour_list(
+            quantities="ijDS",
+            cell=cell,
+            positions=pos,
+            cutoff=self.cutoff,
+        )
+        
+        outputs = {
+            properties.edge_idx: torch.as_tensor(np.stack((i, j)).T, dtype=torch.long),
+            properties.edge_diff: torch.as_tensor(D, dtype=torch.float),
+        }
+
+        if self.return_cell_displacements:
+            outputs[properties.cell_displacements] = torch.as_tensor(S, dtype=torch.float)
         return outputs
