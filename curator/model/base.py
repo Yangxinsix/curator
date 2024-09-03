@@ -306,7 +306,7 @@ class LitNNP(pl.LightningModule):
         # logging metrics to console
         if batch_idx % self.trainer.log_every_n_steps == 0:
             msgs = [f'{self.current_epoch:>7d}', f'{batch_idx:>11d}']
-            forward_cache = [f'{metric._forward_cache:>16.3g}' for metric in self.trainer._results.values()]
+            forward_cache = [f'{metric._forward_cache or 0.0:>16.3g}' for metric in self.trainer._results.values()]
             logger.info("".join(msgs + forward_cache))
             
         return loss_dict['train_total_loss']

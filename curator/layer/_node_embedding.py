@@ -53,7 +53,7 @@ class OneHotAtomEncoding(torch.nn.Module):
             data[properties.node_feat] = onehot
         return data
     
-    # def datamodule(self, _datamodule):
-    #     if self.species is None:
-    #         self.species = _datamodule._get_species()
-    #         self.type_mapper = TypeMapper(self.species)
+    def datamodule(self, _datamodule):
+        if self.species is None:
+            self.species = _datamodule._get_species()
+            self.type_mapper = TypeMapper(self.species)

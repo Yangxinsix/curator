@@ -33,7 +33,7 @@ class MACE(nn.Module):
         cutoff: float,
         num_interactions: int,
         correlation: Union[int, List[int]],
-        species: List[str],
+        species: Optional[List[str]] = None,
         num_elements: Optional[int] = None,
         hidden_irreps: Union[o3.Irreps, str, None] = None,
         edge_sh_irreps: Union[o3.Irreps, str, None] = None,
