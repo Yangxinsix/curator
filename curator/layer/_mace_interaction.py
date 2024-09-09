@@ -69,7 +69,7 @@ class RealAgnosticInteractionBlock(torch.nn.Module):
         self.register_buffer("avg_num_neighbors", avg_num_neighbors)
         
         # First linear
-        self.linear_1 = o3.Linear(
+        self.linear_up = o3.Linear(
             self.irreps_in[properties.node_feat],
             self.irreps_in[properties.node_feat],
             internal_weights=True,
@@ -101,7 +101,7 @@ class RealAgnosticInteractionBlock(torch.nn.Module):
         # Linear
         irreps_mid = irreps_mid.simplify()
         self.irreps_out = self.target_irreps
-        self.linear_2 = o3.Linear(
+        self.linear = o3.Linear(
             irreps_mid, self.irreps_out, internal_weights=True, shared_weights=True
         )
         
@@ -116,7 +116,7 @@ class RealAgnosticInteractionBlock(torch.nn.Module):
     def forward(self, data: properties.Type) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         edge_idx = data[properties.edge_idx]
         node_feat = data[properties.node_feat]
-        node_feat = self.linear_1(node_feat)
+        node_feat = self.linear_up(node_feat)
         
         tp_weights = self.conv_tp_weights(data[properties.edge_dist_embedding])
         edge_feat = self.conv_tp(
@@ -127,7 +127,7 @@ class RealAgnosticInteractionBlock(torch.nn.Module):
         node_feat = scatter_add(
             edge_feat, edge_idx[:, 0], dim_size=len(node_feat), dim=0
         )
-        node_feat = self.linear_2(node_feat)
+        node_feat = self.linear(node_feat)
         node_feat = node_feat / self.avg_num_neighbors
         node_feat = self.skip_tp(node_feat, data[properties.node_attr])
         
@@ -158,7 +158,7 @@ class RealAgnosticResidualInteractionBlock(torch.nn.Module):
         self.register_buffer("avg_num_neighbors", avg_num_neighbors) 
 
         # First linear
-        self.linear_1 = o3.Linear(
+        self.linear_up = o3.Linear(
             self.irreps_in[properties.node_feat],
             self.irreps_in[properties.node_feat],
             internal_weights=True,
@@ -190,7 +190,7 @@ class RealAgnosticResidualInteractionBlock(torch.nn.Module):
         # Linear
         irreps_mid = irreps_mid.simplify()
         self.irreps_out = self.target_irreps
-        self.linear_2 = o3.Linear(
+        self.linear = o3.Linear(
             irreps_mid, self.irreps_out, internal_weights=True, shared_weights=True
         )
 
@@ -211,7 +211,7 @@ class RealAgnosticResidualInteractionBlock(torch.nn.Module):
         edge_diff_embedding,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:      
         sc = self.skip_tp(node_feat, node_attr)
-        node_feat = self.linear_1(node_feat)
+        node_feat = self.linear_up(node_feat)
         tp_weights = self.conv_tp_weights(edge_dist_embedding)
         edge_feat = self.conv_tp(
             node_feat[edge_idx[:, 0]],
@@ -219,9 +219,9 @@ class RealAgnosticResidualInteractionBlock(torch.nn.Module):
             tp_weights,
         )
         node_feat = scatter_add(
-            edge_feat, edge_idx[:, 0], dim_size=len(node_feat), dim=0
+            edge_feat, edge_idx[:, 1], dim_size=node_feat.shape[0], dim=0
         )
-        node_feat = self.linear_2(node_feat)
+        node_feat = self.linear(node_feat)
         node_feat = node_feat / self.avg_num_neighbors
         
         return (self.reshape(node_feat), sc)

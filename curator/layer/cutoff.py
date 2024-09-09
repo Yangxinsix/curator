@@ -59,6 +59,7 @@ class PolynomialCutoff(CutoffFunction):
         """
         super().__init__()
         assert power >= 2.0
+        self.cutoff = cutoff
         self.p = float(power)
         self._factor = 1.0 / float(cutoff)
 
@@ -69,3 +70,6 @@ class PolynomialCutoff(CutoffFunction):
         x: torch.Tensor, input distance
         """
         return _poly_cutoff(x, self._factor, p=self.p)
+    
+    def __repr__(self):
+        return f"{self.__class__.__name__}(cutoff={self.cutoff}, power={self.p})"

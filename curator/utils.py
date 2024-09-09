@@ -139,8 +139,9 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     if "defaults" in user_cfg:
         default_list = user_cfg.pop("defaults")
         for d in default_list:
-            for k, v in d.items():
-                override_list.append(f"{k}={v}")
+            if isinstance(d, dict):
+                for k, v in d.items():
+                    override_list.append(f"{k}={v}")
     
     for k, v in get_all_pairs(user_cfg):
         key = ".".join(k)

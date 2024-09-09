@@ -280,6 +280,9 @@ class Asap3NeighborList(NeighborListTransform):
             outputs[properties.cell_displacements] = cell_displacements   
         return outputs
     
+    def __repr__(self):
+        return f"{self.__class__.__name__}(cutoff={self.cutoff}, return_distance={self.return_distance}, return_cell_displacements={self.return_cell_displacements})"
+
 class MatScipyNeighborList(NeighborListTransform):
     def __init__(
         self,
@@ -302,6 +305,7 @@ class MatScipyNeighborList(NeighborListTransform):
             cell=cell,
             positions=pos,
             cutoff=self.cutoff,
+            pbc=(True, True, True),
         )
         
         outputs = {
@@ -310,5 +314,8 @@ class MatScipyNeighborList(NeighborListTransform):
         }
 
         if self.return_cell_displacements:
-            outputs[properties.cell_displacements] = torch.as_tensor(S, dtype=torch.float)
+            outputs[properties.cell_displacements] = torch.as_tensor(S.dot(cell), dtype=torch.float)
         return outputs
+    
+    def __repr__(self):
+        return f"{self.__class__.__name__}(cutoff={self.cutoff}, return_distance={self.return_distance}, return_cell_displacements={self.return_cell_displacements})"

@@ -104,14 +104,15 @@ class GradientOutput(torch.nn.Module):
                     dEdR = torch.zeros_like(data[properties.positions])
                 data[properties.forces] = -dEdR
                     
-                if 'stress' in self.model_outputs:
+                if 'stress' in self.model_outputs or 'virial' in self.model_outputs:
                     if properties.cell in data:
-                        stress = grads[1]
-                        if stress is None:
+                        virial = grads[1]
+                        if virial is None:
                             stress = torch.zeros_like(data[properties.cell])
                         cell = data[properties.cell].view(-1, 3, 3)
                         volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1)
-                        stress /= volumes[:, None, None]
+                        stress = virial/volumes[:, None, None]
+                        data[properties.virial] = -1 * virial.view(-1, 9)[:, [0, 4, 8, 5, 2, 1]]
                         data[properties.stress] = stress.view(-1, 9)[:, [0, 4, 8, 5, 2, 1]] 
         
         else:

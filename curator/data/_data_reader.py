@@ -103,6 +103,7 @@ class AseDataReader(DataReader):
         cutoff: Optional[float] = None,
         compute_neighbor_list: bool = True,
         transforms: List[Transform] = [],
+        return_cell_displacements: bool = False,
         default_dtype: torch.dtype = torch.get_default_dtype(),
     )   -> None:
         """ASE data reader
@@ -119,7 +120,7 @@ class AseDataReader(DataReader):
         if self.compute_neighbor_list:
             assert isinstance(self.cutoff, float), "Cutoff radius must be given when compute the neighbor list"
             if not any([isinstance(t, NeighborListTransform) for t in self.transforms]):
-                self.transforms.append(Asap3NeighborList(cutoff=self.cutoff))
+                self.transforms.append(Asap3NeighborList(cutoff=self.cutoff, return_cell_displacements=return_cell_displacements))
         
     def __call__(self, atoms: Atoms) -> Dict[str, torch.tensor]:
         # basic properties

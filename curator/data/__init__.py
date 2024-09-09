@@ -9,6 +9,7 @@ from ._neighborlist import (
     TorchNeighborList, 
     BatchNeighborList, 
     Asap3NeighborList,
+    MatScipyNeighborList,
     NeighborListTransform,
 )
 from .dataset import AseDataset, NumpyDataset, cat_tensors, collate_atomsdata
@@ -36,6 +37,7 @@ __all__ = [
     TorchNeighborList,
     BatchNeighborList,
     Asap3NeighborList,
+    MatScipyNeighborList,
     NeighborListTransform,
     AseDataset,
     NumpyDataset,
