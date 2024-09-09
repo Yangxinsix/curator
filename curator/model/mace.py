@@ -71,7 +71,6 @@ class MACE(nn.Module):
         super().__init__()
         
         self.cutoff = cutoff
-        self.lmax = lmax
         self.parity = parity
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions
@@ -82,6 +81,7 @@ class MACE(nn.Module):
         # hidden feature irreps
         if hidden_irreps is not None:
             self.hidden_irreps = o3.Irreps(hidden_irreps) if isinstance(hidden_irreps, str) else hidden_irreps
+            self.lmax = hidden_irreps.lmax
         else:
             self.hidden_irreps = o3.Irreps(
                 [
@@ -105,7 +105,7 @@ class MACE(nn.Module):
             self.node_irreps = node_irreps
         # edge sphere harmonic irreps
         if edge_sh_irreps is None:
-            self.edge_sh_irreps = o3.Irreps.spherical_harmonics(lmax, p=-1 if parity else 1)
+            self.edge_sh_irreps = o3.Irreps.spherical_harmonics(self.lmax, p=-1 if parity else 1)
         elif isinstance(edge_sh_irreps, str):
             self.edge_sh_irreps = o3.Irreps(edge_sh_irreps)
         else:
@@ -122,7 +122,7 @@ class MACE(nn.Module):
         self.embeddings = nn.ModuleDict()
         self.embeddings['onehot_embedding'] = OneHotAtomEncoding(num_elements=num_elements, species=species)
         self.embeddings['radial_basis'] = RadialBasisEdgeEncoding(
-            basis=BesselBasis(cutoff=cutoff, num_basis=num_basis),
+            basis=BesselBasis(cutoff=cutoff, num_basis=num_basis, sqrt_prefactor=True),
             cutoff_fn=PolynomialCutoff(cutoff=cutoff, power=power),
         )
         self.embeddings['sphere_harmonics'] = SphericalHarmonicEdgeAttrs(edge_sh_irreps=self.edge_sh_irreps)
@@ -146,6 +146,8 @@ class MACE(nn.Module):
         self.readouts = torch.nn.ModuleList()
         gate_fn = activation_fn[gate] if isinstance(gate, str) else gate
         # interaction blocks
+        # for last layer: only select scalar 0e
+        # for first layer: 
         for i in range(num_interactions):
             hidden_irreps_out = str(self.hidden_irreps[0]) if i == num_interactions - 1 else self.hidden_irreps
             if i > 0:
@@ -185,6 +187,7 @@ class MACE(nn.Module):
         
         node_es_list = []
         node_feat = data[properties.node_feat]
+        node_feat_list = []
         
         for interaction, product, readout in zip(
             self.interactions, self.products, self.readouts
@@ -201,9 +204,12 @@ class MACE(nn.Module):
                 sc=sc,
                 node_attrs=data[properties.node_attr],
             )
+            node_feat_list.append(node_feat)
             node_es_list.append(readout(node_feat).squeeze())
         
+        node_feat_list = torch.cat(node_feat_list, dim=-1)
         node_es = torch.sum(torch.stack(node_es_list, dim=0), dim=0)
         data[properties.atomic_energy] = node_es
+        data[properties.node_feat] = node_feat_list
         
         return data

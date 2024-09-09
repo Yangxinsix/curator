@@ -74,7 +74,7 @@ class BesselBasis(RadialBasis):
     cutoff: float
     prefactor: float
 
-    def __init__(self, cutoff: float, num_basis: int=8, trainable: bool=True):
+    def __init__(self, cutoff: float, num_basis: int=8, trainable: bool=False, sqrt_prefactor: bool=False):
         r"""Radial Bessel Basis, as proposed in DimeNet: https://arxiv.org/abs/2003.03123
 
 
@@ -95,12 +95,12 @@ class BesselBasis(RadialBasis):
         self.num_basis = num_basis
 
         self.cutoff = float(cutoff)
-        self.prefactor = 2.0 / self.cutoff
+        self.prefactor = math.sqrt(2.0 / self.cutoff) if sqrt_prefactor else 2.0 / self.cutoff
         # output edge dist irreps
         self.irreps_out = o3.Irreps([(num_basis, (0, 1))])
 
         bessel_weights = (
-            torch.linspace(start=1.0, end=num_basis, steps=num_basis) * math.pi
+            torch.linspace(start=1.0, end=num_basis, steps=num_basis) * math.pi / self.cutoff
         )
         if self.trainable:
             self.bessel_weights = nn.Parameter(bessel_weights)
@@ -116,9 +116,15 @@ class BesselBasis(RadialBasis):
         x : torch.Tensor
             Input
         """
-        numerator = torch.sin(self.bessel_weights * x.unsqueeze(-1) / self.cutoff)
+        numerator = torch.sin(self.bessel_weights * x.unsqueeze(-1))
 
         return self.prefactor * (numerator / x.unsqueeze(-1))
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}(cutoff={self.cutoff}, num_basis={len(self.bessel_weights)}, prefactor={self.prefactor}, "
+            f"trainable={self.bessel_weights.requires_grad})"
+        )
             
 @compile_mode("script")
 class RadialBasisEdgeEncoding(torch.nn.Module):

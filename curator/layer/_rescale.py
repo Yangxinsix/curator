@@ -5,6 +5,7 @@ from curator.data import properties
 from .utils import scatter_add
 from ase.data import atomic_numbers
 
+# TODO: add __repr__ for modules
 class GlobalRescaleShift(torch.nn.Module):
     def __init__(
         self,
@@ -213,3 +214,11 @@ class PerSpeciesRescaleShift(torch.nn.Module):
                     else:
                         scales_dict[k] = v
                 self.scales = scales_dict
+
+    def __repr__(self):
+        scale_shift_info = f'{self.__class__.__name__}(scale={self.scale:.6f}, shift={self.shift:.6f},atomwise={self.atomwise_normalization}'
+        if self.shift_by_E0:
+            formatted_energies = ", ".join([f"{x:.4f}" for x in self.atomic_energies])
+            return scale_shift_info + f'\n, E0={formatted_energies})'
+        else:
+            return scale_shift_info + ')'
