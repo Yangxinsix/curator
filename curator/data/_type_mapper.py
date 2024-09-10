@@ -54,3 +54,8 @@ class TypeMapper(Transform):
     
     def untransform(self, types: torch.Tensor) -> torch.Tensor:
         return self.index_to_Z[types]
+    
+    def __repr__(self) -> str:
+        return (
+            f"{self.__class__.__name__}(symbol_to_type={self.symbol_to_type}"
+        )

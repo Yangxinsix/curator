@@ -120,7 +120,7 @@ class BesselBasis(RadialBasis):
 
         return self.prefactor * (numerator / x.unsqueeze(-1))
 
-    def __repr__(self):
+    def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}(cutoff={self.cutoff}, num_basis={len(self.bessel_weights)}, prefactor={self.prefactor}, "
             f"trainable={self.bessel_weights.requires_grad})"
