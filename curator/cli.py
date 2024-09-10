@@ -15,6 +15,7 @@ import logging
 import socket
 import contextlib
 from typing import Optional
+from pytorch_lightning import seed_everything
 
 # very ugly solution for solving pytorch lighting and myqueue conflictions
 if "SLURM_NTASKS" in os.environ:
@@ -64,6 +65,7 @@ def train(config: DictConfig) -> None:
     # Set up seed
     if "seed" in config:
         log.debug(f"Seed with <{config.seed}>")
+        seed_everything(config.seed, workers=True)
     else:
         log.debug("Seed randomly...")
     
@@ -150,6 +152,7 @@ def tmp_train(config: DictConfig):
     # Set up the seed
     if "seed" in config:
         log.info(f"Seed with <{config.seed}>")
+        seed_everything(config.seed, workers=True)
     else:
         log.info("Seed randomly...")
     
@@ -422,6 +425,7 @@ def simulate(config: DictConfig):
     # Set up the seed
     if "seed" in config:
         log.info(f"Seed with <{config.seed}>")
+        seed_everything(config.seed, workers=True)
     else:
         log.info("Seed randomly...")
     
@@ -473,6 +477,7 @@ def select(config: DictConfig):
     # Set up the seed
     if "seed" in config:
         log.info(f"Seed with <{config.seed}>")
+        seed_everything(config.seed, workers=True)
     else:
         log.info("Seed randomly...")
     
