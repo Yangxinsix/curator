@@ -90,6 +90,7 @@ class MACE(nn.Module):
                     for l in range(lmax + 1)
                 ]
             )
+            self.lmax = lmax
         # MACE prohibits some irreps like 0e, 1e to be used
         forbidden_ir = ['0o', '1e', '2o', '3e', '4o']
         self.hidden_irreps = o3.Irreps([irrep for irrep in self.hidden_irreps if str(irrep.ir) not in forbidden_ir])
