@@ -79,12 +79,20 @@ def train(config: DictConfig) -> None:
         # So we choose to save the entire model and outputs in LitNNP and then reload it
         config.model_path = find_best_model(config.model_path)[0]
         log.debug(f"Loading trained model from {config.model_path}")
+        # load model or model state dict
         if config.task.load_entire_model:
             state_dict = torch.load(config.model_path)
             model = state_dict['model']
             outputs = state_dict.get('outputs', instantiate(config.task.outputs))
         else:
+            from collections import OrderedDict
+            state_dict = torch.load(config.model_path)
+            new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in state_dict['state_dict'].items())
+            model = instantiate(config.model)
+            model.load_state_dict(new_state_dict)
             outputs = instantiate(config.task.outputs)
+        
+        # load optimizers and schedulers or not
         if config.task.load_weights_only:
             task = instantiate(config.task, model=model)
         else:
