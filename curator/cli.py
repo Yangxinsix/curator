@@ -70,15 +70,6 @@ def train(config: DictConfig) -> None:
     # Initiate the datamodule
     log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_path}")
     datamodule: LightningDataModule = hydra.utils.instantiate(config.data)
-    
-    # Initiate the model
-    log.debug(f"Instantiating model <{config.model._target_}> with GNN representation <{config.model.representation._target_}>")
-    model = hydra.utils.instantiate(config.model)
-    log.debug(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,d}")
-    
-    # Initiate the task and load old model, if any
-    log.debug(f"Instantiating task <{config.task._target_}>")
-    task: LitNNP = hydra.utils.instantiate(config.task, model=model)
 
     # TODO: enable loading existing optimizers and schedulers
     if config.model_path is not None:
@@ -89,7 +80,7 @@ def train(config: DictConfig) -> None:
         if config.task.load_entire_model:
             state_dict = torch.load(config.model_path)
             model = state_dict['model']
-            outputs = state_dict['outputs']
+            outputs = state_dict.get('outputs', instantiate(config.task.outputs))
         else:
             outputs = instantiate(config.task.outputs)
         if config.task.load_weights_only:
@@ -100,6 +91,16 @@ def train(config: DictConfig) -> None:
                 model=model, 
                 outputs=outputs,
             )
+    else:
+        # Initiate the model
+        model = hydra.utils.instantiate(config.model)
+        # Initiate the task and load old model, if any
+        log.debug(f"Instantiating task <{config.task._target_}>")
+        task: LitNNP = hydra.utils.instantiate(config.task, model=model)
+
+    log.debug(f"Instantiating model <{type(model)}> with GNN representation <{type(model.representation)}>")
+    log.debug(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,d}")
+
     # Save extra arguments in checkpoint
     task.save_configuration(config)
     
