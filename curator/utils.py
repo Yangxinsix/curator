@@ -139,7 +139,7 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     if "defaults" in user_cfg:
         default_list = user_cfg.pop("defaults")
         for d in default_list:
-            if isinstance(d, dict):
+            if isinstance(d, (dict, DictConfig)):
                 for k, v in d.items():
                     override_list.append(f"{k}={v}")
     
