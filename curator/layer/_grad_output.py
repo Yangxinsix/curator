@@ -119,3 +119,6 @@ class GradientOutput(torch.nn.Module):
             raise ValueError("Gradients must be calculated with respect to positions or R_ij. Nothing is given!")
                     
         return data
+    
+    def __repr__(self):
+        return f"{self.__class__.__name__}(grad_on_edge_diff={self.grad_on_edge_diff}, grad_on_positions={self.grad_on_positions}, model_outputs={self.model_outputs})"
