@@ -272,7 +272,7 @@ class LitNNP(pl.LightningModule):
             unscaled_batch = layer.unscale(batch, force_process=True)
         loss_dict, num_abs_dict = self.loss_fn(pred, unscaled_batch, 'train')
         for k in loss_dict.keys():
-            self.log(k, loss_dict[k], batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
+            self.log(k, loss_dict[k].detach(), batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True)
         
         # when calculate metrics pred need to be scaled to get real units
         for layer in self.rescale_layers[::-1]:
@@ -322,7 +322,7 @@ class LitNNP(pl.LightningModule):
             unscaled_pred = layer.unscale(pred, force_process=True)
         loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_batch, 'val')
         for k in loss_dict.keys():
-            self.log(k, loss_dict[k], batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True) 
+            self.log(k, loss_dict[k].detach(), batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True) 
         
         # nothing need to be scaled for calculating metrics        
         for output in self.outputs:
@@ -348,7 +348,7 @@ class LitNNP(pl.LightningModule):
             unscaled_pred = layer.unscale(pred, force_process=True)
         loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_targets, 'test')
         for k in loss_dict.keys():
-            self.log(k, loss_dict[k], batch_size=num_abs_dict[k], on_step=True, on_epoch=False, prog_bar=True, sync_dist=True) 
+            self.log(k, loss_dict[k].detach(), batch_size=num_abs_dict[k], on_step=True, on_epoch=False, prog_bar=True, sync_dist=True) 
                
         for output in self.outputs:
             batch_metrics = output.calculate_metrics(pred, batch, 'test')
