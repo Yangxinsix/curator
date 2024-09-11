@@ -52,3 +52,6 @@ class PairwiseDistance(torch.nn.Module):
             data[properties.edge_dist] = torch.linalg.norm(data[properties.edge_diff], dim=1)
         
         return data
+    
+    def __repr__(self):
+        return f"{self.__class__.__name__}(compute_neighbor_list={self.compute_neighbor_list}, compute_distance_from_R={self.compute_distance_from_R}, compute_forces={self.compute_forces})"

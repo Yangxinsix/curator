@@ -78,12 +78,12 @@ class GradientOutput(torch.nn.Module):
                         energy.shape[0], 3, 3, 
                         dtype=forces.dtype, 
                         device=forces.device).index_add(0, image_idx, atomic_virial)  # don't need to divide by two
-                    data[properties.virial] = virial.view(-1, 9)[:, [0, 4, 8, 5, 2, 1]]
+                    data[properties.virial] = virial.reshape(-1, 9)[:, [0, 4, 8, 5, 2, 1]]
                     if properties.cell in data and 'stress' in self.model_outputs:
-                        cell = data[properties.cell].view(-1, 3, 3)
+                        cell = data[properties.cell].reshape(-1, 3, 3)
                         volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1)
                         stress = - virial / volumes[:, None, None]
-                        data[properties.stress] = stress.view(-1, 9)[:, [0, 4, 8, 5, 2, 1]]
+                        data[properties.stress] = stress.reshape(-1, 9)[:, [0, 4, 8, 5, 2, 1]]
             
         elif self.grad_on_positions:
             energy = data[properties.energy]
@@ -109,11 +109,11 @@ class GradientOutput(torch.nn.Module):
                         virial = grads[1]
                         if virial is None:
                             stress = torch.zeros_like(data[properties.cell])
-                        cell = data[properties.cell].view(-1, 3, 3)
+                        cell = data[properties.cell].reshape(-1, 3, 3)
                         volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1)
-                        stress = virial/volumes[:, None, None]
-                        data[properties.virial] = -1 * virial.view(-1, 9)[:, [0, 4, 8, 5, 2, 1]]
-                        data[properties.stress] = stress.view(-1, 9)[:, [0, 4, 8, 5, 2, 1]] 
+                        stress = virial / volumes[:, None, None]
+                        data[properties.virial] = -1 * virial.reshape(-1, 9)[:, [0, 4, 8, 5, 2, 1]]
+                        data[properties.stress] = stress.reshape(-1, 9)[:, [0, 4, 8, 5, 2, 1]] 
         
         else:
             raise ValueError("Gradients must be calculated with respect to positions or R_ij. Nothing is given!")
