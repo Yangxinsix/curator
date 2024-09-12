@@ -6,9 +6,10 @@ import torch
 Type = Dict[str, torch.Tensor]
 
 # basic properties
-atomic_numbers: Final[str] = "atomic_number"
+atomic_numbers: Final[str] = "atomic_numbers"
 Z: Final[str] = atomic_numbers
 positions: Final[str] = "positions"
+pbc: Final[str] = "pbc"                       # periodic boundary conditions
 R: Final[str] = positions
 cell: Final[str] = "cell"
 n_atoms : Final[str] = "n_atoms"
@@ -30,6 +31,10 @@ forces: Final[str] = "forces"
 strain: Final[str] = "strain"
 stress: Final[str] = "stress"
 virial: Final[str] = "virial"
+total_charge: Final[str] = "total_charge"
+atomic_charge: Final[str] = "atomic_charge"
+dipole: Final[str] = "dipole"
+total_magmom: Final[str] = "total_magmom"
 atomic_energy: Final[str] = "atomic_energy"
 
 # uncertainties

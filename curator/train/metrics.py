@@ -58,8 +58,6 @@ class LabelWiseMetricBase(AtomsMetric):
             
             if self.compute_overall:
                 # stupid torchmetrics bug
-                self.overall_error.to(pred_values.device)
-                self.overall_count.to(pred_values.device)
                 self.overall_error += error_for_label.sum()
                 self.overall_count += count_for_label
 
