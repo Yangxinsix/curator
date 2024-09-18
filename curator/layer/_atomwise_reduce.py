@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from typing import Optional, Union, Sequence
 from curator.data import properties
+from curator.utils import scatter_add, scatter_mean
 import math
 
 class AtomwiseReduce(nn.Module):
@@ -20,14 +21,10 @@ class AtomwiseReduce(nn.Module):
         self.per_atom_output = per_atom_output
     
     def forward(self, data: properties.Type) -> properties.Type:
-        y = torch.zeros_like(
-            data[properties.n_atoms], 
-            dtype=data[properties.edge_diff].dtype
-        )  
-        y.index_add_(0, data[properties.image_idx], data[properties.atomic_energy])
-        
-        if self.aggregation_mode == "mean":
-            y = y / data[properties.n_atoms]
+        if self.aggregation_mode == "sum":
+            y = scatter_add(data[properties.atomic_energy], data[properties.image_idx], dim=0)
+        elif self.aggregation_mode == "mean":
+            y = scatter_mean(data[properties.atomic_energy], data[properties.image_idx], dim=0)
         
         data[self.output_key] = y
         if self.per_atom_output:

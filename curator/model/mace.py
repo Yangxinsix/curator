@@ -182,7 +182,7 @@ class MACE(nn.Module):
             
     def forward(self, data: properties.Type) -> properties.Type:
         # node_e0 = self.reference_energies[data[properties.Z]]
-        # e0 = scatter_add(node_e0, data[properties.image_idx], dim_size=data[properties.n_atoms].shape[0])
+        # e0 = scatter_add(node_e0, data[properties.image_idx])
         for m in self.embeddings.values():
             data = m(data)
         

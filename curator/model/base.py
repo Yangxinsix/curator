@@ -12,6 +12,7 @@ from omegaconf import DictConfig
 import logging
 from collections import OrderedDict, defaultdict
 from curator.model import MACE
+from curator.utils import scatter_add, scatter_mean
 
 
 class NeuralNetworkPotential(nn.Module):
@@ -20,7 +21,8 @@ class NeuralNetworkPotential(nn.Module):
         self,
         representation: nn.Module,
         input_modules: List[nn.Module] = None,
-        output_modules: List[nn.Module] = None,    
+        output_modules: List[nn.Module] = None,
+        extract_outputs: bool = True,    
     ) -> None:
         """ Base class for neural network potentials.
         
@@ -36,10 +38,16 @@ class NeuralNetworkPotential(nn.Module):
         self.model_outputs: Optional[List[str]] = None
         self._initialized: bool = False
         self.collect_outputs()
+        self.extract_outputs_flag = extract_outputs
 
         for module in self.output_modules:
             if hasattr(module, 'update_callback'):
                 module.update_callback = self.collect_outputs
+        
+        for module in self.output_modules:
+            if hasattr(module, 'repr_callback'):
+                module.repr_callback = self.representation
+                module.register_repr_callback()        # activate repr callback for feature extractor and calculator
         
     def forward(self, data: properties.Type) -> properties.Type:
         data = data.copy()
@@ -51,8 +59,7 @@ class NeuralNetworkPotential(nn.Module):
         for m in self.output_modules:
             data = m(data)
         
-        results = self.extract_outputs(data)
-        return results
+        return self.extract_outputs(data) if self.extract_outputs_flag else data
 
     def initialize_modules(self, datamodule: LightningDataModule) -> None:
         for module in self.modules():
@@ -96,7 +103,7 @@ class EnsembleModel(nn.Module):
         
         energy = torch.stack(energy)
         forces = torch.stack(forces)
-        f_scatter = torch.zeros(data[properties.n_atoms].shape[0], device=out[properties.energy].device)
+
         
         result_dict = {
             properties.energy: torch.mean(energy, dim=0),
@@ -109,7 +116,7 @@ class EnsembleModel(nn.Module):
                 properties.e_min: torch.min(energy).unsqueeze(-1),
                 properties.e_var: torch.var(energy, dim=0),
                 properties.e_sd: torch.std(energy, dim=0),
-                properties.f_var: f_scatter.index_add(0, data[properties.image_idx], torch.var(forces, dim=0).mean(dim=1)) / data[properties.n_atoms],
+                properties.f_var: scatter_mean(torch.var(forces, dim=0).mean(dim=1), data[properties.image_idx], dim=0),
             }
             uncertainty[properties.f_sd] = uncertainty[properties.f_var].sqrt()
             result_dict[properties.uncertainty] = uncertainty
@@ -121,8 +128,8 @@ class EnsembleModel(nn.Module):
             error = {
                 properties.e_ae: torch.abs(e_diff),
                 properties.e_se: torch.square(e_diff),
-                properties.f_ae: f_scatter.index_add(0, data[properties.image_idx], torch.abs(f_diff).mean(dim=1)) / data[properties.n_atoms],
-                properties.f_se: f_scatter.index_add(0, data[properties.image_idx], torch.square(f_diff).mean(dim=1)) / data[properties.n_atoms],
+                properties.f_ae: scatter_mean(torch.abs(f_diff).mean(dim=1), data[properties.image_idx], dim=0),
+                properties.f_se: scatter_mean(torch.square(f_diff).mean(dim=1), data[properties.image_idx], dim=0),
             }
 
             # TODO: wait for torch_scatter.

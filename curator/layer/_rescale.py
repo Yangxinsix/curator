@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from typing import Optional, Dict, Union, List
 from curator.data import properties
-from .utils import scatter_add
+from curator.utils import scatter_add
 from ase.data import atomic_numbers
 
 # TODO: add __repr__ for modules
@@ -68,7 +68,7 @@ class GlobalRescaleShift(torch.nn.Module):
                 shift_by = data[properties.n_atoms] * self.shift_by if self.atomwise_normalization else self.shift_by    
                 if self.shift_by_E0:
                     node_e0 = self.atomic_energies[data[properties.Z]]
-                    e0 = scatter_add(node_e0, data[properties.image_idx], data[properties.n_atoms].shape[0])
+                    e0 = scatter_add(node_e0, data[properties.image_idx])
                     shift_by = shift_by + e0
                 for key in self.shift_keys:
                     data[key] = data[key] + shift_by       
@@ -84,7 +84,7 @@ class GlobalRescaleShift(torch.nn.Module):
                 shift_by = data[properties.n_atoms] * self.shift_by if self.atomwise_normalization else self.shift_by
                 if self.shift_by_E0:
                     node_e0 = self.atomic_energies[data[properties.Z]]
-                    e0 = scatter_add(node_e0, data[properties.image_idx], data[properties.n_atoms].shape[0])
+                    e0 = scatter_add(node_e0, data[properties.image_idx])
                     shift_by = shift_by + e0
                 for key in self.shift_keys:
                     data[key] = data[key] - shift_by

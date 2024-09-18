@@ -6,6 +6,7 @@ from curator.data import collate_atomsdata
 from .select import *
 from .kernel import *
 from curator.data import properties
+from curator.utils import scatter_mean, scatter_add
 import logging
 
 logger = logging.getLogger(__name__)
@@ -139,17 +140,14 @@ class FeatureStatistics:
                 random_projection.in_feat_proj,
                 random_projection.out_grad_proj,
             ):
-                atomic_g = (feat @ in_proj) * (grad @ out_proj)
+                atomic_g += (feat @ in_proj) * (grad @ out_proj)
 
-            g = torch.zeros(
-                (model_inputs[properties.n_atoms].shape[0], atomic_g.shape[1]),
-                dtype = atomic_g.dtype,
-                device = atomic_g.device,
-            ).index_add(0, image_idx, atomic_g)
+            g = scatter_add(atomic_g, image_idx, dim=0)
+
         elif kernel == 'local_full-g':
             assert random_projection.num_features != 0, "Error! Random projections must be provided!"
             feats, grads = feature_extractor(model_inputs)
-            atomic_g = torch.zeros((image_idx.shape[0], random_projection.num_features))
+            g = []
             for feat, grad, in_proj, out_proj in zip(
                 feats, 
                 grads, 
@@ -157,7 +155,8 @@ class FeatureStatistics:
                 random_projection.out_grad_proj,
             ):
                 atomic_g = (feat @ in_proj) * (grad @ out_proj)
-            g = atomic_g
+                g.append(atomic_g)
+            g = torch.cat(g)
         
         elif kernel == 'll-gradient':
             feats, grads = feature_extractor(model_inputs)
@@ -167,11 +166,7 @@ class FeatureStatistics:
             else:
                 atomic_g = feats[-1][:, :-1]
 
-            g = torch.zeros(
-                (model_inputs[properties.n_atoms].shape[0], atomic_g.shape[1]),
-                dtype = atomic_g.dtype,
-                device = atomic_g.device,
-            ).index_add(0, image_idx, atomic_g)
+            g = scatter_add(atomic_g, image_idx, dim=0)
 
         elif kernel == 'local_ll-g':
             feats, grads = feature_extractor(model_inputs)
@@ -190,11 +185,7 @@ class FeatureStatistics:
             else:
                 atomic_g = feats[0][:, :-1]
                 
-            g = torch.zeros(
-                (model_inputs[properties.n_atoms].shape[0], atomic_g.shape[1]),
-                dtype = atomic_g.dtype,
-                device = atomic_g.device,
-            ).index_add(0, image_idx, atomic_g)
+            g = scatter_add(atomic_g, image_idx, dim=0)
 
         elif kernel == 'local_gnn':
             feats, grads = feature_extractor(model_inputs)

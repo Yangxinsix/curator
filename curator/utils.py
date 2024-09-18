@@ -69,7 +69,7 @@ def find_best_model(run_path):
     if Path(run_path).suffix == '.ckpt':
         return run_path, None
     else:
-        model_path = [f for f in Path(run_path).glob("best_model*.ckpt")]
+        model_path = [f for f in Path(run_path).glob("best_model_*.ckpt")]
         val_loss = float('inf')
         index = 0
         for i, p in enumerate(model_path):
@@ -186,3 +186,94 @@ def escape_all(data):
         return [escape_all(item) for item in data]
     else:
         return data
+    
+def scatter_add(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None):
+    """
+    Sums all values from the `src` tensor into `out` at the indices specified in the `index` tensor
+    along the dimension `dim`. If `out` is not provided, it will be automatically created with the correct size.
+
+    Args:
+        src (torch.Tensor): The source tensor.
+        index (torch.Tensor): The indices of elements to scatter.
+            Must have the same size as `src` at dimension `dim` or be broadcastable to that size.
+        dim (int): The axis along which to index. Negative values wrap around.
+        out (torch.Tensor, optional): The destination tensor.
+
+    Returns:
+        torch.Tensor: The resulting tensor with the summed values scattered at the specified indices.
+    """
+    if dim < 0:
+        dim = src.dim() + dim  # Convert negative dimension to positive index
+
+    # Ensure index has the same number of dimensions as src
+    if index.dim() != src.dim():
+        # Expand index to have same number of dimensions as src
+        index_shape = [1] * src.dim()
+        index_shape[dim] = -1  # Let PyTorch infer the size at the specified dimension
+        index = index.view(*index_shape).expand_as(src)
+    else:
+        # Ensure index matches src's shape
+        index = index.expand_as(src)
+
+    if out is None:
+        # Determine size of output tensor along dimension `dim`
+        output_size = list(src.size())
+        output_size[dim] = int(index.max()) + 1  # Size along dim is max index + 1
+        out = torch.zeros(output_size, dtype=src.dtype, device=src.device)
+
+    # Perform scatter add
+    out.scatter_add_(dim, index, src)
+
+    return out
+
+def scatter_mean(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None):
+    """
+    Computes the mean of all values from the `src` tensor into `out` at the indices specified in the `index` tensor
+    along the dimension `dim`. If `out` is not provided, it will be automatically created to have the correct size.
+
+    Args:
+        src (torch.Tensor): The source tensor.
+        index (torch.Tensor): The indices of elements to scatter. Must have the same size as `src` at dimension `dim`.
+        dim (int): The axis along which to index. Negative values wrap around.
+        out (torch.Tensor, optional): The destination tensor.
+
+    Returns:
+        torch.Tensor: The resulting tensor with the mean values scattered at the specified indices.
+    """
+    if dim < 0:
+        dim = src.dim() + dim  # Convert negative dimension to positive
+
+    # Ensure index has same number of dimensions as src
+    if index.dim() != src.dim():
+        # Expand index to have same number of dimensions as src
+        index_shape = [1] * src.dim()
+        index_shape[dim] = -1  # Set the size at the specified dimension
+        index = index.view(*index_shape).expand_as(src)
+    else:
+        # Ensure index is expanded to match src
+        index = index.expand_as(src)
+
+    if out is None:
+        # Determine size of output tensor along dimension `dim`
+        output_size = list(src.size())
+        output_size[dim] = int(index.max()) + 1  # Size along dim is max index + 1
+        out = torch.zeros(output_size, dtype=src.dtype, device=src.device)
+        out_count = torch.zeros_like(out)
+    else:
+        out_count = torch.zeros_like(out)
+
+    # Compute sum of values
+    out.scatter_add_(dim, index, src)
+
+    # Count number of occurrences at each index
+    ones = torch.ones_like(src, dtype=src.dtype)
+    out_count.scatter_add_(dim, index, ones)
+
+    # Avoid division by zero
+    zero_mask = out_count == 0
+    out_count[zero_mask] = 1
+
+    # Compute mean
+    out = out / out_count
+
+    return out

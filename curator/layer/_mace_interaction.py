@@ -8,8 +8,8 @@ from .utils import (
     tp_out_irreps_with_instructions,
     linear_out_irreps,
     reshape_irreps,
-    scatter_add,
 )
+from curator.utils import scatter_add
 from typing import Optional, Callable, Tuple
 from ._symmetric_contraction import SymmetricContraction
 
@@ -124,9 +124,7 @@ class RealAgnosticInteractionBlock(torch.nn.Module):
             data[properties.edge_diff_embedding],
             tp_weights,
         )
-        node_feat = scatter_add(
-            edge_feat, edge_idx[:, 0], dim_size=len(node_feat), dim=0
-        )
+        node_feat = scatter_add(edge_feat, edge_idx[:, 0], dim=0)
         node_feat = self.linear(node_feat)
         node_feat = node_feat / self.avg_num_neighbors
         node_feat = self.skip_tp(node_feat, data[properties.node_attr])
@@ -218,9 +216,7 @@ class RealAgnosticResidualInteractionBlock(torch.nn.Module):
             edge_diff_embedding,
             tp_weights,
         )
-        node_feat = scatter_add(
-            edge_feat, edge_idx[:, 1], dim_size=node_feat.shape[0], dim=0
-        )
+        node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0)
         node_feat = self.linear(node_feat)
         node_feat = node_feat / self.avg_num_neighbors
         

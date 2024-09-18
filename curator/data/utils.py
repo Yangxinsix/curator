@@ -72,7 +72,7 @@ def compute_scale_shift(
     per_atom=True,
     atomic_energies: Optional[Dict[int, float]]=None,
 ) -> Tuple[float, float]:
-    from curator.layer import scatter_add
+    from curator.utils import scatter_add
     reference_energies = torch.zeros((119,), dtype=torch.float)
     if atomic_energies is not None:
         for k, v in atomic_energies.items():
@@ -81,7 +81,7 @@ def compute_scale_shift(
     energies = []
     for batch in enumerate(dataloader):
         node_e0 = reference_energies[batch[properties.Z]]
-        e0 = scatter_add(node_e0, batch[properties.image_idx], batch[properties.n_atoms].shape[0])
+        e0 = scatter_add(node_e0, batch[properties.image_idx])
         e = batch[properties.energy] - e0
         if per_atom:
             e /= batch[properties.n_atoms]

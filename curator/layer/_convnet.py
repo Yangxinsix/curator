@@ -6,7 +6,7 @@ from e3nn.o3 import Linear, TensorProduct, FullyConnectedTensorProduct
 from e3nn import o3
 from e3nn.nn import FullyConnectedNet
 
-from .utils import scatter_add
+from curator.utils import scatter_add
 from .nonlinearities import ShiftedSoftPlus
 
 class ConvNetLayer(torch.nn.Module):
@@ -149,7 +149,7 @@ class ConvNetLayer(torch.nn.Module):
         edge_features = self.tp(
             x[edge_idx[:, 1]], data[properties.edge_diff_embedding], weight
         )
-        x = scatter_add(edge_features, edge_idx[:, 0], dim_size=len(x), dim=0)
+        x = scatter_add(edge_features, edge_idx[:, 0], dim=0)
 
         # Necessary to get TorchScript to be able to type infer when its not None
         # avg_num_neigh: Optional[float] = self.avg_num_neighbors

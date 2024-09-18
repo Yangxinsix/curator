@@ -20,11 +20,11 @@
   metrics:
     mae:
       _target_: curator.train.PerSpeciesMAE
-      label_key: atomic_number
+      label_key: atomic_numbers
       value_key: ${...name}
       compute_overall: true
     rmse:
       _target_: curator.train.PerSpeciesRMSE
-      label_key: atomic_number
+      label_key: atomic_numbers
       value_key: ${...name}
       compute_overall: true

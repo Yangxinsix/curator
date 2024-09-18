@@ -29,17 +29,6 @@ from curator.data import properties
 
 #     input_dict[properties.edge_idx] = 
 
-
-@torch.jit.script
-def scatter_add(
-    x: torch.Tensor, index: torch.Tensor, dim_size: int, dim: int = 0
-) -> torch.Tensor:
-    shape = list(x.shape)
-    shape[dim] = dim_size
-    tmp = torch.zeros(shape, dtype=x.dtype, device=x.device)
-    y = tmp.index_add(dim, index, x)
-    return y
-
 def tp_path_exists(irreps_in1, irreps_in2, ir_out):
     irreps_in1 = o3.Irreps(irreps_in1).simplify()
     irreps_in2 = o3.Irreps(irreps_in2).simplify()
