@@ -15,6 +15,7 @@ from ._pairwise_distance import PairwiseDistance, get_pair_distance
 from ._symmetric_contraction import Contraction, SymmetricContraction
 from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift
 from ._strain import Strain
+from ._feature import FeatureExtractor, FeatureCalculator, RandomProjections
 from .cutoff import CosineCutoff, PolynomialCutoff
 from .nonlinearities import ShiftedSoftPlus
 from .radial_basis import (
@@ -25,7 +26,6 @@ from .radial_basis import (
     SphericalHarmonicEdgeAttrs,
 )
 from .utils import (
-    scatter_add,
     tp_path_exists, 
     tp_out_irreps_with_instructions,
     linear_out_irreps,
@@ -54,7 +54,6 @@ __all__ = [
     GaussianBasis,
     RadialBasisEdgeEncoding,
     SphericalHarmonicEdgeAttrs,
-    scatter_add,
     tp_path_exists,
     tp_out_irreps_with_instructions,
     linear_out_irreps,
@@ -65,4 +64,7 @@ __all__ = [
     GradientOutput,           # output modules (output forces and stress)
     GlobalRescaleShift,            # output modules (postprocess energy)
     PerSpeciesRescaleShift,
+    FeatureExtractor,
+    FeatureCalculator, 
+    RandomProjections,
 ]

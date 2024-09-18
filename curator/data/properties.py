@@ -59,7 +59,7 @@ error: Final[str] = "errors"
 energy_uncertainty: Final[str] = "energy_uncertainty"
 forces_uncertainty: Final[str] = "forces_uncertainty"
 
-# node and edge feature keys (for nequip)
+# node and edge feature keys (for nequip and mace)
 edge_diff_embedding: Final[str] = "_edge_diff_embedding"
 edge_dist_embedding: Final[str] = "_edge_dist_embedding"
 node_attr: Final[str] = "_node_attribute"
@@ -67,7 +67,10 @@ node_feat: Final[str] = "_node_feature"
 node_vect: Final[str] = "_node_vector"
 sc: Final[str] = "_skip_connection"
 
-
+# features and gradients (for active learning and uncertainty quantification)
+feature: Final[str] = "feature"
+gradient: Final[str] = "gradient"
+maha_dist: Final[str] = "mahalanobis_distance"
 
 _DEFAULT_INDEX_FIELDS: Set[str] = {
     image_idx,
