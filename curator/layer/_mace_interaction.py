@@ -217,8 +217,7 @@ class RealAgnosticResidualInteractionBlock(torch.nn.Module):
             tp_weights,
         )
         node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0)
-        node_feat = self.linear(node_feat)
-        node_feat = node_feat / self.avg_num_neighbors
+        node_feat = self.linear(node_feat) / self.avg_num_neighbors
         
         return (self.reshape(node_feat), sc)
     

@@ -65,6 +65,9 @@ class PainnMessage(nn.Module):
         # sum message
         residual_scalar = torch.zeros_like(node_scalar)
         residual_vector = torch.zeros_like(node_vector)
+        message_scalar = message_scalar.to(residual_scalar.dtype)
+        message_vector = message_vector.to(residual_vector.dtype)
+
         residual_scalar.index_add_(0, edge[:, 0], message_scalar)
         residual_vector.index_add_(0, edge[:, 0], message_vector)
         
