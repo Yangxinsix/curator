@@ -6,7 +6,7 @@ from curator.data import collate_atomsdata
 from .select import *
 from .kernel import *
 from curator.data import properties
-from curator.utils import scatter_mean, scatter_add
+from curator.utils import scatter_add, scatter_mean
 import logging
 
 logger = logging.getLogger(__name__)
@@ -124,11 +124,8 @@ class FeatureStatistics:
         gnn: Features learned by message passing layers
         symmetry-function: Behler Parrinello symmetry function, can only be used for CUR. To be implemented.
         """
-        image_idx = torch.arange(
-            model_inputs[properties.n_atoms].shape[0],
-            device=model_inputs[properties.n_atoms].device,                                   
-        )
-        image_idx = torch.repeat_interleave(image_idx, model_inputs[properties.n_atoms])
+
+        image_idx = model_inputs[properties.image_idx]
         
         if kernel == 'full-gradient':
             assert random_projection.num_features != 0, "Error! Random projections must be provided!"
@@ -147,16 +144,15 @@ class FeatureStatistics:
         elif kernel == 'local_full-g':
             assert random_projection.num_features != 0, "Error! Random projections must be provided!"
             feats, grads = feature_extractor(model_inputs)
-            g = []
+            atomic_g = torch.zeros((image_idx.shape[0], random_projection.num_features))
             for feat, grad, in_proj, out_proj in zip(
                 feats, 
                 grads, 
                 random_projection.in_feat_proj,
                 random_projection.out_grad_proj,
             ):
-                atomic_g = (feat @ in_proj) * (grad @ out_proj)
-                g.append(atomic_g)
-            g = torch.cat(g)
+                atomic_g += (feat @ in_proj) * (grad @ out_proj)
+            g = atomic_g
         
         elif kernel == 'll-gradient':
             feats, grads = feature_extractor(model_inputs)

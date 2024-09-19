@@ -87,7 +87,12 @@ class MCDropoutUncertainty(BaseUncertainty):
         pass
 
 class MahalanobisUncertainty(BaseUncertainty):
-    def __init__(self):
+    def __init__(
+        self,
+        high_threshold: float = 1.0, 
+        low_threshold: float = 0.95,
+        calculator: Optional[Calculator] = None,
+    ):
         pass
 
     def calculate(self, atoms: ase.Atom) -> Dict:
