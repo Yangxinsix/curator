@@ -14,7 +14,6 @@ from collections import OrderedDict, defaultdict
 from curator.model import MACE
 from curator.utils import scatter_add, scatter_mean
 
-
 class NeuralNetworkPotential(nn.Module):
     """ Base class for neural network potentials."""
     def __init__(
@@ -22,7 +21,6 @@ class NeuralNetworkPotential(nn.Module):
         representation: nn.Module,
         input_modules: List[nn.Module] = None,
         output_modules: List[nn.Module] = None,
-        extract_outputs: bool = True,    
     ) -> None:
         """ Base class for neural network potentials.
         
@@ -34,20 +32,11 @@ class NeuralNetworkPotential(nn.Module):
         super().__init__()
         self.representation = representation
         self.input_modules = nn.ModuleList(input_modules)
-        self.output_modules = nn.ModuleList(output_modules)
+        self.output_modules = CallbackModuleList(output_modules, on_register_callback=self.register_callbacks)
         self.model_outputs: Optional[List[str]] = None
         self._initialized: bool = False
         self.collect_outputs()
-        self.extract_outputs_flag = extract_outputs
-
-        for module in self.output_modules:
-            if hasattr(module, 'update_callback'):
-                module.update_callback = self.collect_outputs
-        
-        for module in self.output_modules:
-            if hasattr(module, 'repr_callback'):
-                module.repr_callback = self.representation
-                module.register_repr_callback()        # activate repr callback for feature extractor and calculator
+        self.register_callbacks()
         
     def forward(self, data: properties.Type) -> properties.Type:
         data = data.copy()
@@ -59,7 +48,7 @@ class NeuralNetworkPotential(nn.Module):
         for m in self.output_modules:
             data = m(data)
         
-        return self.extract_outputs(data) if self.extract_outputs_flag else data
+        return self.extract_outputs(data)
 
     def initialize_modules(self, datamodule: LightningDataModule) -> None:
         for module in self.modules():
@@ -81,8 +70,44 @@ class NeuralNetworkPotential(nn.Module):
         return results
     
     # used to update model outputs
-    def register_callbacks(self, module: nn.Module) -> None:
-        module.update_callback = self.collect_outputs
+    def register_callbacks(self) -> None:
+        for module in self.output_modules:
+            if hasattr(module, 'update_callback'):
+                module.update_callback = self.collect_outputs
+            if hasattr(module, 'repr_callback'):
+                module.repr_callback = self.representation
+                module.register_repr_callback()        # activate repr callback for feature extractor and calculator
+            if hasattr(module, "model_outputs") and module.model_outputs is not None:
+                for model_output in module.model_outputs:
+                    if model_output not in self.model_outputs:
+                        self.model_outputs.append(model_output)
+                
+class CallbackModuleList(nn.ModuleList):
+    def __init__(self, modules=None, on_register_callback=None):
+        super().__init__()
+        self.on_register_callback = on_register_callback
+        if modules:
+            super().extend(modules)
+
+    def append(self, module):
+        super().append(module)
+        if self.on_register_callback is not None:
+            self.on_register_callback()
+
+    def extend(self, modules):
+        super().extend(modules)
+        if self.on_register_callback is not None:
+            self.on_register_callback()
+
+    def insert(self, index, module):
+        super().insert(index, module)
+        if self.on_register_callback is not None:
+            self.on_register_callback()
+
+    def __setitem__(self, idx, module):
+        super().__setitem__(idx, module)
+        if self.on_register_callback is not None:
+            self.on_register_callback()
 
 class EnsembleModel(nn.Module):
     """
