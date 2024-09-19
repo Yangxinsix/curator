@@ -257,7 +257,7 @@ class Asap3NeighborList(NeighborListTransform):
                 cell_displacements.append(displacement)
                 
             cell_displacements = np.concatenate(cell_displacements)
-            cell_displacements = torch.as_tensor(cell_displacements, dtype=torch.float)
+            cell_displacements = torch.as_tensor(cell_displacements, dtype=pos.dtype)
             
         else:
             for i in range(len(atoms)):
@@ -270,7 +270,7 @@ class Asap3NeighborList(NeighborListTransform):
         pairs = np.stack((pair_i_idx, pair_j_idx), axis=1)
         n_diff = np.concatenate(n_diff)
         pairs = torch.as_tensor(pairs)
-        n_diff = torch.as_tensor(n_diff, dtype=torch.float)
+        n_diff = torch.as_tensor(n_diff, dtype=pos.dtype)
         
         outputs = {
             properties.edge_idx: pairs,
@@ -310,11 +310,11 @@ class MatScipyNeighborList(NeighborListTransform):
         
         outputs = {
             properties.edge_idx: torch.as_tensor(np.stack((i, j)).T, dtype=torch.long),
-            properties.edge_diff: torch.as_tensor(D, dtype=torch.float),
+            properties.edge_diff: torch.as_tensor(D, dtype=pos.dtype),
         }
 
         if self.return_cell_displacements:
-            outputs[properties.cell_displacements] = torch.as_tensor(S.dot(cell), dtype=torch.float)
+            outputs[properties.cell_displacements] = torch.as_tensor(S.dot(cell), dtype=pos.dtype)
         return outputs
     
     def __repr__(self):

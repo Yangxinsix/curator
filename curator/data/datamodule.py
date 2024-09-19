@@ -43,6 +43,7 @@ class AtomsDataModule(pl.LightningDataModule):
         normalization: bool = True,
         atomwise_normalization: bool = True,
         scale_forces: bool = False,             # scale forces by forces_rms
+        default_dtype: torch.dtype = torch.get_default_dtype(),
     ) -> None:
         super().__init__()
         
@@ -58,6 +59,7 @@ class AtomsDataModule(pl.LightningDataModule):
         self.batch_size = batch_size
         self.val_batch_size = val_batch_size or test_batch_size or batch_size // 2
         self.test_batch_size = test_batch_size or val_batch_size or batch_size // 2
+        self.default_dtype = default_dtype
         
         # splitting parameters
         self.split_file = split_file
@@ -313,7 +315,7 @@ class AtomsDataModule(pl.LightningDataModule):
             if self.normalization:
                 atomic_energies = self._get_average_E0()
                 if atomic_energies is not None:
-                    reference_energies = torch.zeros((119,), dtype=torch.float)
+                    reference_energies = torch.zeros((119,), dtype=self.default_dtype)
                     for k, v in atomic_energies.items():
                         reference_energies[atomic_numbers[k] if isinstance(k, str) else k] = v
 
