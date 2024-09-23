@@ -29,10 +29,10 @@
       value_key: ${...name}
       compute_overall: true
 - _target_: curator.train.ModelOutput
-  name: stress
+  name: virial
   loss_fn:
     _target_: torch.nn.MSELoss
-  loss_weight: ${task.energy_weight}
+  loss_weight: ${task.virial_weight}
   metrics:
     mae:
       _target_: curator.train.PerAtomMAE
