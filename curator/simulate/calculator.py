@@ -7,7 +7,7 @@ from typing import Optional, List
 
 class MLCalculator(Calculator):
     """ ML model calulator used for ASE applications """
-    implemented_properties = ["energy", "forces"]
+    implemented_properties = ["energy", "forces", "stress"]
     def __init__(
         self,
         model: torch.nn.Module,
@@ -104,7 +104,7 @@ class MLCalculator(Calculator):
 
 class EnsembleCalculator(Calculator):
     """ Ensemble calulator for ML models used for ASE applications """
-    implemented_properties = ["energy", "forces"]
+    implemented_properties = ["energy", "forces", "stress"]
 
     def __init__(
         self,
