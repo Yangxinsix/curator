@@ -50,7 +50,7 @@ class MLCalculator(Calculator):
         elif tensor.numel() == 1:
             return tensor.item()
         else:
-            return tensor.numpy()
+            return tensor.squeeze().numpy()
 
     def _process_results(self, results):
         processed_results = {}
