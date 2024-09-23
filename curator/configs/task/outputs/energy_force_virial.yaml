@@ -21,10 +21,10 @@
       _target_: torchmetrics.regression.MeanSquaredError
       squared: false
 - _target_: curator.train.ModelOutput
-  name: stress
+  name: virial
   loss_fn:
     _target_: torch.nn.MSELoss
-  loss_weight: ${task.stress_weight}
+  loss_weight: ${task.virial_weight}
   metrics:
     mae:
       _target_: torchmetrics.regression.MeanAbsoluteError
