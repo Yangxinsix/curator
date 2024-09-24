@@ -144,7 +144,7 @@ class FeatureStatistics:
         elif kernel == 'local_full-g':
             assert random_projection.num_features != 0, "Error! Random projections must be provided!"
             feats, grads = feature_extractor(model_inputs)
-            atomic_g = torch.zeros((image_idx.shape[0], random_projection.num_features))
+            atomic_g = torch.zeros((image_idx.shape[0], random_projection.num_features), device=image_idx.device)
             for feat, grad, in_proj, out_proj in zip(
                 feats, 
                 grads, 
