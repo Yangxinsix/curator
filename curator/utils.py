@@ -9,6 +9,7 @@ import logging
 from ase import units
 from pathlib import Path, PosixPath
 from typing import Optional, Union
+import numpy as np
 
 def register_resolvers():
     OmegaConf.register_new_resolver("multiply", lambda x, y: x * y, replace=True)
@@ -431,3 +432,27 @@ def scatter_reduce(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: t
         out.scatter_(dim, index, torch.min(out.gather(dim, index), src))
 
     return out
+
+# Function to check if cell is upper-triangular
+def is_upper_triangular(cell):
+    return np.allclose(np.tril(cell, -1), 0)
+
+# transform lower-triangular cell to upper-triangular cell
+def upper_triangular_cell(atoms, verbose=False):
+    if not is_upper_triangular(atoms.get_cell()):
+        a, b, c, alpha, beta, gamma = atoms.cell.cellpar()
+        angles = np.radians((alpha, beta, gamma))
+        sin_a, sin_b, sin_g = np.sin(angles)
+        cos_a, cos_b, cos_g = np.cos(angles)
+        cos_p = (cos_g - cos_a * cos_b) / (sin_a * sin_b)
+        cos_p = np.clip(cos_p, -1, 1)
+        sin_p = np.sqrt(1 - cos_p**2)
+        new_basis = [
+            (a * sin_b * sin_p, a * sin_b * cos_p, a * cos_b),
+            (0, b * sin_a, b * cos_a),
+            (0, 0, c),
+        ]
+        atoms.set_cell(new_basis, scale_atoms=True)
+        if verbose:
+            print("Transformed to upper triangular unit cell.", flush=True)
+    return atoms

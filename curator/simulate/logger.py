@@ -1,7 +1,7 @@
 from abc import ABC, abstractmethod
 from ase import Atoms, units
 from ase.io import Trajectory
-from typing import Optional, Union
+from typing import Optional, Union, List
 from .uncertainty import BaseUncertainty
 import logging
 import sys
@@ -28,7 +28,7 @@ class BaseLogger(ABC):
 class MDLogger(BaseLogger):
     # Logger for molecular dynamics simulations
     def __init__(
-            self, 
+            self,
             logger: Optional[logging.Logger]=None, 
             uncertainty: Optional[BaseUncertainty]=None,
             min_calls: int = 0,          # if uncertaint_calls > min_calls and meets stop criteria, just stop the simulation, else raise errors.
