@@ -277,3 +277,157 @@ def scatter_mean(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: tor
     out = out / out_count
 
     return out
+
+def scatter_max(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None):
+    """
+    Computes the maximum of all values from the `src` tensor into `out` at the indices specified in the `index` tensor
+    along the dimension `dim`.
+
+    Args:
+        src (torch.Tensor): The source tensor.
+        index (torch.Tensor): The indices of elements to scatter.
+            Must have the same size as `src` at dimension `dim` or be broadcastable to that size.
+        dim (int): The axis along which to index. Negative values wrap around.
+        out (torch.Tensor, optional): The destination tensor. If None, a new tensor is created.
+
+    Returns:
+        torch.Tensor: The resulting tensor with the maximum values scattered at the specified indices.
+    """
+    if dim < 0:
+        dim = src.dim() + dim
+
+    # Ensure index has the same number of dimensions as src
+    if index.dim() != src.dim():
+        index_shape = [1] * src.dim()
+        index_shape[dim] = -1  # Let PyTorch infer the size at the specified dimension
+        index = index.view(*index_shape).expand_as(src)
+    else:
+        index = index.expand_as(src)
+
+    # Determine size of output tensor along dimension `dim`
+    output_size = list(src.size())
+    output_size[dim] = int(index.max()) + 1  # Size along dim is max index + 1
+
+    # Initialize out tensor with minimum possible values
+    if out is None:
+        out = torch.full(output_size, torch.finfo(src.dtype).min, dtype=src.dtype, device=src.device)
+    else:
+        out.fill_(torch.finfo(src.dtype).min)
+
+    # Compute maximum values
+    out.scatter_(dim, index, torch.max(out.gather(dim, index), src))
+
+    return out
+
+def scatter_min(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None):
+    """
+    Computes the minimum of all values from the `src` tensor into `out` at the indices specified in the `index` tensor
+    along the dimension `dim`.
+
+    Args:
+        src (torch.Tensor): The source tensor.
+        index (torch.Tensor): The indices of elements to scatter.
+            Must have the same size as `src` at dimension `dim` or be broadcastable to that size.
+        dim (int): The axis along which to index. Negative values wrap around.
+        out (torch.Tensor, optional): The destination tensor. If None, a new tensor is created.
+
+    Returns:
+        torch.Tensor: The resulting tensor with the minimum values scattered at the specified indices.
+    """
+    if dim < 0:
+        dim = src.dim() + dim
+
+    # Ensure index has the same number of dimensions as src
+    if index.dim() != src.dim():
+        index_shape = [1] * src.dim()
+        index_shape[dim] = -1
+        index = index.view(*index_shape).expand_as(src)
+    else:
+        index = index.expand_as(src)
+
+    # Determine size of output tensor along dimension `dim`
+    output_size = list(src.size())
+    output_size[dim] = int(index.max()) + 1
+
+    # Initialize out tensor with maximum possible values
+    if out is None:
+        out = torch.full(output_size, torch.finfo(src.dtype).max, dtype=src.dtype, device=src.device)
+    else:
+        out.fill_(torch.finfo(src.dtype).max)
+
+    # Compute minimum values
+    out.scatter_(dim, index, torch.min(out.gather(dim, index), src))
+
+    return out
+
+def scatter_reduce(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None,
+                   reduce: str = 'sum', include_self: bool = False):
+    """
+    Reduces all values from the `src` tensor into `out` at the indices specified in the `index` tensor
+    along the dimension `dim` using the specified reduction ('sum', 'mean', 'max', 'min').
+
+    Args:
+        src (torch.Tensor): The source tensor.
+        index (torch.Tensor): The indices of elements to scatter.
+            Must have the same size as `src` at dimension `dim` or be broadcastable to that size.
+        dim (int): The axis along which to index.
+        out (torch.Tensor, optional): The destination tensor. If None, a new tensor is created.
+        reduce (str): The reduction operation to apply ('sum', 'mean', 'max', 'min').
+        include_self (bool): Whether to include existing values in `out` during reduction.
+
+    Returns:
+        torch.Tensor: The resulting tensor with the reduced values scattered at the specified indices.
+    """
+    if dim < 0:
+        dim = src.dim() + dim
+
+    # Validate reduce operation
+    if reduce not in ['sum', 'mean', 'max', 'min']:
+        raise ValueError(f"Invalid reduce operation '{reduce}'. Supported operations: 'sum', 'mean', 'max', 'min'.")
+
+    # Ensure index has the same number of dimensions as src
+    if index.dim() != src.dim():
+        index_shape = [1] * src.dim()
+        index_shape[dim] = -1
+        index = index.view(*index_shape).expand_as(src)
+    else:
+        index = index.expand_as(src)
+
+    # Determine size of output tensor along dimension `dim`
+    output_size = list(src.size())
+    output_size[dim] = int(index.max()) + 1
+
+    # Initialize out tensor
+    if out is None:
+        if reduce in ['sum', 'mean']:
+            out = torch.zeros(output_size, dtype=src.dtype, device=src.device)
+        elif reduce == 'max':
+            out = torch.full(output_size, torch.finfo(src.dtype).min, dtype=src.dtype, device=src.device)
+        elif reduce == 'min':
+            out = torch.full(output_size, torch.finfo(src.dtype).max, dtype=src.dtype, device=src.device)
+    else:
+        if not include_self:
+            if reduce in ['sum', 'mean']:
+                out.zero_()
+            elif reduce == 'max':
+                out.fill_(torch.finfo(src.dtype).min)
+            elif reduce == 'min':
+                out.fill_(torch.finfo(src.dtype).max)
+
+    if reduce == 'sum':
+        out.scatter_add_(dim, index, src)
+    elif reduce == 'mean':
+        out.scatter_add_(dim, index, src)
+        # Count occurrences for mean calculation
+        count = torch.zeros_like(out)
+        ones = torch.ones_like(src, dtype=src.dtype)
+        count.scatter_add_(dim, index, ones)
+        zero_mask = count == 0
+        count[zero_mask] = 1
+        out = out / count
+    elif reduce == 'max':
+        out.scatter_(dim, index, torch.max(out.gather(dim, index), src))
+    elif reduce == 'min':
+        out.scatter_(dim, index, torch.min(out.gather(dim, index), src))
+
+    return out

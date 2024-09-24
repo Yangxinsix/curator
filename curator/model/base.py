@@ -109,64 +109,6 @@ class CallbackModuleList(nn.ModuleList):
         if self.on_register_callback is not None:
             self.on_register_callback()
 
-class EnsembleModel(nn.Module):
-    """
-    Ensemble model for evaluating uncertainties
-    """
-    def __init__(self, models: List[NeuralNetworkPotential]) -> None:
-        super().__init__()
-        self.models = nn.ModuleList([model for model in models])
-        self.compute_uncertainty = True if len(models) > 1 else False
-
-    def forward(self, data: properties.Type) -> properties.Type:
-        energy = []
-        forces = []
-        for model in self.models:
-            out = model(data)
-            energy.append(out[properties.energy].detach())
-            forces.append(out[properties.forces].detach())
-        
-        energy = torch.stack(energy)
-        forces = torch.stack(forces)
-
-        
-        result_dict = {
-            properties.energy: torch.mean(energy, dim=0),
-            properties.forces: torch.mean(forces, dim=0),
-        }
-
-        if self.compute_uncertainty:
-            uncertainty = {
-                properties.e_max: torch.max(energy).unsqueeze(-1),
-                properties.e_min: torch.min(energy).unsqueeze(-1),
-                properties.e_var: torch.var(energy, dim=0),
-                properties.e_sd: torch.std(energy, dim=0),
-                properties.f_var: scatter_mean(torch.var(forces, dim=0).mean(dim=1), data[properties.image_idx], dim=0),
-            }
-            uncertainty[properties.f_sd] = uncertainty[properties.f_var].sqrt()
-            result_dict[properties.uncertainty] = uncertainty
-        
-        if properties.energy in data:
-            # calculate errors
-            e_diff = result_dict[properties.energy] - data[properties.energy]
-            f_diff = result_dict[properties.forces] - data[properties.forces]
-            error = {
-                properties.e_ae: torch.abs(e_diff),
-                properties.e_se: torch.square(e_diff),
-                properties.f_ae: scatter_mean(torch.abs(f_diff).mean(dim=1), data[properties.image_idx], dim=0),
-                properties.f_se: scatter_mean(torch.square(f_diff).mean(dim=1), data[properties.image_idx], dim=0),
-            }
-
-            # TODO: wait for torch_scatter.
-            # error[properties.f_maxe] = f_scatter.scatter_reduce(0, data[properties.image_idx].unsqueeze(1).expand_as(f_diff), torch.abs(f_diff), reduce='amax', include_self=False)
-            # error[properties.f_mine] = f_scatter.scatter_reduce(0, data[properties.image_idx].unsqueeze(1).expand_as(f_diff), torch.abs(f_diff), reduce='amin', include_self=False)
-            result_dict[properties.error] = error
-
-        return result_dict
-
-class DropoutModel(nn.Module):
-    pass
-
 logger = logging.getLogger(__name__)    # console output
 # ligtning model
 class LitNNP(pl.LightningModule):
