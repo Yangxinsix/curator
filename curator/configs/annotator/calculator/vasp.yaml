@@ -14,15 +14,10 @@
   nelm: 400
   lmaxmix: 4
   nsw: 0
-  lorbit: 12
-  npar: 1
-  kpar: 1
   lreal: auto
-  gamma: True
   ncore: 4
   istart: 0
   isym: 0
   lcharg: False
   lwave: True
-  kspacing: 0.3
   command: mpirun vasp_std
