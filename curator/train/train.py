@@ -157,6 +157,8 @@ def run_epoch(
     logger.info("".join(head))
     logger.info("".join(info))
 
+    return all_loss, all_metrics
+
 def train(
     model, 
     outputs, 
@@ -187,14 +189,14 @@ def train(
         # train
         run_epoch(epoch_idx, model, outputs, train_loader, device, rescale_layers, optimizer, 'train', log_frequency)
         # validation
-        run_epoch(epoch_idx, model, outputs, val_loader, device, rescale_layers, optimizer, 'val', log_frequency)
+        all_loss, all_metrics = run_epoch(epoch_idx, model, outputs, val_loader, device, rescale_layers, optimizer, 'val', log_frequency)
         # test
         if test_loader is not None:
             run_epoch(epoch_idx, model, outputs, test_loader, device, rescale_layers, optimizer, 'test', log_frequency)
 
         # Scheduler step
         if scheduler is not None:
-            scheduler.step()
+            scheduler.step(all_loss['Total_loss'])
     
     logger.debug("Training complete")
 
