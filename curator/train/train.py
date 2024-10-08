@@ -62,7 +62,7 @@ def run_step(model, batch, outputs, rescale_layers, device, optimizer=None, stag
         # Calculate metrics
         all_metrics = {}
         for output in outputs:
-            metrics = output.calculate_metrics(scaled_pred, batch, 'train')
+            metrics = output.calculate_metrics(scaled_pred, batch, stage)
             all_metrics.update(metrics)
 
         # Backpropagation
@@ -77,11 +77,11 @@ def run_step(model, batch, outputs, rescale_layers, device, optimizer=None, stag
             unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
 
         # Compute loss
-        loss_dict, _ = loss_fn(outputs, unscaled_pred, unscaled_batch, 'val')
+        loss_dict, _ = loss_fn(outputs, unscaled_pred, unscaled_batch, stage)
         # Calculate metrics
         all_metrics = {}
         for output in outputs:
-            metrics = output.calculate_metrics(pred, batch, 'train')
+            metrics = output.calculate_metrics(pred, batch, stage)
             all_metrics.update(metrics)
 
     return loss_dict, all_metrics
