@@ -179,7 +179,7 @@ class AtomsDataModule(pl.LightningDataModule):
         return self._test_dataset
     
     def train_dataloader(self) -> torch.utils.data.DataLoader:
-        if self._train_dataloader is None:
+        if self._train_dataloader is None and self._train_dataset is not None:
             self._train_dataloader = torch.utils.data.DataLoader(
                 self.train_dataset,
                 batch_size=self.batch_size,
@@ -191,7 +191,7 @@ class AtomsDataModule(pl.LightningDataModule):
         return self._train_dataloader
     
     def val_dataloader(self) -> torch.utils.data.DataLoader:
-        if self._val_dataloader is None:
+        if self._val_dataloader is None and self._val_dataset is not None:
             self._val_dataloader = torch.utils.data.DataLoader(
                 self.val_dataset,
                 batch_size=self.val_batch_size,
@@ -202,7 +202,7 @@ class AtomsDataModule(pl.LightningDataModule):
         return self._val_dataloader
     
     def test_dataloader(self) -> torch.utils.data.DataLoader:
-        if self._test_dataloader is None:
+        if self._test_dataloader is None and self._test_dataset is not None:
             self._test_dataloader = torch.utils.data.DataLoader(
                 self.test_dataset,
                 batch_size=self.test_batch_size,
