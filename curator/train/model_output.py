@@ -55,13 +55,12 @@ class ModelOutput(nn.Module):
             pred[self.name], target[self.target_property]
         )
         num_obs = target[self.target_property].view(-1).shape[0]
-        
-        if return_num_obs:
-            return loss, num_obs
 
         self.loss += loss.item() * num_obs
         self.num_obs += num_obs
 
+        if return_num_obs:
+            return loss, num_obs
         return loss
 
     def update_metrics(self, pred: Dict, target: Dict, subset: str) -> None:
