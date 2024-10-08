@@ -72,6 +72,10 @@ def train(config: DictConfig) -> None:
     # Initiate the datamodule
     log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_path}")
     datamodule: LightningDataModule = hydra.utils.instantiate(config.data)
+    datamodule.setup()
+    # something must be inferred from data before instantiating the model
+    if datamodule.species == 'auto':
+        config.data.species = datamodule._get_species()
 
     # TODO: enable loading existing optimizers and schedulers
     if config.model_path is not None:
@@ -109,6 +113,7 @@ def train(config: DictConfig) -> None:
         task: LitNNP = hydra.utils.instantiate(config.task, model=model)
 
     log.debug(f"Instantiating model <{type(model)}> with GNN representation <{type(model.representation)}>")
+    log.debug(f"{model.representation}")
     log.debug(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,d}")
 
     # Save extra arguments in checkpoint

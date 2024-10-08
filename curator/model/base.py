@@ -184,6 +184,7 @@ class LitNNP(pl.LightningModule):
     def on_train_start(self):
         logger.info("\n")
         logger.debug("Start training model")
+        logger.info(f"{self.optimizers()}")
     
     # def on_validation_start(self):
     #     logger.info("\nStart validating model")

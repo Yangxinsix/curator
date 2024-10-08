@@ -299,11 +299,9 @@ class AtomsDataModule(pl.LightningDataModule):
             self.atomic_energies = atomic_energies_dict
             
         if isinstance(self.atomic_energies, Dict):
-            _atomic_energies = {}
-            for k, v in self.atomic_energies.items():
+            for k in self.atomic_energies.keys():
                 if isinstance(k, int):
-                    _atomic_energies[chemical_symbols[k]] = v
-            self.atomic_energies = _atomic_energies
+                    self.atomic_energies[chemical_symbols[k]] = self.atomic_energies.pop(k)
 
         logger.debug(f"Using reference energies for elements: {self.atomic_energies}.")
         return self.atomic_energies
