@@ -82,8 +82,6 @@ class ModelOutput(nn.Module):
     
     def accumulate_loss(self):
         loss = self.loss / self.num_obs
-        self.loss = 0.0
-        self.num_obs = 0
         return loss
     
     def accumulate_metrics(self, subset):
@@ -92,6 +90,10 @@ class ModelOutput(nn.Module):
             all_metrics[k] = v.compute()
         return all_metrics
     
+    def reset_loss(self) -> None:
+        self.loss = 0.0
+        self.num_obs = 0
+
     def reset_metrics(self, subset: Optional[str]=None) -> None:
         if subset is None:
             for k1 in self.metrics:
