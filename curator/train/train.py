@@ -153,7 +153,6 @@ def run_epoch(
 
     head = [f'{stage:<12s}# epoch'] + [f'{k:>16s}' for k in all_loss] + [f'{k:>16s}' for k in all_metrics]
     info = [f'{epoch_idx:>19d}'] + [f'{v:>16.3g}' for v in all_loss.values()] + [f'{v:>16.3g}' for v in all_metrics.values()]
-    logger.info("\n")
     logger.debug("Epoch summary:")
     logger.info("".join(head))
     logger.info("".join(info))
