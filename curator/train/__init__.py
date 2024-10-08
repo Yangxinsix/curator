@@ -7,6 +7,7 @@ from .metrics import (
     PerAtomMAE, 
     PerAtomRMSE
 )
+from .train import train
 __all__ = [
     ExponentialMovingAverage,
     ModelOutput,
@@ -15,4 +16,5 @@ __all__ = [
     PerSpeciesRMSE, 
     PerAtomMAE, 
     PerAtomRMSE,
+    train,
 ]

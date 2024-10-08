@@ -5,6 +5,7 @@ defaults:
   - model: nnp
   - data: custom
   - optional model/repr_params: ${model/representation}_params       # model specified hyperparameters. Training different models will need different params such as batch size, optimizer, learning rate, etc. 
+  - optional task/output_params: ${task/outputs}_params 
   - _self_
 
 # Some parameters that are important for training
