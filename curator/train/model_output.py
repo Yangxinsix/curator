@@ -43,7 +43,10 @@ class ModelOutput(nn.Module):
             "val": self.val_metrics,
             "test": self.test_metrics,
         }
-    
+
+        self.loss = 0.0
+        self.num_obs = 0
+
     def calculate_loss(self, pred: Dict, target: Dict, return_num_obs=True) -> torch.Tensor:
         if self.loss_weight == 0 or self.loss_fn is None:
             return 0.0
@@ -55,7 +58,10 @@ class ModelOutput(nn.Module):
         
         if return_num_obs:
             return loss, num_obs
-        
+
+        self.loss += loss.item() * num_obs
+        self.num_obs += num_obs
+
         return loss
 
     def update_metrics(self, pred: Dict, target: Dict, subset: str) -> None:
@@ -75,14 +81,17 @@ class ModelOutput(nn.Module):
         
         return batch_val
     
-    def reset_loss(self, subset: Optional[str]=None) -> None:
-        if subset is None:
-            for k in self.loss:
-                self.loss[k] = 0.0
-                self.num_obs[k] = 0
-        else:
-            self.loss[subset] = 0.0
-            self.num_obs[subset] = 0
+    def accumulate_loss(self):
+        loss = self.loss / self.num_obs
+        self.loss = 0.0
+        self.num_obs = 0
+        return loss
+    
+    def accumulate_metrics(self, subset):
+        all_metrics = {}
+        for k, v in self.metrics[subset].items():
+            all_metrics[k] = v.compute()
+        return all_metrics
     
     def reset_metrics(self, subset: Optional[str]=None) -> None:
         if subset is None:

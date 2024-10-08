@@ -1,0 +1,11 @@
+# @package _global_
+model:
+  output_modules:
+    - _target_: curator.layer.AtomwiseReduce
+    - _target_: curator.layer.GradientOutput
+      model_outputs:
+        - energy
+        - forces
+        - virial
+        - stress
+    - _target_: curator.layer.GlobalRescaleShift

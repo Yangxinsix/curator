@@ -147,7 +147,7 @@ def tmp_train(config: DictConfig):
     from e3nn.util.jit import script
     from torch_ema import ExponentialMovingAverage
     from .utils import EarlyStopping
-
+    from curator.train import train
 
     # Load the arguments
     if config.cfg is not None:
@@ -165,183 +165,39 @@ def tmp_train(config: DictConfig):
         log.info("Seed randomly...")
     
     # Setup the logger
-    runHandler = logging.FileHandler(os.path.join(config.run_path, "printlog.txt"), mode="w")
-    runHandler.setLevel(logging.DEBUG)
-    runHandler.setFormatter(logging.Formatter("%(message)s"))
-    log.addHandler(runHandler)
-    log.addHandler(logging.StreamHandler())    
+    # set up logger
+    fh = logging.FileHandler(os.path.join(config.run_path, "training.log"), mode="w")
+    fh.setFormatter(CustomFormatter())
+    log.addHandler(fh)
     
     # Set up datamodule and load training and validation set
-    print(config.data.datapath)
-    if not os.path.isfile(config.data.datapath):
-        raise RuntimeError("Please provide valid data path!")
-    datamodule = instantiate(config.data)
+    # Initiate the datamodule
+    log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_path}")
+    datamodule = hydra.utils.instantiate(config.data)
     datamodule.setup()
-    train_loader = datamodule.train_dataloader
-    val_loader = datamodule.val_dataloader
+    train_loader = datamodule.train_dataloader()
+    val_loader = datamodule.val_dataloader()
+    test_loader = datamodule.test_dataloader()
 
     # Set up the model, the optimizer and  the scheduler
     model = instantiate(config.model)
     model.initialize_modules(datamodule)
     outputs = instantiate(config.task.outputs)
-    model.to(config.device)
-    for output in outputs:
-        output.to(config.device)
     optimizer = instantiate(config.task.optimizer)(model.parameters())
     scheduler = instantiate(config.task.scheduler)(optimizer=optimizer)
 
-    # If you use exponentialmovingaverage, you need to update the model parameters
-    if config.task.use_ema:
-        ema = ExponentialMovingAverage(model.parameters(), decay=config.task.ema_decay)
-
-    # Setup early stopping and inital training param  
-    early_stop = EarlyStopping(patience=config.patience) 
-    epoch = config.trainer.max_epochs
-    best_val_loss = torch.inf
-    prev_loss = None
-    rescale_layers = []
-    for layer in model.output_modules:
-        if hasattr(layer, "unscale"):
-            rescale_layers.append(layer)
-    # Start training
-    for e in range(epoch):
-        # train
-        model.train()
-        for i, batch in enumerate(train_loader):
-            # Initialize the batch, targets and loss
-            batch = {k: v.to(config.device) for k, v in batch.items()}
-            targets = {
-                output.target_property: batch[output.target_property]
-                for output in outputs
-            }
-            atoms_dict = {k: v for k, v in batch.items() if k not in targets}
-            optimizer.zero_grad()
-            unscaled_targets = targets.copy()
-            unscaled_targets.update(atoms_dict)
-            for layer in rescale_layers:
-                unscaled_targets = layer.unscale(unscaled_targets, force_process=True)
-            pred = model(batch)
-            loss = 0.0
-            
-            # Calculate the loss and metrics
-            metrics = {}
-            for output in outputs:
-                tmp_loss, _ = output.calculate_loss(unscaled_targets, pred)
-                metrics[f"{output.target_property}_loss"] = tmp_loss.detach()
-                loss += tmp_loss
-            
-            # Backpropagation
-            loss.backward()
-            optimizer.step()
-            if config.task.use_ema:
-                ema.update()
-            
-            # Log the training metrics
-            scaled_pred = pred.copy()
-            scaled_pred.update(atoms_dict)
-            for layer in rescale_layers:
-                scaled_pred = layer.scale(scaled_pred, force_process=True)
-            if i % config.trainer.log_every_n_steps == 0:
-                for output in outputs:
-                    for k, v in output.metrics['train'].items():
-                        metrics[f"{output.name}_{k}"] = v(scaled_pred[output.name], targets[output.name]).detach()
-                log_outputs = ",".join([f"{k}: {v:8.3f} " for k, v in metrics.items()])
-                log.info(f"Training step: {i} {log_outputs}")
-        
-        # validation for each epoch
-        model.eval()
-        metrics = {}
-        a_counts = 0
-        s_counts = 0
-        if config.task.use_ema:
-            cm = ema.average_parameters()
-        else:
-            cm = contextlib.nullcontext()
-        with cm:
-            for i, batch in enumerate(val_loader):
-                # Initialize the batch, targets and loss
-                batch = {k: v.to(config.device) for k, v in batch.items()}
-                targets = {
-                    output.target_property: batch[output.target_property]
-                    for output in outputs
-                }
-                atoms_dict = {k: v for k, v in batch.items() if k not in targets}
-                    
-                a = batch["forces"].shape[0]
-                s = batch["energy"].shape[0]
-                a_counts += a
-                s_counts += s
-                pred = model(batch)
-                unscaled_targets, unscaled_pred = targets.copy(), pred.copy()
-                unscaled_pred.update(atoms_dict)
-                unscaled_targets.update(atoms_dict)
-                for layer in rescale_layers:
-                    unscaled_targets = layer.unscale(unscaled_targets, force_process=True)
-                    unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
-                    
-                # calculate loss
-                for output in outputs:
-                    tmp_loss = output.calculate_loss(unscaled_targets, unscaled_pred, return_num_obs=False).detach()
-                    # metrics
-                    if i == 0:
-                        metrics[f"{output.target_property}_loss"] = tmp_loss
-                    else:
-                        metrics[f"{output.target_property}_loss"] += tmp_loss
-                        
-                    for k, v in output.metrics['train'].items():
-                        m = v(pred[output.name], targets[output.name]).detach()
-                        if "rmse" in k:
-                            m = m ** 2
-                        if i == 0:
-                            metrics[f"{output.name}_{k}"] = m
-                        else:
-                            metrics[f"{output.name}_{k}"] += m
-            
-        # postprocess validation metrics    
-        for k in metrics:
-            metrics[k] /= i+1
-            if "rmse" in k:
-                metrics[k] = torch.sqrt(metrics[k])
-        
-        val_loss = metrics["energy_loss"] + metrics["forces_loss"]
-        smooth_loss = val_loss if prev_loss is None else 0.9 * val_loss + 0.1 * prev_loss
-        prev_loss = val_loss        
-        
-        # Save the model if validation loss is improving
-        if not early_stop(smooth_loss, best_val_loss):
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                torch.save(
-                    {   "model": model.state_dict(),
-                        "optimizer": optimizer.state_dict(),
-                        "scheduler": scheduler.state_dict(),
-                        "best_val_loss": best_val_loss,
-                        "model_params": config.model,
-                        "data_params": config.data,
-                        "device": config.device,
-                    },
-                    os.path.join(config.run_path, "best_model.pth"),
-                )
-        # Stop training if validation loss is not improving for a while
-        else:
-            log.info(f"Validation epoch: {e}, {log_outputs}, patience: {early_stop.counter}")
-            log.info(f"Validation loss is not improving for {early_stop.counter} epoches, exiting")
-            torch.save(
-                {
-                    "model": model.state_dict(),
-                    "optimizer": optimizer.state_dict(),
-                    "scheduler": scheduler.state_dict(),
-                    "best_val_loss": best_val_loss,
-                    "model_params": config.model,
-                    "data_params": config.data,
-                    "device": config.device,
-                },
-                os.path.join(config.run_path, "exit_model.pth"),
-            )
-            break # stops the training loop
-        # Log the validation metrics
-        log_outputs = ",".join([f"{k}: {v:<8.3f} " for k, v in metrics.items()])
-        log.info(f"Validation epoch: {e}, {log_outputs}, patience: {early_stop.counter}")
+    model = train(
+        model=model, 
+        outputs=outputs,
+        optimizer=optimizer, 
+        scheduler=scheduler, 
+        train_loader=train_loader, 
+        val_loader=val_loader, 
+        test_loader=test_loader,
+        device=config.device,
+        num_epochs=config.trainer.max_epochs,
+        log_frequency=config.trainer.log_every_n_steps,
+    )
     
     # Deploy model
     if config.deploy_model:
@@ -627,6 +483,7 @@ def label(config: DictConfig):
     all_converged = []
     for i, atoms in enumerate(images):
         # Label the structure with the choosen method
+        log.info(f"Labeling structure {i}.")
         try:
             existing_converged = db[i+1].get('converged')
             if not existing_converged:

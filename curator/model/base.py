@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 import torch.nn.functional as F
-from typing import List, Optional, Dict, Type, Any
+from typing import List, Optional, Dict, Type, Any, Union
 from curator.data import properties
 from curator.train.model_output import ModelOutput
 from pytorch_lightning.utilities.types import STEP_OUTPUT
@@ -11,7 +11,6 @@ from pytorch_lightning import LightningDataModule
 from omegaconf import DictConfig
 import logging
 from collections import OrderedDict, defaultdict
-from curator.model import MACE
 from curator.utils import scatter_add, scatter_mean
 
 class NeuralNetworkPotential(nn.Module):
@@ -66,21 +65,32 @@ class NeuralNetworkPotential(nn.Module):
         self.model_outputs = model_outputs
     
     def extract_outputs(self, data: properties.Type) -> properties.Type:
-        results = {k: data[k] for k in self.model_outputs}
-        return results
+        if 'all' in self.model_outputs:
+            return data
+        else: 
+            return {k: data[k] for k in self.model_outputs}
     
     # used to update model outputs
-    def register_callbacks(self) -> None:
-        for module in self.output_modules:
+    def register_callbacks(self, target_module: Union[nn.Module, List[nn.Module], None]=None) -> None:
+        def register_module(module):
             if hasattr(module, 'update_callback'):
                 module.update_callback = self.collect_outputs
             if hasattr(module, 'repr_callback'):
-                module.repr_callback = self.representation
+                module.repr_callback = self
                 module.register_repr_callback()        # activate repr callback for feature extractor and calculator
             if hasattr(module, "model_outputs") and module.model_outputs is not None:
                 for model_output in module.model_outputs:
                     if model_output not in self.model_outputs:
                         self.model_outputs.append(model_output)
+                        
+        if target_module is None:
+            for module in self.output_modules:
+                register_module(module)
+        elif isinstance(target_module, list):
+            for module in target_module:
+                register_module(module)
+        else:
+            register_module(target_module)
                 
 class CallbackModuleList(nn.ModuleList):
     def __init__(self, modules=None, on_register_callback=None):
@@ -90,24 +100,24 @@ class CallbackModuleList(nn.ModuleList):
             super().extend(modules)
 
     def append(self, module):
-        super().append(module)
         if self.on_register_callback is not None:
-            self.on_register_callback()
+            self.on_register_callback(module)
+        super().append(module)
 
     def extend(self, modules):
-        super().extend(modules)
         if self.on_register_callback is not None:
             self.on_register_callback()
+        super().extend(modules)
 
     def insert(self, index, module):
-        super().insert(index, module)
         if self.on_register_callback is not None:
-            self.on_register_callback()
+            self.on_register_callback(module)
+        super().insert(index, module)
 
     def __setitem__(self, idx, module):
-        super().__setitem__(idx, module)
         if self.on_register_callback is not None:
-            self.on_register_callback()
+            self.on_register_callback(module)
+        super().__setitem__(idx, module)
 
 logger = logging.getLogger(__name__)    # console output
 # ligtning model
@@ -170,39 +180,6 @@ class LitNNP(pl.LightningModule):
             loss_dict[subset + '_total_loss'] += loss_dict[key]
             
         return loss_dict, num_obs_dict
-    
-    # TODO: manually reset metrics
-
-    # def log_metrics(self, pred: Dict, batch: Dict, subset: str) -> None:
-    #     for output in self.outputs:
-    #         output.update_metrics(pred, batch, subset)
-    #         for metric_name, metric in output.metrics[subset].items():
-    #             self.log(
-    #                 f"{subset}_{output.name}_{metric_name}",
-    #                 metric,
-    #                 on_step=(subset == "train"),
-    #                 on_epoch=(subset != "train"),
-    #                 prog_bar=False,
-    #             )
-                
-    # def reset_loss_metrics(self, subset: str) -> None:
-    #     for output in self.outputs:
-    #         output.loss = 0.0
-    #         output.num_obs = 0
-    #         for k in output.metrics:
-    #             output.metrics[subset][k].reset()
-    
-    
-    # def _get_metrics_key(self, subset: str):
-    #     msgs = [f'{"total_loss":>16s}']
-    #     msgs += [output.name + '_loss' for output in self.outputs]
-    #     msgs += [output.name + '_' + metric for output in self.outputs for metric in output.metrics[subset]]
-    #     msgs = [f'{msg:>16s}' for msg in msgs]
-    #     return msgs
-    
-    # def _get_metrics(self):
-    #     forward_cache = [f'{metric._forward_cache:>16.3g}' for metric in self.trainer._results.values()]
-    #     return forward_cache
 
     def on_train_start(self):
         logger.info("\n")
@@ -242,15 +219,17 @@ class LitNNP(pl.LightningModule):
 
         # calculate loss, metrics
         # unscale batch because loss will be calculated with normalized units
+        unscaled_batch = batch
         for layer in self.rescale_layers:
-            unscaled_batch = layer.unscale(batch, force_process=True)
+            unscaled_batch = layer.unscale(unscaled_batch, force_process=True)
         loss_dict, num_abs_dict = self.loss_fn(pred, unscaled_batch, 'train')
         for k in loss_dict.keys():
             self.log(k, loss_dict[k].detach().cpu().item(), batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True, sync_dist=False)
         
         # when calculate metrics pred need to be scaled to get real units
+        scaled_pred = pred
         for layer in self.rescale_layers[::-1]:
-            scaled_pred = layer.scale(pred, force_process=True)
+            scaled_pred = layer.scale(scaled_pred, force_process=True)
         
         all_metrics = {}
         for output in self.outputs:
@@ -291,9 +270,10 @@ class LitNNP(pl.LightningModule):
         
         # calculate loss, metrics
         # both batch and pred need to be normalized for calculating loss in validation mode
+        unscaled_batch, unscaled_pred = batch, pred
         for layer in self.rescale_layers:
-            unscaled_batch = layer.unscale(batch, force_process=True)
-            unscaled_pred = layer.unscale(pred, force_process=True)
+            unscaled_batch = layer.unscale(unscaled_batch, force_process=True)
+            unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
         loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_batch, 'val')
         for k in loss_dict.keys():
             self.log(k, loss_dict[k].detach().cpu().item(), batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True, sync_dist=False) 
@@ -317,9 +297,10 @@ class LitNNP(pl.LightningModule):
         
         # calculate loss, metrics
         # both targets and pred need to be normalized for calculating loss in validation mode
+        unscaled_batch, unscaled_pred = batch, pred
         for layer in self.rescale_layers:
-            unscaled_targets = layer.unscale(batch, force_process=True)
-            unscaled_pred = layer.unscale(pred, force_process=True)
+            unscaled_targets = layer.unscale(unscaled_batch, force_process=True)
+            unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
         loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_targets, 'test')
         for k in loss_dict.keys():
             self.log(k, loss_dict[k].detach().cpu().item(), batch_size=num_abs_dict[k], on_step=True, on_epoch=False, prog_bar=True, sync_dist=False) 
@@ -375,6 +356,7 @@ class LitNNP(pl.LightningModule):
             checkpoint['model'] = self.model
     
     def configure_optimizers(self) -> Type[torch.optim.Optimizer]:
+        from curator.model import MACE
         if type(self.model.representation) == MACE:
             decay_params = {}
             no_decay_params = {}
@@ -406,16 +388,17 @@ class LitNNP(pl.LightningModule):
             lr_scheduler = {"scheduler": scheduler}
             if self.scheduler_monitor:
                 lr_scheduler["monitor"] = self.scheduler_monitor
-            if self.trainer.val_check_interval < 1.0:
-                warnings.warn(
-                    "Learning rate is scheduled after epoch end. To enable scheduling before epoch end, "
-                    "please specify val_check_interval by the number of training epochs after which the "
-                    "model is validated."
-                )
-            # in case model is validated before epoch end (recommended use of val_check_interval)
-            if self.trainer.val_check_interval > 1.0:
-                lr_scheduler["interval"] = "step"
-                lr_scheduler["frequency"] = self.trainer.val_check_interval
+            if self._trainer is not None:
+                if self.trainer.val_check_interval < 1.0:
+                    warnings.warn(
+                        "Learning rate is scheduled after epoch end. To enable scheduling before epoch end, "
+                        "please specify val_check_interval by the number of training epochs after which the "
+                        "model is validated."
+                    )
+                # in case model is validated before epoch end (recommended use of val_check_interval)
+                if self.trainer.val_check_interval > 1.0:
+                    lr_scheduler["interval"] = "step"
+                    lr_scheduler["frequency"] = self.trainer.val_check_interval
                 
             return {
                 "optimizer": optimizer,
