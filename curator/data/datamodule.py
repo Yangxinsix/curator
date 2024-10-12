@@ -299,7 +299,7 @@ class AtomsDataModule(pl.LightningDataModule):
             self.atomic_energies = atomic_energies_dict
             
         if isinstance(self.atomic_energies, Dict):
-            for k in self.atomic_energies.keys():
+            for k in list(self.atomic_energies.keys()):
                 if isinstance(k, int):
                     self.atomic_energies[chemical_symbols[k]] = self.atomic_energies.pop(k)
 
