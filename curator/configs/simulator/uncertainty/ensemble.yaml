@@ -1,5 +1,5 @@
 _target_: curator.simulate.uncertainty.EnsembleUncertainty
-threshold_key: force_sd
+key: force_sd
 high_threshold: 0.5
 low_threshold: 0.05
 save_uncertain_atoms: ${run_path}/warning_struct.traj

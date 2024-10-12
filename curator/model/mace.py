@@ -13,10 +13,11 @@ from curator.layer import (
     PolynomialCutoff,
     SphericalHarmonicEdgeAttrs,
     RealAgnosticResidualInteractionBlock,
+    RealAgnosticInteractionBlock,
     EquivariantProductBasisBlock,
 )
 from curator.data import properties
-from typing import List, Optional, Dict, Union, Callable
+from typing import List, Optional, Dict, Union, Callable, Type
 
 activation_fn = {
     "silu": torch.nn.SiLU(),
@@ -33,6 +34,9 @@ class MACE(nn.Module):
         cutoff: float,
         num_interactions: int,
         correlation: Union[int, List[int]],
+        interaction_cls: Type[nn.Module] = RealAgnosticResidualInteractionBlock,
+        interaction_cls_first: Type[nn.Module] = RealAgnosticInteractionBlock,
+        radial_MLP: Union[List[int], None] = None,
         species: Optional[List[str]] = None,
         num_elements: Optional[int] = None,
         hidden_irreps: Union[o3.Irreps, str, None] = None,
@@ -89,13 +93,15 @@ class MACE(nn.Module):
                     for p in ((1, -1) if parity else (1,))
                     for l in range(lmax + 1)
                 ]
-            )
+            ).sort()[0].simplify()
             self.lmax = lmax
         # MACE prohibits some irreps like 0e, 1e to be used
         forbidden_ir = ['0o', '1e', '2o', '3e', '4o']
         self.hidden_irreps = o3.Irreps([irrep for irrep in self.hidden_irreps if str(irrep.ir) not in forbidden_ir])
         self.num_features = self.hidden_irreps.count(o3.Irrep(0, 1))
 
+        if radial_MLP is None:
+            radial_MLP = [64, 64, 64]
         ## handling irreps
         # chemical embedding irreps
         if node_irreps is None:
@@ -153,12 +159,22 @@ class MACE(nn.Module):
             hidden_irreps_out = str(self.hidden_irreps[0]) if i == num_interactions - 1 else self.hidden_irreps
             if i > 0:
                 self.irreps_in[properties.node_feat] = self.hidden_irreps
-            inter = RealAgnosticResidualInteractionBlock(
-                irreps_in=self.irreps_in,
-                target_irreps=interaction_irreps,
-                hidden_irreps=hidden_irreps_out,
-                avg_num_neighbors=avg_num_neighbors,
-            )
+            if i == 0:
+                inter = interaction_cls_first(
+                    irreps_in=self.irreps_in,
+                    target_irreps=interaction_irreps,
+                    hidden_irreps=hidden_irreps_out,
+                    radial_MLP=radial_MLP,
+                    avg_num_neighbors=avg_num_neighbors,
+                )
+            else:
+                inter = interaction_cls(
+                    irreps_in=self.irreps_in,
+                    target_irreps=interaction_irreps,
+                    hidden_irreps=hidden_irreps_out,
+                    radial_MLP=radial_MLP,
+                    avg_num_neighbors=avg_num_neighbors,
+                )
             self.interactions.append(inter)
             
             prod = EquivariantProductBasisBlock(
@@ -166,7 +182,7 @@ class MACE(nn.Module):
                 target_irreps=hidden_irreps_out,
                 correlation=correlation[i],
                 num_elements=num_elements,
-                use_sc=True,
+                use_sc="Residual" in str(interaction_cls_first) if i == 0 else True,
             )
             self.products.append(prod)
             

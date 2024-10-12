@@ -127,7 +127,7 @@ class GlobalRescaleShift(torch.nn.Module):
             self._get_atomic_energies_list(_datamodule._get_average_E0())
 
     def __repr__(self):
-        return (f"{self.__class__.__name__}(has_scale={self.has_scale}, has_shift={self.has_shift}, scales={self.scale_by}, shifts={self.shift_by}"
+        return (f"{self.__class__.__name__}(has_scale={self.has_scale}, has_shift={self.has_shift}, scale_by={self.scale_by}, shift_by={self.shift_by}"
             f", scale_keys={self.scale_keys}, shift_keys={self.shift_keys})"
         )
             
