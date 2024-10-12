@@ -113,7 +113,7 @@ def train(config: DictConfig) -> None:
         task: LitNNP = hydra.utils.instantiate(config.task, model=model)
 
     log.debug(f"Instantiating model <{type(model)}> with GNN representation <{type(model.representation)}>")
-    log.debug(f"{model.representation}")
+    log.debug(f"{model}")
     log.debug(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,d}")
 
     # Save extra arguments in checkpoint

@@ -95,15 +95,15 @@ class EnsembleUncertainty(BaseUncertainty):
         return self.uncertainty
 
     def check(self, low_threshold: Optional[float]=None, high_threshold: Optional[float]=None):
-        if self.threshold_key in self.uncertainty:
+        if self.key in self.uncertainty:
             if low_threshold is None:
                 low_threshold = self.low_threshold
             if high_threshold is None:
                 high_threshold = self.high_threshold
 
-            if self.uncertainty[self.threshold_key] > high_threshold:
+            if self.uncertainty[self.key] > high_threshold:
                 return 2
-            elif self.uncertainty[self.threshold_key] < low_threshold:
+            elif self.uncertainty[self.key] < low_threshold:
                 return 0
             else:
                 return 1

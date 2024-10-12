@@ -362,13 +362,20 @@ class LitNNP(pl.LightningModule):
             decay_params = {}
             no_decay_params = {}
 
-            for name, param in self.named_parameters():
-                if ("linear_2.weight" in name or "skip_tp_full.weight" in name or "products" in name) and "readouts" not in name:
+            for name, param in self.model.representation.interactions.named_parameters():
+                if "linear.weight" in name or "skip_tp_full.weight":
                     decay_params[name] = param
                 else:
                     no_decay_params[name] = param
-                    
+            
+            decay_params['products'] = self.model.representation.products.parameters()
+
             param_group = [
+                {
+                    "name": "input_modules",
+                    "params": self.model.input_modules.parameters(),
+                    "weight_decay": 0.0,
+                },
                 {
                     "name": "decay_params",
                     "params": list(decay_params.values()),
@@ -377,6 +384,21 @@ class LitNNP(pl.LightningModule):
                 {
                     "name": "no_decay_params",
                     "params": list(no_decay_params.values()),
+                    "weight_decay": 0.0,
+                },
+                {
+                    "name": "products",
+                    "params": self.model.representation.products.parameters(),
+                    "weight_decay": self.optimizer.keywords['weight_decay'],
+                },
+                {
+                    "name": "readouts",
+                    "params": self.model.representation.readout.parameters(),
+                    "weight_decay": 0.0,
+                },
+                {
+                    "name": "output_modules",
+                    "params": self.model.output_modules.parameters(),
                     "weight_decay": 0.0,
                 },
             ]
