@@ -367,8 +367,6 @@ class LitNNP(pl.LightningModule):
                     decay_params[name] = param
                 else:
                     no_decay_params[name] = param
-            
-            decay_params['products'] = self.model.representation.products.parameters()
 
             param_group = [
                 {
@@ -393,7 +391,7 @@ class LitNNP(pl.LightningModule):
                 },
                 {
                     "name": "readouts",
-                    "params": self.model.representation.readout.parameters(),
+                    "params": self.model.representation.readouts.parameters(),
                     "weight_decay": 0.0,
                 },
                 {
