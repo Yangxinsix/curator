@@ -7,3 +7,6 @@ task:
 
 data:
   batch_size: 5
+  species: auto
+  atomic_energies: auto
+  avg_num_neighbors: auto

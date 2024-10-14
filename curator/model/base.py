@@ -154,6 +154,7 @@ class LitNNP(pl.LightningModule):
         self.scheduler_monitor = scheduler_monitor
         self.warmup_steps = warmup_steps
         self.save_entire_model = save_entire_model
+        logger.info(str([f'{output.name.capitalize()} loss weight: {output.loss_weight}'for output in self.outputs]))
 
         # metrics related things
         self.metric_names_initialized = False          # for first batch
@@ -204,8 +205,9 @@ class LitNNP(pl.LightningModule):
         torch.set_grad_enabled(True)
         logger.info("\n")
         logger.debug("Validating")
-        head = [f'# epoch      batch']
-        logger.info("".join(head + [f'{m:>16s}' for m in self.metric_names]))
+        if self.metric_names is not None:
+            head = [f'# epoch      batch']
+            logger.info("".join(head + [f'{m:>16s}' for m in self.metric_names]))
     
     def on_test_epoch_start(self):
         torch.set_grad_enabled(True)
@@ -239,23 +241,7 @@ class LitNNP(pl.LightningModule):
         self.log_dict(all_metrics, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         
         # get metric names for first epoch
-        if not self.metric_names_initialized:
-            metric_names = [k.replace('train_', '') for k in loss_dict.keys()]
-            metric_names += [k.replace('train_', '') for k in all_metrics.keys()]
-
-            # collect metric names
-            if self.metric_names is None:
-                self.metric_names = metric_names
-            else:
-                for name in metric_names:
-                    if name not in self.metric_names:
-                        self.metric_names.append(name)
-
-            if not self.metric_names_logged:
-                metric_names = "".join([f'{m:>16s}' for m in self.metric_names])
-                metric_names = f'# epoch      batch' + metric_names
-                logger.info(metric_names)
-                self.metric_names_logged = True
+        self.log_head(loss_dict, all_metrics, 'train')
 
         # logging metrics to console
         if batch_idx % self.trainer.log_every_n_steps == 0:
@@ -280,9 +266,14 @@ class LitNNP(pl.LightningModule):
             self.log(k, loss_dict[k].detach().cpu().item(), batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True) 
         
         # nothing need to be scaled for calculating metrics        
+        all_metrics = {}
         for output in self.outputs:
-            batch_metrics = output.calculate_metrics(pred, batch, 'val')
-            self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+            for k, v in output.calculate_metrics(pred, batch, 'val').items():
+                all_metrics[k] = v
+        self.log_dict(all_metrics, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        
+        # get metric names for first epoch
+        self.log_head(loss_dict, all_metrics, 'val')
         
         # logging metrics to console
         if batch_idx % self.trainer.log_every_n_steps == 0:
@@ -304,7 +295,7 @@ class LitNNP(pl.LightningModule):
             unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
         loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_targets, 'test')
         for k in loss_dict.keys():
-            self.log(k, loss_dict[k].detach().cpu().item(), batch_size=num_abs_dict[k], on_step=True, on_epoch=False, prog_bar=True, sync_dist=True) 
+            self.log(k, loss_dict[k].detach().cpu().item(), batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True) 
                
         for output in self.outputs:
             batch_metrics = output.calculate_metrics(pred, batch, 'test')
@@ -345,6 +336,26 @@ class LitNNP(pl.LightningModule):
         logger.info("".join(msgs))
         logger.info("".join(metrics))
     
+    def log_head(self, loss_dict, metrics_dict, stage='train'):
+        # get metric names for first epoch
+        if not self.metric_names_initialized:
+            metric_names = [k.replace(stage + '_', '') for k in loss_dict.keys()]
+            metric_names += [k.replace(stage + '_', '') for k in metrics_dict.keys()]
+
+            # collect metric names
+            if self.metric_names is None:
+                self.metric_names = metric_names
+            else:
+                for name in metric_names:
+                    if name not in self.metric_names:
+                        self.metric_names.append(name)
+
+            if not self.metric_names_logged:
+                metric_names = "".join([f'{m:>16s}' for m in self.metric_names])
+                metric_names = f'# epoch      batch' + metric_names
+                logger.info(metric_names)
+                self.metric_names_logged = True
+
     def save_configuration(self, config: DictConfig):
         self.config = config
         
