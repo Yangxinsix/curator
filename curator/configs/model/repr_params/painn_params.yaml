@@ -5,3 +5,6 @@ task:
 
 data:
   batch_size: 16
+  species: null
+  atomic_energies: null
+  avg_num_neighbors: null

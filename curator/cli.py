@@ -95,7 +95,8 @@ def train(config: DictConfig) -> None:
             model = instantiate(config.model)
             model.load_state_dict(new_state_dict)
             outputs = instantiate(config.task.outputs)
-        
+            
+        log.debug(f"Instantiating task <{config.task._target_}>")
         # load optimizers and schedulers or not
         if config.task.load_weights_only:
             task = instantiate(config.task, model=model)
