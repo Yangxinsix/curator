@@ -74,7 +74,7 @@ class EnsembleUncertainty(BaseUncertainty):
                 logger.warning(f"Uncertainty {self.key} is above low threshold ({uncertainty[self.key]} > {self.high_threshold}).")
                 if self.uncertain_calls > self.max_uncertain_calls:
                     logger.warning("Max number {self.uncertainty_calc.max_uncertain_calls} of uncertain structures collected.")
-                check = 2
+                    check = 2
             elif check == 2:
                 logger.warning(f"Uncertainty {self.key} is above threshold ({uncertainty[self.key]} > {self.high_threshold}). Uncertainty is too high!")
         
