@@ -154,7 +154,7 @@ class LitNNP(pl.LightningModule):
         self.scheduler_monitor = scheduler_monitor
         self.warmup_steps = warmup_steps
         self.save_entire_model = save_entire_model
-        logger.info(str([f'{output.name.capitalize()} loss weight: {output.loss_weight}'for output in self.outputs]))
+        logger.debug(str([f'{output.name.capitalize()} loss weight: {output.loss_weight}'for output in self.outputs]))
 
         # metrics related things
         self.metric_names_initialized = False          # for first batch

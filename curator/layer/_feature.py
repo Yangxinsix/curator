@@ -200,7 +200,7 @@ class FeatureCalculator(nn.Module):
             self.repr_callback.model_outputs.append('all')
         features = []
         image_idx = []
-        device = next(model.parameters()).device
+        device = next(self.repr_callback.parameters()).device
         for i, sample in enumerate(dataset):
             sample = {k: v.to(device) for k, v in sample.items()}
             features.append(self._compute_feature(sample, predict=True)[properties.feature].to('cpu'))   # use cpu to save memory
