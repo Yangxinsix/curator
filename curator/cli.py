@@ -5,6 +5,9 @@ from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf, open_dict
 import sys, os, json
 from pathlib import Path
+
+import pytorch_lightning.callbacks
+import pytorch_lightning.loggers
 from .utils import (
     read_user_config, 
     CustomFormatter, 
@@ -42,6 +45,7 @@ def train(config: DictConfig) -> None:
 
     """
     import torch
+    import pytorch_lightning
     from pytorch_lightning import (
     LightningDataModule, 
     Trainer,
@@ -123,7 +127,12 @@ def train(config: DictConfig) -> None:
     # Initiate the training
     log.debug(f"Instantiating trainer <{config.trainer._target_}>")
     trainer: Trainer = hydra.utils.instantiate(config.trainer)
+    # log.debug(f"Trainer callbacks: {str(callback for callback in trainer.callbacks)}")
     
+    # wandb bug!!
+    if isinstance(trainer.logger, pytorch_lightning.loggers.WandbLogger):
+        os.makedirs(trainer.logger.save_dir + '/wandb')
+
     # Train the model
     trainer.fit(model=task, datamodule=datamodule)
     

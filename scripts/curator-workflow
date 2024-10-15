@@ -86,7 +86,7 @@ def train(
                 cfg.model_path = model_path or str(old_model_path.resolve())
 
             # save config file
-            OmegaConf.save(cfg, run_path / 'train.yaml', resolve=True)
+            OmegaConf.save(cfg, run_path / 'train.yaml', resolve=False)
 
             tasks.append(run(
                 shell='curator-train',
@@ -148,7 +148,7 @@ def simulate(
             except:
                 pass
 
-            OmegaConf.save(cfg, run_path / 'simulate.yaml', resolve=True)
+            OmegaConf.save(cfg, run_path / 'simulate.yaml', resolve=False)
 
             tasks[name] = run(
                 shell='curator-simulate',
@@ -201,7 +201,7 @@ def select(
             cfg.pool_set = pool_path[name]
             al_info[name] = cfg.run_path + '/selected.json'
 
-            OmegaConf.save(cfg, run_path / 'select.yaml', resolve=True)
+            OmegaConf.save(cfg, run_path / 'select.yaml', resolve=False)
 
             tasks[name] = run(
                 shell='curator-select',
@@ -256,7 +256,7 @@ def label(
                     run_path.mkdir(parents=True, exist_ok=True)
                     cfg.job_order = i
                     cfg.run_path = str(run_path.resolve())
-                    OmegaConf.save(cfg, run_path / 'label.yaml', resolve=True)
+                    OmegaConf.save(cfg, run_path / 'label.yaml', resolve=False)
                     tasks.append(run(
                         shell='curator-label',
                         deps=[deps[name]],
@@ -269,7 +269,7 @@ def label(
                 run_path = Path(label_path) / f'iter_{iteration}' / name
                 run_path.mkdir(parents=True, exist_ok=True)
                 cfg.run_path = str(run_path.resolve())
-                OmegaConf.save(cfg, run_path / 'label.yaml', resolve=True)
+                OmegaConf.save(cfg, run_path / 'label.yaml', resolve=False)
                 tasks.append(run(
                     shell='curator-label',
                     deps=[deps[name]],
