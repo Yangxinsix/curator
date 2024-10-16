@@ -150,7 +150,7 @@ class MACE(nn.Module):
         
         self.interactions = torch.nn.ModuleList()
         self.products = torch.nn.ModuleList()
-        self.readouts = torch.nn.ModuleList()
+        self.readout_mlp = torch.nn.ModuleList()
         gate_fn = activation_fn[gate] if isinstance(gate, str) else gate
         # interaction blocks
         # for last layer: only select scalar 0e
@@ -194,7 +194,7 @@ class MACE(nn.Module):
                 )
             else:
                 readout = o3.Linear(irreps_in=hidden_irreps_out, irreps_out=o3.Irreps('1x0e'))
-            self.readouts.append(readout)
+            self.readout_mlp.append(readout)
             
     def forward(self, data: properties.Type) -> properties.Type:
         # node_e0 = self.reference_energies[data[properties.Z]]
@@ -207,7 +207,7 @@ class MACE(nn.Module):
         node_feat_list = []
         
         for interaction, product, readout in zip(
-            self.interactions, self.products, self.readouts
+            self.interactions, self.products, self.readout_mlp
         ):
             node_feat, sc = interaction(
                 node_feat, 

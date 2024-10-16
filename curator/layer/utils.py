@@ -29,6 +29,30 @@ from curator.data import properties
 
 #     input_dict[properties.edge_idx] = 
 
+def find_layer_by_name_recursive(module, target_name):
+    """
+    Recursively search for a layer with the specified name within a PyTorch module.
+    
+    Args:
+        module (nn.Module): The module to search in.
+        target_name (str): The name of the layer to search for.
+    
+    Returns:
+        nn.Module or None: The layer with the specified name if found, else None.
+    """
+    # Check if the current module has a direct submodule with the target name
+    if hasattr(module, target_name):
+        return getattr(module, target_name)
+
+    # Recursively check all child modules
+    for child_module in module.children():
+        found_module = find_layer_by_name_recursive(child_module, target_name)
+        if found_module is not None:
+            return found_module
+
+    # If not found, return None
+    return None
+
 def tp_path_exists(irreps_in1, irreps_in2, ir_out):
     irreps_in1 = o3.Irreps(irreps_in1).simplify()
     irreps_in2 = o3.Irreps(irreps_in2).simplify()

@@ -4,32 +4,9 @@ from torch import nn
 import torch
 from typing import Dict, Optional, Callable, List, Union
 import logging
+from .utils import find_layer_by_name_recursive
 
 logger = logging.getLogger(__name__)
-
-def find_layer_by_name_recursive(module, target_name):
-    """
-    Recursively search for a layer with the specified name within a PyTorch module.
-    
-    Args:
-        module (nn.Module): The module to search in.
-        target_name (str): The name of the layer to search for.
-    
-    Returns:
-        nn.Module or None: The layer with the specified name if found, else None.
-    """
-    # Check if the current module has a direct submodule with the target name
-    if hasattr(module, target_name):
-        return getattr(module, target_name)
-
-    # Recursively check all child modules
-    for child_module in module.children():
-        found_module = find_layer_by_name_recursive(child_module, target_name)
-        if found_module is not None:
-            return found_module
-
-    # If not found, return None
-    return None
 
 class FeatureExtractor(nn.Module):
     """Extract features from neural networks"""
@@ -72,6 +49,9 @@ class FeatureExtractor(nn.Module):
     def add_hooks(self):
         layer = find_layer_by_name_recursive(self.repr_callback, self.target_layer)
         assert layer is not None, f"Target layer {self.target_layer} is not found!"
+        from curator.model import MACE
+        if isinstance(self.model.representation, MACE):
+            layer = layer[-1]
         for child in layer.children():
             if isinstance(child, nn.Linear):
                 self.hooks.append(child.register_forward_pre_hook(self.save_feats_hook))

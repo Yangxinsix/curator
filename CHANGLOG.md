@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Added
 
 - Add new license as the code is transferred from original repository.
+- Add feature extractor things to extract features from model and calculate mahalanobis distance with provided dataset.
 
 ### Changed
 
@@ -14,6 +15,11 @@ All notable changes to this project will be documented in this file.
 - Now calculator will be instantiated from configuration file.
 - Change default log directory. Optimize it for wandb.
 - Sync metrics for DDP training.
+
+###Fixed
+
+- Fix MACE training bugs. Now training MACE model is way much easier and efficient!
+- Fix curator-select not working for MACE and NequIP issue.
 
 ## [1.1.1] - 2024-08-29
 
