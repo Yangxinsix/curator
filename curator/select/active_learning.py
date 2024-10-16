@@ -7,27 +7,38 @@ from .select import *
 from .kernel import *
 from curator.data import properties
 from curator.utils import scatter_add, scatter_mean
+from e3nn import o3
+from curator.layer.utils import find_layer_by_name_recursive
 import logging
 
 logger = logging.getLogger(__name__)
 
 class FeatureExtractor(nn.Module):
     """Extract features from neural networks"""
-    def __init__(self, model: nn.Module) -> None:
+    def __init__(self, model: nn.Module, target_layer: str = 'readout_mlp',) -> None:
         """Extract features from neural networks
         
         Args:
             model (nn.Module): pytorch model
+            target_layer (str): name of target layer to extract features from
         """
         super().__init__()
         self.model = model
+        self.target_layer = target_layer
         self._features = []
         self._grads = []
         self.hooks = []
-        for name, layer in self.model.named_modules():
-            if 'readout_mlp' in name and isinstance(layer, nn.Linear):
-                self.hooks.append(layer.register_forward_pre_hook(self.save_feats_hook))
-                self.hooks.append(layer.register_backward_hook(self.save_grads_hook))
+        layer = find_layer_by_name_recursive(self.model, self.target_layer)
+        assert layer is not None, f"Target layer {self.target_layer} is not found!"
+        
+        from curator.model import MACE
+        if isinstance(self.model.representation, MACE):
+            layer = layer[-1]
+
+        for child in layer.children():
+            if isinstance(child, (nn.Linear, o3.Linear)):
+                self.hooks.append(child.register_forward_pre_hook(self.save_feats_hook))
+                self.hooks.append(child.register_backward_hook(self.save_grads_hook))
         
     def save_feats_hook(self, _, in_feat):
         new_feat = torch.cat((in_feat[0].detach().clone(), torch.ones_like(in_feat[0][:, 0:1])), dim=-1)
@@ -45,24 +56,36 @@ class FeatureExtractor(nn.Module):
         self._grads = []
         _ = self.model(model_inputs)                            
         return self._features, self._grads[::-1]
-
+    
 class RandomProjections:
     """Store parameters of random projections"""
-    def __init__(self, model: nn.Module, num_features: int):
+    def __init__(
+            self, 
+            model: nn.Module, 
+            num_features: int,
+            dtype = torch.get_default_dtype(),
+            target_layer: str = 'readout_mlp',
+        ):
         self.num_features = num_features
+        self.in_feat_proj = []
+        self.out_grad_proj = []
+        device = next(model.parameters()).device
         if self.num_features > 0:
-            self.in_feat_proj = [
-                torch.randn(l.in_features +1, num_features, device=next(model.parameters()).device)
-                for l in model.representation.readout_mlp.children() if isinstance(l, nn.Linear)
-                ]
-            #    for l in model.readout_mlp.children() if isinstance(l, nn.Linear)
-            #]
-            self.out_grad_proj = [
-                torch.randn(l.out_features, num_features, device=next(model.parameters()).device)
-                for l in model.representation.readout_mlp.children() if isinstance(l, nn.Linear)
-                ]
-            #    for l in model.readout_mlp.children() if isinstance(l, nn.Linear)
-            #]
+            layer = find_layer_by_name_recursive(model, target_layer)
+            from curator.model import MACE
+            if isinstance(model.representation, MACE):
+                layer = layer[-1]
+            # Input feature projection matrices (in_features + 1 for bias term), output gradient projection matrices
+            for l in layer.children():
+                if isinstance(l, nn.Linear):
+                    self.in_feat_proj.append(torch.randn(l.in_features + 1, self.num_features, dtype=dtype, device=device))
+                    self.out_grad_proj.append(torch.randn(l.out_features, self.num_features, dtype=dtype, device=device))
+                elif isinstance(l, o3.Linear):
+                    self.in_feat_proj.append(torch.randn(l.irreps_in.dim + 1, self.num_features, dtype=dtype, device=device))
+                    self.out_grad_proj.append(torch.randn(l.irreps_out.dim, self.num_features, dtype=dtype, device=device))
+            
+    def __repr__(self):
+        return f'{self.__class__.__name__}(num_features={self.num_features})'
     
 class FeatureStatistics:
     """
