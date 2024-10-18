@@ -16,7 +16,7 @@ All notable changes to this project will be documented in this file.
 - Change default log directory. Optimize it for wandb.
 - Sync metrics for DDP training.
 
-###Fixed
+### Fixed
 
 - Fix MACE training bugs. Now training MACE model is way much easier and efficient!
 - Fix curator-select not working for MACE and NequIP issue.

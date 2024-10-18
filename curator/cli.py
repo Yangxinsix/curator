@@ -131,7 +131,7 @@ def train(config: DictConfig) -> None:
     
     # wandb bug!!
     if isinstance(trainer.logger, pytorch_lightning.loggers.WandbLogger):
-        os.makedirs(trainer.logger.save_dir + '/wandb')
+        os.makedirs(trainer.logger.save_dir + '/wandb', exist_ok=True)
 
     # Train the model
     trainer.fit(model=task, datamodule=datamodule)
