@@ -332,6 +332,7 @@ def select(config: DictConfig):
     from curator.data import read_trajectory
     import torch
     from ase.io import read
+    import OmegaConf
     from curator.select import GeneralActiveLearning
     import json
     from curator.data import AseDataset
@@ -402,7 +403,7 @@ def select(config: DictConfig):
     al_info = {
         'kernel': config.kernel,
         'selection': config.method,
-        'dataset': config.dataset if config.dataset and config.split_file else config.pool_set,
+        'dataset': OmegaConf.to_object(config.dataset) if config.dataset and config.split_file else OmegaConf.to_object(config.pool_set),
         'selected': indices,
     }
     with open(config.run_path+'/selected.json', 'w') as f:
