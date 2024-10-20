@@ -332,7 +332,7 @@ def select(config: DictConfig):
     from curator.data import read_trajectory
     import torch
     from ase.io import read
-    import OmegaConf
+    from omegaconf import OmegaConf
     from curator.select import GeneralActiveLearning
     import json
     from curator.data import AseDataset
