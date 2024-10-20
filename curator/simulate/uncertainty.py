@@ -71,7 +71,7 @@ class EnsembleUncertainty(BaseUncertainty):
                 self.uncertain_traj.write(atoms)
             
             if check == 1:
-                logger.warning(f"Uncertainty {self.key} is above low threshold ({uncertainty[self.key]} > {self.high_threshold}).")
+                logger.warning(f"Uncertainty {self.key} is above low threshold ({uncertainty[self.key]} > {self.low_threshold}).")
                 if self.uncertain_calls > self.max_uncertain_calls:
                     logger.warning("Max number {self.uncertainty_calc.max_uncertain_calls} of uncertain structures collected.")
                     check = 2
