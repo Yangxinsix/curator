@@ -64,7 +64,7 @@ class GradientOutput(torch.nn.Module):
                 
                 if 'stress' in self.model_outputs or 'virial' in self.model_outputs:
                     image_idx = data[properties.image_idx]
-                    atomic_virial = torch.einsum("ij, ik -> ijk", edge_diff, dE_ddiff)           # I'm quite not sure if a negative sign should be added before dE_ddiff, but I think it should be right
+                    atomic_virial = torch.einsum("ij, ik -> ijk", edge_diff, -dE_ddiff)           # I'm quite not sure if a negative sign should be added before dE_ddiff, but I think it should be right
                     # stress = torch.zeros_like(cell).index_add(0, , atomic_stress)
                     atomic_virial = torch.zeros(
                         (forces_dim, 3, 3),                                         
@@ -75,7 +75,7 @@ class GradientOutput(torch.nn.Module):
                     # j_stress = torch.zeros_like(i_stress).index_add(0, edge_idx[:, 1], -atomic_stress)
                     # atomic_stress = i_stress + j_stress          
                     virial = torch.zeros(
-                        energy.shape[0], 3, 3, 
+                        energy.shape[0], 3, 3,
                         dtype=forces.dtype, 
                         device=forces.device).index_add(0, image_idx, atomic_virial)  # don't need to divide by two
                     data[properties.virial] = virial.reshape(-1, 9)[:, [0, 4, 8, 5, 2, 1]]
