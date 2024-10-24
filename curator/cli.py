@@ -396,6 +396,7 @@ def select(config: DictConfig):
         kernel=config.kernel, 
         selection=config.method, 
         n_random_features=config.n_random_features,
+        save_features=config.save_features,
     )
     indices = al.select(models, data_dict, al_batch_size=config.batch_size, debug=config.debug)
 
@@ -403,7 +404,7 @@ def select(config: DictConfig):
     al_info = {
         'kernel': config.kernel,
         'selection': config.method,
-        'dataset': OmegaConf.to_object(config.dataset) if config.dataset and config.split_file else OmegaConf.to_object(config.pool_set),
+        'dataset': config.dataset if config.dataset and config.split_file else config.pool_set,
         'selected': indices,
     }
     with open(config.run_path+'/selected.json', 'w') as f:
