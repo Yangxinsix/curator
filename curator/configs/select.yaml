@@ -12,4 +12,5 @@ batch_size: 100
 kernel: full-g
 method: lcmd_greedy
 n_random_features: 500
+save_features: false
 debug: false

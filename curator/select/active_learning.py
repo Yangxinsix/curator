@@ -354,10 +354,12 @@ class GeneralActiveLearning:
         kernel = 'full-g',
         selection = 'max_diag',
         n_random_features = 0,
+        save_features = False,
     ):
         self.kernel = kernel
         self.selection = selection
         self.n_random_features = n_random_features
+        self.save_features = save_features
     
     def select(
         self, 
@@ -403,7 +405,11 @@ class GeneralActiveLearning:
             idxs = max_det_greedy_local(matrix=matrix, batch_size=al_batch_size, num_atoms=num_atoms)
         else:
             raise NotImplementedError(f"Unknown selection method '{self.selection}' for active learning!")
-            
+        
+        if self.save_features:
+            features = { key: s.get_features() for key, s in stats.items()}
+            torch.save(features, 'features.pt')
+
         return idxs.cpu().tolist()
 
     def _get_kernel_matrix(self, pool_stats: FeatureStatistics, train_stats: Optional[FeatureStatistics]=None) -> KernelMatrix:
