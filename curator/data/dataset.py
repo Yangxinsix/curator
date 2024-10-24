@@ -64,6 +64,11 @@ class BambooDataset(torch.utils.data.Dataset):
             symbols=atoms_dict[properties.Z].numpy(),
             positions=atoms_dict[properties.R].numpy(),
         )
+        atoms.info['energy'] = float(atoms_dict[properties.energy].numpy())
+        atoms.info['forces'] = atoms_dict[properties.forces].numpy()
+        atoms.info['virial'] = atoms_dict[properties.virial].numpy()
+        atoms.info[properties.edge_idx] = atoms_dict[properties.edge_idx].numpy()
+        atoms.info[properties.edge_diff] = atoms_dict[properties.edge_diff].numpy()
 
         return atoms
 
