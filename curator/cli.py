@@ -401,10 +401,12 @@ def select(config: DictConfig):
     indices = al.select(models, data_dict, al_batch_size=config.batch_size, debug=config.debug)
 
     # Save the selected indices
+    datapath = config.dataset if config.dataset and config.split_file else config.pool_set
+    datapath = datapath if isinstance(datapath, str) else list(datapath)
     al_info = {
         'kernel': config.kernel,
         'selection': config.method,
-        'dataset': config.dataset if config.dataset and config.split_file else config.pool_set,
+        'dataset': datapath,
         'selected': indices,
     }
     with open(config.run_path+'/selected.json', 'w') as f:
