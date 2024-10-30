@@ -331,7 +331,7 @@ def select(config: DictConfig):
     """
     from curator.data import read_trajectory
     import torch
-    from ase.io import read
+    from ase.io import read, Trajectory
     from omegaconf import OmegaConf
     from curator.select import GeneralActiveLearning
     import json
@@ -415,9 +415,11 @@ def select(config: DictConfig):
     log.info(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for selected structures!")
     if config.save_images:
         selected_images = read_trajectory(config.pool_set)
-        with open(config.save_images if isinstance(config.save_images, str) else 'selected.traj', 'w') as traj:
+        save_path = config.save_images if isinstance(config.save_images, str) else os.path.join(config.run_path, 'selected.traj')
+        with Trajectory(config.save_images if isinstance(config.save_images, str) else 'selected.traj', 'w') as traj:
             for atoms in selected_images:
                 traj.write(atoms)
+        log.info(f"Saving selected images into {save_path}.")
 
 # Label the dataset selected by active learning
 @hydra.main(config_path="configs", config_name="label", version_base=None)   
