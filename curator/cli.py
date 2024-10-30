@@ -413,6 +413,11 @@ def select(config: DictConfig):
         json.dump(al_info, f)
     
     log.info(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for selected structures!")
+    if config.save_images:
+        selected_images = read_trajectory(config.pool_set)
+        with open(config.save_images if isinstance(config.save_images, str) else 'selected.traj', 'w') as traj:
+            for atoms in selected_images:
+                traj.write(atoms)
 
 # Label the dataset selected by active learning
 @hydra.main(config_path="configs", config_name="label", version_base=None)   
