@@ -117,9 +117,7 @@ def train(config: DictConfig) -> None:
         log.debug(f"Instantiating task <{config.task._target_}>")
         task: LitNNP = hydra.utils.instantiate(config.task, model=model)
 
-    log.debug(f"Instantiating model <{type(model)}> with GNN representation <{type(model.representation)}>")
-    log.debug(f"{model}")
-    log.debug(f"Model parameters: {sum(p.numel() for p in model.parameters() if p.requires_grad):,d}")
+    log.debug(f"Instantiating model {type(model)} with GNN representation {type(model.representation)}")
 
     # Save extra arguments in checkpoint
     task.save_configuration(config)
@@ -348,7 +346,6 @@ def select(config: DictConfig):
     fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
     fh.setLevel(logging.DEBUG)
     log.addHandler(fh)
-    log.info("Running on host: " + str(socket.gethostname()))
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
@@ -437,6 +434,7 @@ def label(config: DictConfig):
     import json
     import numpy as np
     from curator.label import AtomsAnnotator
+    from shutil import copy
 
     # Load the arguments
     if config.cfg is not None:
@@ -454,47 +452,30 @@ def label(config: DictConfig):
     log.info("Running on host: " + str(socket.gethostname()))
 
     # get images and set parameters
-    if config.label_set:
-        images = read_trajectory(config.label_set)
-        log.info(f"Labeling the structures in {config.label_set}")
-    elif config.pool_set:
-        pool_traj = read_trajectory(config.pool_set)
+    if config.pool_set:
+        images = read_trajectory(config.pool_set)
         # Use active learning indices if provided
         if config.al_info:
             with open(config.al_info) as f:
                 indices = json.load(f)["selected"]
+                log.info(f"Labelling {len(indices)} active learning selected structures: {config.al_info}")
         elif config.indices:
             indices = config.indices
-        else:
-            raise RuntimeError('Valid index for labeling set should be provided!')
-        images = [pool_traj[i] for i in indices]
-        log.info(f"Labeling {len(images)} structures in pool set: {config.pool_set}")    
+            log.info(f"Labelling {len(indices)} selected structures: {config.indices}")
+        
+        images = [images[i] for i in indices] if indices is not None else [atoms for atoms in images]
     else:
         raise RuntimeError('Valid configarations for DFT calculation should be provided!')
     
     # split jobs if needed to accelerate labelling if you have a lot of resources
     if config.split_jobs or config.imgs_per_job:
-        def split_list(lst, chunk_or_num, by_chunk_size=False):
-            if by_chunk_size:
-                num_chunks, remainder = divmod(len(lst), chunk_or_num)
-            else:
-                chunk_or_num, remainder = divmod(len(lst), chunk_or_num)
-            if by_chunk_size:
-                return [
-                    lst[i * chunk_or_num + min(i, remainder):(i + 1) * chunk_or_num + min(i + 1, remainder)]
-                    for i in range(num_chunks)
-                ]
-            else:
-                return [
-                    lst[i * (chunk_or_num + (1 if i < remainder else 0)):(i + 1) * (chunk_or_num + (1 if i < remainder else 0))]
-                    for i in range(chunk_or_num)
-                ]
-
+        from .utils import split_list
         if config.split_jobs:
-            images = split_list(images, config.split_jobs)        
+            images = split_list(images, config.split_jobs)
         if config.imgs_per_job:
             images = split_list(images, config.imgs_per_job, by_chunk_size=True)
         images = images[config.job_order]          # specify which parts of the images to label
+        log.info(f"Rank {config.job_order}. Total structures: {len(images)}")
 
     # create or read existing ase database
     db = connect(config.run_path+'/dft_structures.db')
@@ -524,6 +505,13 @@ def label(config: DictConfig):
             converged = annotator.annotate(atoms)
             db.write(atoms, converged=converged)
             all_converged.append(converged)
+        
+        # TODO: add this feature into annotator
+        # copy files
+        if os.path.exists('OSZICAR'):
+            copy('OSZICAR', f'OSZICAR_{i}')
+        if os.path.exists('vasp.out'):
+            copy('vasp.out', f'vasp.out_{i}')
     
     # write to datapath
     if config.datapath is not None:

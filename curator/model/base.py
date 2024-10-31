@@ -154,7 +154,7 @@ class LitNNP(pl.LightningModule):
         self.scheduler_monitor = scheduler_monitor
         self.warmup_steps = warmup_steps
         self.save_entire_model = save_entire_model
-        logger.debug(str([f'{output.name.capitalize()} loss weight: {output.loss_weight}'for output in self.outputs]))
+        logger.debug(" ".join([f'{output.name.capitalize()} loss weight: {output.loss_weight}'for output in self.outputs]))
 
         # metrics related things
         self.metric_names_initialized = False          # for first batch
@@ -169,6 +169,8 @@ class LitNNP(pl.LightningModule):
             for layer in self.model.output_modules:
                 if hasattr(layer, "unscale"):
                     self.rescale_layers.append(layer)
+        logger.info(self.model)
+        logger.debug(f"Model parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad):,d}")
     
     def loss_fn(self, pred: Dict, batch: Dict, subset: str):
         loss_dict = OrderedDict()
