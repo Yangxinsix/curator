@@ -112,6 +112,8 @@ class AtomsDataModule(pl.LightningDataModule):
             if self.test_path is not None:
                 self._test_dataset = self.setup_dataset(self.data_type, self.test_path)
                 self.num_test = len(self._test_dataset)
+            else:
+                self.num_test = 0
                 
             if self.datapath is not None:
                 self.dataset = self.setup_dataset(self.data_type, self.datapath)
