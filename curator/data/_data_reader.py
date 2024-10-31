@@ -165,6 +165,6 @@ class AseDataReader(DataReader):
             virial = atoms.info.get('virial')
             if virial.ndim == 2:
                 virial = virial.flatten()
-            atoms_data[properties.virial] = torch.tensor(virial[[0, 4, 8, 5, 2, 1]], dtype=self.default_dtype)
+            atoms_data[properties.virial] = torch.tensor(virial[[0, 4, 8, 5, 2, 1]], dtype=self.default_dtype).unsqueeze(0)
         
         return atoms_data
