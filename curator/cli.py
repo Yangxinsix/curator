@@ -508,9 +508,9 @@ def label(config: DictConfig):
         
         # TODO: add this feature into annotator
         # copy files
-        if os.path.exists('OSZICAR') and not os.path.exists(f'OSZICAR_{i}'):
+        if os.path.exists('OSZICAR') and (not os.path.exists(f'OSZICAR_{i}') or not converged):
             copy('OSZICAR', f'OSZICAR_{i}')
-        if os.path.exists('vasp.out') and not os.path.exists(f'vasp.out_{i}'):
+        if os.path.exists('vasp.out') and (not os.path.exists(f'vasp.out_{i}') or not converged):
             copy('vasp.out', f'vasp.out_{i}')
     
     # write to datapath
