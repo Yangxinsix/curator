@@ -1,6 +1,5 @@
 import abc
 import subprocess, os
-from shutil import copy
 import logging
 from typing import Optional
 from ase.calculators.calculator import Calculator
@@ -22,7 +21,6 @@ class VASPInspector(Inspector):
         return steps <= self.nelm
 
     def post_process(self) -> bool:
-        copy('OSZICAR', f'OSZICAR_{self.count}')
         converged = self.is_converged()
         if not converged:
             self.logger.warning(f"Labelling is not converged over {self.nelm} electronic steps. Try to increase max steps.")

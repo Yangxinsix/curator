@@ -141,10 +141,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 if self.test_idx is not None and self._test_dataset is None:
                     self._test_dataset = torch.utils.data.Subset(self.dataset, self.test_idx)
             
-        logger.debug(
-            f"Dataset size: {self.datalen or self.num_train + self.num_val + self.num_test}, training dataset size: {self.num_train}, validation dataset size: {self.num_val}, "
-            + f"test dataset size: {self.num_test}."
-        )
+            logger.info(self)
     
     def setup_dataset(self, data_type: str, datapath: str) -> None:
         if data_type == 'AseDataset':
@@ -347,3 +344,15 @@ class AtomsDataModule(pl.LightningDataModule):
             logger.debug("Atomwise model outputs will be normalized.")
         logger.debug(f"Model output properties will be scaled by {self.std:.3f}, shifted by {self.mean:.3f}.")
         return self.mean, self.std
+    
+    def __repr__(self):
+        path_info = [f"train_path={self.train_path}, " if self.train_path is not None else "", f"val_path={self.val_path}" if self.val_path is not None else "", f", test_path={self.test_path}" if self.test_path is not None else ""]
+        path_info = "".join(path_info)
+        path_info += "\n" if path_info != "" else ""
+        path_info += f"datapath={self.datapath}\n" if self.datapath is not None else ""
+        data_info = f"Dataset size={self.datalen or self.num_train + self.num_val + self.num_test}, training dataset size={self.num_train}, validation dataset size={self.num_val}, test dataset size={self.num_test}.\n"
+        scale_info = f"scale={self.std}, shift={self.mean}, atomwise_normalization={self.atomwise_normalization}, scale_forces={self.scale_forces}\n" if self.normalization else ""
+        species_info = f"species={self.species}\n" if self.species is not None else ""
+        e0_info = f"atomic_energies={self.atomic_energies}" if isinstance(self.atomic_energies, Dict) else ""
+        neigh_info = f"avg_num_neighbors={self.avg_num_neighbors}\n" if self.avg_num_neighbors is not None else ""
+        return f"{self.__class__.__name__}(" + path_info + data_info + scale_info + species_info + e0_info + neigh_info + ")"
