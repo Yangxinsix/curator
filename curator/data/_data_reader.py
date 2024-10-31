@@ -162,6 +162,9 @@ class AseDataReader(DataReader):
             pass
         
         if atoms.info.get('virial') is not None:
-            atoms_data[properties.virial] = atoms.info.get('virial')[:, [0, 4, 8, 5, 2, 1]]
+            virial = atoms.info.get('virial')
+            if virial.ndim == 2:
+                virial = virial.flatten()
+            atoms_data[properties.virial] = torch.tensor(virial[:, [0, 4, 8, 5, 2, 1]], dtype=self.default_dtype)
         
         return atoms_data
