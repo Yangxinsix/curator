@@ -492,15 +492,14 @@ def label(config: DictConfig):
         # Label the structure with the choosen method
         log.info(f"Labeling structure {i}.")
         try:
-            existing_converged = db[i+1].get('converged')
-            if not existing_converged:
+            converged = db[i+1].get('converged')
+            if not converged:
                 converged = annotator.annotate(atoms)
                 db.update(id=i+1, atoms=atoms, converged=converged)
-                all_converged.append(converged)
                 log.info(f"Recomputing structure {i} converged: {converged}")
             else:
-                all_converged.append(True)
                 log.info(f"Structure {i} converged. Skipping...")
+            all_converged.append(converged)
         except KeyError:
             converged = annotator.annotate(atoms)
             db.write(atoms, converged=converged)
