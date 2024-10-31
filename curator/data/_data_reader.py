@@ -161,4 +161,7 @@ class AseDataReader(DataReader):
         except (AttributeError, RuntimeError):
             pass
         
+        if atoms.info.get('virial'):
+            atoms_data[properties.virial] = atoms.info.get('virial')[:, [0, 4, 8, 5, 2, 1]]
+        
         return atoms_data
