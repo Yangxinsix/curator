@@ -411,7 +411,8 @@ def select(config: DictConfig):
     
     log.info(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for selected structures!")
     if config.save_images:
-        selected_images = read_trajectory(config.pool_set)
+        pool_set = read_trajectory(config.pool_set)
+        selected_images = [pool_set[i] for i in indices]
         save_path = config.save_images if isinstance(config.save_images, str) else os.path.join(config.run_path, 'selected.traj')
         with Trajectory(config.save_images if isinstance(config.save_images, str) else 'selected.traj', 'w') as traj:
             for atoms in selected_images:
@@ -455,12 +456,12 @@ def label(config: DictConfig):
     if config.pool_set:
         images = read_trajectory(config.pool_set)
         # Use active learning indices if provided
+        indices = config.indices
         if config.al_info:
             with open(config.al_info) as f:
                 indices = json.load(f)["selected"]
                 log.info(f"Labelling {len(indices)} active learning selected structures: {config.al_info}")
-        elif config.indices:
-            indices = config.indices
+        elif indices is not None:
             log.info(f"Labelling {len(indices)} selected structures: {config.indices}")
         
         images = [images[i] for i in indices] if indices is not None else [atoms for atoms in images]
