@@ -36,6 +36,9 @@ class PairCURATOR : public Pair {
   torch::jit::script::Module model;
   torch::Device device = torch::kCPU;
 
+  // uncertainty information
+  double uncertainty_scalar;
+
  protected:
   int * type_mapper;
   int debug_mode = 0;

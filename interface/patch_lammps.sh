@@ -46,8 +46,8 @@ then
 fi
 
 # Check if root directory is correct
-if [ ! -f pair_painn.cpp ]; then
-    echo "Please run `patch_lammps.sh` from the `pair_painn.cpp` root directory."
+if [ ! -f pair_curator.cpp ]; then
+    echo "Please run `patch_lammps.sh` from the `pair_curator.cpp` root directory."
     exit 1
 fi
 
@@ -71,7 +71,7 @@ EOF2
 fi
 
 # check if files need to be copied to lammps directory
-if [ ! -f $lammps_dir/src/pair_painn.cpp ]; then
+if [ ! -f $lammps_dir/src/pair_curator.cpp ]; then
     if [ "$do_e_mode" = true ]
     then
         echo "Making source symlinks (-e)..."
@@ -85,7 +85,7 @@ if [ ! -f $lammps_dir/src/pair_painn.cpp ]; then
         done
     fi
 else
-    echo "pair_painn.cpp file already exists. No files copied."
+    echo "pair_curator.cpp file already exists. No files copied."
 fi
 
 
