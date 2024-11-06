@@ -133,26 +133,24 @@ module<span class="w"> </span>load<span class="w"> </span>cuda/11.8<span class="
 <section id="configure-lammps">
 <h2>Configure LAMMPS<a class="headerlink" href="#configure-lammps" title="Link to this heading"></a></h2>
 <p>We need to provide the path of Torch library to CMake for installation. This can be achieved by adding <cite>-DCMAKE_PREFIX_PATH=`python -c ‘import torch;print(torch.utils.cmake_prefix_path)’`</cite> tag to CMake.
-CMake will then use the Torch library from PyTorch python pacakge to configure LAMMPS.
-.. code-block:: bash</p>
-<blockquote>
-<div><p>cd &lt;path_to_lammps&gt;
-mkdir build
-cd build
-cmake ../cmake -DCMAKE_PREFIX_PATH=`python -c ‘import torch;print(torch.utils.cmake_prefix_path)’` -DMKL_INCLUDE_DIR=”$CONDA_PREFIX/include”
-cmake -C ../cmake/presets/basic.cmake -C ../cmake/presets/kokkos-cuda.cmake</p>
-</div></blockquote>
-<p>Note that the default Torch library may use pre-C++11 ABI, which is not compatible with the C++17 ABI required by <a class="reference external" href="https://github.com/kokkos/kokkos">KOKKOS</a>. In this case, the users should download LibTorch with C++11 ABI and set the path to the CMake configuration.
-.. code-block::bash</p>
-<blockquote>
-<div><p># change cuda and pytorch to your version
-wget <a class="reference external" href="https://download.pytorch.org/libtorch/cu118/libtorch-cxx11-abi-shared-with-deps-2.3.1%2Bcu118.zip">https://download.pytorch.org/libtorch/cu118/libtorch-cxx11-abi-shared-with-deps-2.3.1%2Bcu118.zip</a>
-unzip libtorch-cxx11-abi-shared-with-deps-2.3.1+cu118.zip
-cd &lt;path_to_lammps&gt;
-mkdir build
-cd build
-cmake ../cmake -DCMAKE_PREFIX_PATH=/path/to/libtorch -DMKL_INCLUDE_DIR=”$CONDA_PREFIX/include” -C ../cmake/presets/basic.cmake -C ../cmake/presets/kokkos-cuda.cmake</p>
-</div></blockquote>
+CMake will then use the Torch library from PyTorch python pacakge to configure LAMMPS.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">cd</span><span class="w"> </span>&lt;path_to_lammps&gt;
+mkdir<span class="w"> </span>build
+<span class="nb">cd</span><span class="w"> </span>build
+cmake<span class="w"> </span>../cmake<span class="w"> </span>-DCMAKE_PREFIX_PATH<span class="o">=</span><span class="sb">`</span>python<span class="w"> </span>-c<span class="w"> </span><span class="s1">&#39;import torch;print(torch.utils.cmake_prefix_path)&#39;</span><span class="sb">`</span><span class="w"> </span>-DMKL_INCLUDE_DIR<span class="o">=</span><span class="s2">&quot;</span><span class="nv">$CONDA_PREFIX</span><span class="s2">/include&quot;</span>
+cmake<span class="w"> </span>-C<span class="w"> </span>../cmake/presets/basic.cmake<span class="w"> </span>-C<span class="w"> </span>../cmake/presets/kokkos-cuda.cmake
+</pre></div>
+</div>
+<p>Note that the default Torch library may use pre-C++11 ABI, which is not compatible with the C++17 ABI required by <a class="reference external" href="https://github.com/kokkos/kokkos">KOKKOS</a>. In this case, the users should download LibTorch with C++11 ABI and set the path to the CMake configuration.</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="c1"># change cuda and pytorch to your version</span>
+wget<span class="w"> </span>https://download.pytorch.org/libtorch/cu118/libtorch-cxx11-abi-shared-with-deps-2.3.1%2Bcu118.zip
+unzip<span class="w"> </span>libtorch-cxx11-abi-shared-with-deps-2.3.1+cu118.zip
+<span class="nb">cd</span><span class="w"> </span>&lt;path_to_lammps&gt;
+mkdir<span class="w"> </span>build
+<span class="nb">cd</span><span class="w"> </span>build
+cmake<span class="w"> </span>../cmake<span class="w"> </span>-DCMAKE_PREFIX_PATH<span class="o">=</span>/path/to/libtorch<span class="w"> </span>-DMKL_INCLUDE_DIR<span class="o">=</span><span class="s2">&quot;</span><span class="nv">$CONDA_PREFIX</span><span class="s2">/include&quot;</span><span class="w"> </span>-C<span class="w"> </span>../cmake/presets/basic.cmake<span class="w"> </span>-C<span class="w"> </span>../cmake/presets/kokkos-cuda.cmake
+</pre></div>
+</div>
 <p>Another potential problem is that LibTorch usually requires quite new version of GLIBC library. This often requires the users to upgrade their GLIBC, but this can be quite cumbersome and the users are referred to elsewhere for this issue.</p>
 </section>
 <section id="build-lammps">
