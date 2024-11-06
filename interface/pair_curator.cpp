@@ -275,22 +275,21 @@ void PairCURATOR::compute(int eflag, int vflag){
   n_pairs_tensor[0] = edge_counter;
 
   c10::Dict<std::string, torch::Tensor> input;
-  input.insert("num_atoms", n_atoms_tensor.to(device));
-  input.insert("num_pairs", n_pairs_tensor.to(device));
-  input.insert("pairs", edges_tensor.to(device));
-  input.insert("n_diff", edge_diff_tensor.to(device));
-  input.insert("elems", tag2type_tensor.to(device));
+  input.insert("n_atoms", n_atoms_tensor.to(device));
+  input.insert("_n_pairs", n_pairs_tensor.to(device));
+  input.insert("_edge_index" , edges_tensor.to(device));
+  input.insert("_edge_difference", edge_diff_tensor.to(device));
+  input.insert("atomic_numbers", tag2type_tensor.to(device));
 
   if(debug_mode){
     std::cout << "curator model input:\n";
     std::cout << "num_atoms:\n" << n_atoms_tensor << "\n";
     std::cout << "num_pairs:\n" << n_pairs_tensor << "\n";
-    std::cout << "pairs:\n" << edges_tensor << "\n";
-    std::cout << "n_diff:\n" << edge_diff_tensor<< "\n";
-    std::cout << "elems:\n" << tag2type_tensor << "\n";
+    std::cout << "edge_index:\n" << edges_tensor << "\n";
+    std::cout << "edge_difference:\n" << edge_diff_tensor<< "\n";
+    std::cout << "atomic_numbers:\n" << tag2type_tensor << "\n";
   }
 
-  input.insert("_atomic_numbers", tag2type_tensor.to(device));
   std::vector<torch::IValue> input_vector(1, input);
 
   auto output = model.forward(input_vector).toGenericDict();
@@ -320,7 +319,7 @@ void PairCURATOR::compute(int eflag, int vflag){
     it = output.find("uncertainty");
     if (it != output.end()) {
       torch::Tensor uncertainty_tensor = output.at("uncertainty").toTensor().cpu();
-      uncertainty_scalar = uncertainty_tensor.data_ptr<double>();
+      uncertainty_scalar = uncertainty_tensor.data_ptr<double>()[0];
     }
   }
 
