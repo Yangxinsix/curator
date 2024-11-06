@@ -42,7 +42,7 @@ class PairCURATOR : public Pair {
  protected:
   int * type_mapper;
   int debug_mode = 0;
-  int ensemble = 0;
+  int compute_uncertainty = 0;
 
 };
 
