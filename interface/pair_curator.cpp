@@ -91,12 +91,12 @@ void PairCURATOR::allocate()
 }
 
 void PairCURATOR::settings(int narg, char **arg) {
-  // "ensemble" should be the only word after "pair_style" in the input file.
+  // "uncertainty" should be the only word after "pair_style" in the input file.
   if (narg > 1)
     error->all(FLERR, "Illegal pair_style command");  
   else if (narg == 1){
-    if (strcmp(arg[0], "ensemble") == 0) ensemble = 1;
-    else error->all(FLERR, "Only ensemble is supported!");
+    if (strcmp(arg[0], "uncertainty") == 0) compute_uncertainty = 1;
+    else error->all(FLERR, "Only uncertainty is supported!");
   } 
 }
 
@@ -316,11 +316,14 @@ void PairCURATOR::compute(int eflag, int vflag){
   }
 
   // get uncertainty 
-  it = output.find("uncertainty");
-  if (it != output.end()) {
-    torch::Tensor uncertainty_tensor = output.at("uncertainty").toTensor().cpu();
-    uncertainty_scalar = uncertainty_tensor.data_ptr<double>();
+  if (compute_uncertainty){
+    it = output.find("uncertainty");
+    if (it != output.end()) {
+      torch::Tensor uncertainty_tensor = output.at("uncertainty").toTensor().cpu();
+      uncertainty_scalar = uncertainty_tensor.data_ptr<double>();
+    }
   }
+
   // store the total energy where LAMMPS wants it
   eng_vdwl = total_energy_tensor.data_ptr<double>()[0];
 
@@ -337,13 +340,4 @@ void PairCURATOR::compute(int eflag, int vflag){
     f[i][1] = forces[itag][1];
     f[i][2] = forces[itag][2];
   }
-
-  // Read uncertainties if use ensemble model
-  if(ensemble){
-    e_var = output.at("e_var").toTensor().cpu().data_ptr<double>()[0];
-    e_sd = output.at("e_sd").toTensor().cpu().data_ptr<double>()[0];
-    f_var = output.at("f_var").toTensor().cpu().data_ptr<double>()[0];
-    f_sd = output.at("f_sd").toTensor().cpu().data_ptr<double>()[0];
-  }
-
 }
