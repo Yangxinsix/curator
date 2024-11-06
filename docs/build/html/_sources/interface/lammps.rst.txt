@@ -57,6 +57,7 @@ Configure LAMMPS
 -----------------
 We need to provide the path of Torch library to CMake for installation. This can be achieved by adding `-DCMAKE_PREFIX_PATH=`python -c 'import torch;print(torch.utils.cmake_prefix_path)'`` tag to CMake.
 CMake will then use the Torch library from PyTorch python pacakge to configure LAMMPS.
+
 .. code-block:: bash
 
     cd <path_to_lammps>
@@ -66,7 +67,8 @@ CMake will then use the Torch library from PyTorch python pacakge to configure L
     cmake -C ../cmake/presets/basic.cmake -C ../cmake/presets/kokkos-cuda.cmake
 
 Note that the default Torch library may use pre-C++11 ABI, which is not compatible with the C++17 ABI required by KOKKOS_. In this case, the users should download LibTorch with C++11 ABI and set the path to the CMake configuration.
-.. code-block::bash
+
+.. code-block:: bash
 
     # change cuda and pytorch to your version
     wget https://download.pytorch.org/libtorch/cu118/libtorch-cxx11-abi-shared-with-deps-2.3.1%2Bcu118.zip
