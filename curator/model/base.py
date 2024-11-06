@@ -163,8 +163,8 @@ class LitNNP(pl.LightningModule):
         
     def setup(self, stage: Optional[str]=None) -> None:
         if stage == "fit":
-            if not self.model._initialized:
-                self.model.initialize_modules(self.trainer.datamodule)
+            # if not self.model._initialized:  # need to initialize modules everytime to update scales and atomic energies
+            self.model.initialize_modules(self.trainer.datamodule)
             self.rescale_layers = []
             for layer in self.model.output_modules:
                 if hasattr(layer, "unscale"):
