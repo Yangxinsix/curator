@@ -1,5 +1,8 @@
 from curator.data import properties
-from curator.utils import scatter_add, scatter_mean
+try:
+    from torch_scatter import scatter_add, scatter_mean
+except ImportError:
+    from curator.utils import scatter_add, scatter_mean
 from torch import nn
 import torch
 from typing import Dict, Optional, Callable, List, Union

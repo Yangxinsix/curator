@@ -23,10 +23,8 @@ setup(
         "scripts/curator-workflow",
     ],
     install_requires=[
-        'myqueue',
         'torch>=1.10',
         'ase',
-        'asap3',
         'e3nn',
         'torch-ema>=0.3.0',
         'toml',
@@ -35,5 +33,11 @@ setup(
         'wandb',
         'lightning',
     ],
+    extras_require={
+        'torch-scatter': ['torch-scatter'],
+        'myqueue': ['myqueue'],
+        'neighbor_list': ['asap3', 'matscipy'],
+        'all': ['myqueue', 'torch-scatter', 'asap3', 'matscipy'],
+    },
     include_package_data=True,
 )

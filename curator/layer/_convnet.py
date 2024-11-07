@@ -6,7 +6,10 @@ from e3nn.o3 import Linear, TensorProduct, FullyConnectedTensorProduct
 from e3nn import o3
 from e3nn.nn import FullyConnectedNet
 
-from curator.utils import scatter_add
+try:
+    from torch_scatter import scatter_add
+except ImportError:
+    from curator.utils import scatter_add
 from .nonlinearities import ShiftedSoftPlus
 
 class ConvNetLayer(torch.nn.Module):

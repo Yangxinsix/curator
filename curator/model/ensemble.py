@@ -4,7 +4,10 @@ from .base import NeuralNetworkPotential
 from typing import List
 from collections import defaultdict
 from curator.data import properties
-from curator.utils import scatter_add, scatter_mean, scatter_max, scatter_min
+try:
+    from torch_scatter import scatter_add, scatter_mean, scatter_max, scatter_min
+except ImportError:
+    from curator.utils import scatter_add, scatter_mean, scatter_max, scatter_min
 
 class EnsembleModel(nn.Module):
     """
