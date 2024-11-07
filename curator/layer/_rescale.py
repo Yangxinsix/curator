@@ -2,7 +2,10 @@ import torch
 from torch import nn
 from typing import Optional, Dict, Union, List
 from curator.data import properties
-from curator.utils import scatter_add
+try:
+    from torch_scatter import scatter_add
+except ImportError:
+    from curator.utils import scatter_add
 from ase.data import atomic_numbers
 
 # TODO: add __repr__ for modules

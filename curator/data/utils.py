@@ -72,7 +72,10 @@ def compute_scale_shift(
     per_atom=True,
     atomic_energies: Optional[Dict[int, float]]=None,
 ) -> Tuple[float, float]:
-    from curator.utils import scatter_add
+    try:
+        from torch_scatter import scatter_add
+    except ImportError:
+        from curator.utils import scatter_add
     reference_energies = torch.zeros((119,), dtype=torch.float)
     if atomic_energies is not None:
         for k, v in atomic_energies.items():
