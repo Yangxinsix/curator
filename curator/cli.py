@@ -246,7 +246,15 @@ def deploy(
     from e3nn.util.jit import script
 
     # Load model
-    loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
+    try:
+        loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
+    except:
+        original_torch_jit_load = torch.jit.load
+        def torch_jit_load_cpu(*args, **kwargs):
+            kwargs['map_location'] = 'cpu'
+            return original_torch_jit_load(*args, **kwargs)       
+        torch.jit.load = torch_jit_load_cpu
+        loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
 
     if 'model' in loaded_model and cfg_path is None:
         model = loaded_model['model']
