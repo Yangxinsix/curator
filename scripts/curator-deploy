@@ -15,6 +15,7 @@ def get_arguments(arg_list=None):
     parser.add_argument(
         "--target_path",
         type=str,
+        default="compiled_model.pt",
         help="Path to save compiled model",
     )
     parser.add_argument(
