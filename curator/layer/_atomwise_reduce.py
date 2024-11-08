@@ -26,7 +26,7 @@ class AtomwiseReduce(nn.Module):
     def forward(self, data: properties.Type) -> properties.Type:
         # for the prediction of a single structure
         if properties.image_idx not in data:
-            data[properties.image_idx] = torch.zeros(data[properties.num_atoms], dtype=data[properties.edge_idx].dtype, device=data[properties.edge_idx].device)
+            data[properties.image_idx] = torch.zeros(data[properties.n_atoms], dtype=data[properties.edge_idx].dtype, device=data[properties.edge_idx].device)
         
         if self.aggregation_mode == "sum":
             y = scatter_add(data[properties.atomic_energy], data[properties.image_idx], dim=0)
