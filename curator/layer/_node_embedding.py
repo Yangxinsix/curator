@@ -46,7 +46,7 @@ class OneHotAtomEncoding(torch.nn.Module):
                 data[properties.atomic_types] = data[properties.Z] - 1
         onehot = torch.nn.functional.one_hot(
             data[properties.atomic_types], num_classes=self.num_elements
-        ).to(device=data[properties.positions].device, dtype=data[properties.positions].dtype)
+        ).to(device=data[properties.edge_diff].device, dtype=data[properties.edge_diff].dtype)
         
         data[properties.node_attr] = onehot
         if self.set_features:

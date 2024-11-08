@@ -1,7 +1,6 @@
-
 defaults:
   - representation: painn
-
+_convert_: all
 _target_: curator.model.NeuralNetworkPotential
 input_modules:
   - _target_: curator.layer.PairwiseDistance
