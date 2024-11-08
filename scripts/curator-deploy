@@ -23,6 +23,11 @@ def get_arguments(arg_list=None):
         action="store_true",
         help="Load trained weights while initialize the model",
     )
+    parser.add_argument(
+        "--cfg_path",
+        type=str,
+        help="Configuration file that defines model parameters",
+    )
 
     return parser.parse_args(arg_list)
 
