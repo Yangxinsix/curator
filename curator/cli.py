@@ -230,7 +230,7 @@ def tmp_train(config: DictConfig):
 # Deploy the model and save a compiled model
 def deploy(
         model_path: str, 
-        compiled_model_path: str = 'compiled_model.pt', 
+        target_path: str = 'compiled_model.pt', 
         load_weights_only: bool=False,
     ):
     """ Deploy the model and save a compiled model.
@@ -269,8 +269,8 @@ def deploy(
     # Compile the model
     model_compiled = script(model)
     metadata = {"cutoff": str(model_compiled.representation.cutoff).encode("ascii")}
-    model_compiled.save(compiled_model_path, _extra_files=metadata)
-    log.info(f"Deploying compiled model at <{compiled_model_path}>")
+    model_compiled.save(target_path, _extra_files=metadata)
+    log.info(f"Deploying compiled model at <{target_path}>")
 
 # Simulate with the model
 @hydra.main(config_path="configs", config_name="simulate", version_base=None)
