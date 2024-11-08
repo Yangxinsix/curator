@@ -97,7 +97,7 @@ def train(config: DictConfig) -> None:
             state_dict = torch.load(config.model_path)
             new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in state_dict['state_dict'].items())
             model = instantiate(config.model)
-            model.load_state_dict(new_state_dict)
+            model.load_state_dict(new_state_dict, strict=False)      # in case frequent model structure revision
             outputs = instantiate(config.task.outputs)
             
         log.debug(f"Instantiating task <{config.task._target_}>")
@@ -231,7 +231,7 @@ def tmp_train(config: DictConfig):
 def deploy(
         model_path: str, 
         compiled_model_path: str = 'compiled_model.pt', 
-        cfg_path: Optional[str] = None
+        load_weights_only: bool=False,
     ):
     """ Deploy the model and save a compiled model.
 
@@ -244,6 +244,7 @@ def deploy(
     import torch
     from curator.model import LitNNP
     from e3nn.util.jit import script
+    from collections import OrderedDict
 
     # Load model
     try:
@@ -256,22 +257,14 @@ def deploy(
         torch.jit.load = torch_jit_load_cpu
         loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
 
-    if 'model' in loaded_model and cfg_path is None:
+    if 'model' in loaded_model and not load_weights_only:
         model = loaded_model['model']
-    else:
-        # Load the arguments
-        config = read_user_config(cfg_path, config_path="configs", config_name="train")
-
-        # Set up datamodule and load training and validation set
-        if not os.path.isfile(config.data.datapath):
-            raise RuntimeError("Please provide valid data path!")
-        datamodule = instantiate(config.data)
-        datamodule.setup()
-        
+    else:          
         # Set up model, optimizer and scheduler
-        model = instantiate(config.model)
-        model.initialize_modules(datamodule)
-        model.load_state_dict(loaded_model["state_dict"])
+        model = instantiate(loaded_model['model_params'])
+        state_dict = loaded_model["state_dict"]
+        new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in state_dict['state_dict'].items())
+        model.load_state_dict(new_state_dict, strict=False)
 
     # Compile the model
     model_compiled = script(model)
