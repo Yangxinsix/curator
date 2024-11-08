@@ -296,7 +296,7 @@ void PairCURATOR::compute(int eflag, int vflag){
   
   // get forces
   torch::Tensor forces_tensor = output.at("forces").toTensor().cpu();
-  auto forces = forces_tensor.accessor<double, 2>();
+  auto forces = forces_tensor.accessor<float, 2>();
 
   // get energy
   torch::Tensor total_energy_tensor = output.at("energy").toTensor().cpu();
@@ -305,7 +305,7 @@ void PairCURATOR::compute(int eflag, int vflag){
   auto it = output.find("virial");
   if (it != output.end()) {
     torch::Tensor virial_tensor = output.at("virial").toTensor().cpu();
-    auto pred_virials = virial_tensor.accessor<double, 1>();
+    auto pred_virials = virial_tensor.accessor<float, 1>();
     virial[0] = pred_virials[0];
     virial[1] = pred_virials[1];
     virial[2] = pred_virials[2];
@@ -319,12 +319,12 @@ void PairCURATOR::compute(int eflag, int vflag){
     it = output.find("uncertainty");
     if (it != output.end()) {
       torch::Tensor uncertainty_tensor = output.at("uncertainty").toTensor().cpu();
-      uncertainty_scalar = uncertainty_tensor.data_ptr<double>()[0];
+      uncertainty_scalar = uncertainty_tensor.data_ptr<float>()[0];
     }
   }
 
   // store the total energy where LAMMPS wants it
-  eng_vdwl = total_energy_tensor.data_ptr<double>()[0];
+  eng_vdwl = total_energy_tensor.data_ptr<float>()[0];
 
   if(debug_mode){
     std::cout << "curator model output:\n";
