@@ -7,7 +7,8 @@ def get_arguments(arg_list=None):
         description="Script for deploy curator models", fromfile_prefix_chars="+"
     )
     parser.add_argument(
-        "--model_path",
+        "model_path",
+        metavar="INPUT_FILE",
         type=str,
         help="Path to model that to be compiled",
     )
