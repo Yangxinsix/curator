@@ -261,7 +261,7 @@ def deploy(
         model = loaded_model['model']
     else:          
         # Set up model, optimizer and scheduler
-        model = instantiate(loaded_model['model_params'])
+        model = instantiate(loaded_model['model_params'], _convert_="all")
         new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in loaded_model['state_dict'].items())
         model.load_state_dict(new_state_dict, strict=False)
 
