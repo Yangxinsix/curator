@@ -232,6 +232,7 @@ def deploy(
         model_path: str, 
         target_path: str = 'compiled_model.pt', 
         load_weights_only: bool=False,
+        cfg_path: Optional[str] = None,
     ):
     """ Deploy the model and save a compiled model.
 
@@ -261,7 +262,12 @@ def deploy(
         model = loaded_model['model']
     else:          
         # Set up model, optimizer and scheduler
-        model = instantiate(loaded_model['model_params'], _convert_="all")
+        if cfg_path is None:
+            model = instantiate(loaded_model['model_params'], _convert_="all")
+        else:
+            cfg = read_user_config(cfg_path, config_path="configs", config_name="train")
+            model = instantiate(cfg.model, _convert_="all")
+
         new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in loaded_model['state_dict'].items())
         model.load_state_dict(new_state_dict, strict=False)
 
