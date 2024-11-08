@@ -231,8 +231,8 @@ class FeatureCalculator(nn.Module):
                 atomic_feat = torch.zeros(
                     data[properties.image_idx].shape[0], 
                     self.n_random_features, 
-                    dtype=data[properties.positions].dtype,
-                    device=data[properties.positions].device,
+                    dtype=data[properties.edge_diff].dtype,
+                    device=data[properties.edge_diff].device,
                 )
                 for feat, grad, in_proj, out_proj in zip(
                     feats,
