@@ -33,7 +33,7 @@ References:
 
 using namespace LAMMPS_NS;
 
-PairCURATOR::PairCURATOR(LAMMPS *lmp) : Pair(lmp) {
+PairCurator::PairCurator(LAMMPS *lmp) : Pair(lmp) {
   restartinfo = 0;
   manybody_flag = 1;
 
@@ -46,12 +46,12 @@ PairCURATOR::PairCURATOR(LAMMPS *lmp) : Pair(lmp) {
   std::cout << "curator is using device " << device << "\n";
 
   if(const char* env_p = std::getenv("curator_DEBUG")){
-    std::cout << "PairCURATOR is in DEBUG mode, since curator_DEBUG is in env\n";
+    std::cout << "PairCurator is in DEBUG mode, since curator_DEBUG is in env\n";
     debug_mode = 1;
   }
 }
 
-PairCURATOR::~PairCURATOR(){
+PairCurator::~PairCurator(){
   if (allocated) {
     memory->destroy(setflag);
     memory->destroy(cutsq);
@@ -59,7 +59,7 @@ PairCURATOR::~PairCURATOR(){
   }
 }
 
-void PairCURATOR::init_style(){
+void PairCurator::init_style(){
   if (atom->tag_enable == 0)
     error->all(FLERR,"Pair style curator requires atom IDs");
 
@@ -74,12 +74,12 @@ void PairCURATOR::init_style(){
     error->all(FLERR,"Pair style curator requires newton pair off");
 }
 
-double PairCURATOR::init_one(int i, int j)
+double PairCurator::init_one(int i, int j)
 {
   return cutoff;
 }
 
-void PairCURATOR::allocate()
+void PairCurator::allocate()
 {
   allocated = 1;
   int n = atom->ntypes;
@@ -90,7 +90,7 @@ void PairCURATOR::allocate()
 
 }
 
-void PairCURATOR::settings(int narg, char **arg) {
+void PairCurator::settings(int narg, char **arg) {
   // "uncertainty" should be the only word after "pair_style" in the input file.
   if (narg > 1)
     error->all(FLERR, "Illegal pair_style command");  
@@ -100,7 +100,7 @@ void PairCURATOR::settings(int narg, char **arg) {
   } 
 }
 
-void PairCURATOR::coeff(int narg, char **arg) {
+void PairCurator::coeff(int narg, char **arg) {
 
   if (!allocated)
     allocate();
@@ -158,7 +158,7 @@ void PairCURATOR::coeff(int narg, char **arg) {
 }
 
 // Force and energy computation
-void PairCURATOR::compute(int eflag, int vflag){
+void PairCurator::compute(int eflag, int vflag){
   ev_init(eflag, vflag);
 
   // Get info from lammps:
@@ -304,7 +304,7 @@ void PairCURATOR::compute(int eflag, int vflag){
   // get virial
   auto it = output.find("virial");
   if (it != output.end()) {
-    torch::Tensor virial_tensor = output.at("virial").toTensor().cpu();
+    torch::Tensor virial_tensor = output.at("virial").toTensor().squeeze().cpu();
     auto pred_virials = virial_tensor.accessor<float, 1>();
     virial[0] = pred_virials[0];
     virial[1] = pred_virials[1];

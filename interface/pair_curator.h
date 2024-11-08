@@ -8,7 +8,7 @@ References:
 
 #ifdef PAIR_CLASS
 
-PairStyle(painn,PairCURATOR)
+PairStyle(painn,PairCurator)
 
 #else
 
@@ -21,10 +21,10 @@ PairStyle(painn,PairCURATOR)
 
 namespace LAMMPS_NS {
     
-class PairCURATOR : public Pair {
+class PairCurator : public Pair {
  public:
-  PairCURATOR(class LAMMPS *);
-  virtual ~PairCURATOR();
+  PairCurator(class LAMMPS *);
+  virtual ~PairCurator();
   virtual void compute(int, int);
   void settings(int, char **);
   virtual void coeff(int, char **);
