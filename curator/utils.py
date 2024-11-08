@@ -17,6 +17,14 @@ def register_resolvers():
     OmegaConf.register_new_resolver("multiply_fs", lambda x: x * units.fs, replace=True)
     OmegaConf.register_new_resolver("divide_by_fs", lambda x: x / units.fs, replace=True)
 
+def dummy_load(*args, **kwargs):
+    original_torch_jit_load = torch.jit.load
+    def torch_jit_load_cpu(*args, **kwargs):
+        if not torch.cuda.is_available():
+            kwargs['map_location'] = torch.device('cpu')
+        return original_torch_jit_load(*args, **kwargs)
+    torch.jit.load = torch_jit_load_cpu
+
 def split_list(lst, chunk_or_num, by_chunk_size=False):
     if by_chunk_size:
         num_chunks, remainder = divmod(len(lst), chunk_or_num)
