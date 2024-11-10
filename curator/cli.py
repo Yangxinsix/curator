@@ -109,6 +109,7 @@ def train(config: DictConfig) -> None:
                 checkpoint_path=config.model_path, 
                 model=model, 
                 outputs=outputs,
+                strict=False,
             )
     else:
         # Initiate the model
