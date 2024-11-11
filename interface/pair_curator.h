@@ -8,7 +8,7 @@ References:
 
 #ifdef PAIR_CLASS
 
-PairStyle(painn,PairCurator)
+PairStyle(curator,PairCurator)
 
 #else
 

@@ -1,7 +1,9 @@
+#ifdef COMPUTE_CLASS
+ComputeStyle(uncertainty,ComputeUncertainty);
+#else
+
 #ifndef LMP_COMPUTE_UNCERTAINTY_H
 #define LMP_COMPUTE_UNCERTAINTY_H
-
-ComputeStyle(uncertainty, ComputeUncertainty)
 
 #include "compute.h"
 
@@ -22,4 +24,5 @@ public:
 
 }
 
+#endif
 #endif

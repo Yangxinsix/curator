@@ -332,15 +332,6 @@ void PairCurator::compute(int eflag, int vflag){
     virial[5] = pred_virials[5];
   }
 
-  // get uncertainty 
-  if (compute_uncertainty){
-    it = output.find("uncertainty");
-    if (it != output.end()) {
-      torch::Tensor uncertainty_tensor = output.at("uncertainty").toTensor().cpu();
-      uncertainty_scalar = uncertainty_tensor.data_ptr<float>()[0];
-    }
-  }
-
   // store the total energy where LAMMPS wants it
   eng_vdwl = total_energy_tensor.data_ptr<float>()[0];
 
