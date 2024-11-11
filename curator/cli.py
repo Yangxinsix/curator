@@ -109,6 +109,7 @@ def train(config: DictConfig) -> None:
                 checkpoint_path=config.model_path, 
                 model=model, 
                 outputs=outputs,
+                strict=False,
             )
     else:
         # Initiate the model
@@ -385,16 +386,16 @@ def select(config: DictConfig):
 
     # Load the pool data set and training data set
     if config.dataset and config.split_file:
-        dataset = AseDataset(read_trajectory(config.dataset), cutoff=cutoff)
+        dataset = AseDataset(read_trajectory(config.dataset), cutoff=cutoff, transforms=config.transforms)
         with open(config.split_file) as f:
             split = json.load(f)
         data_dict = {}
         for k in split:
             data_dict[k] = torch.utils.data.Subset(dataset, split[k])
     elif config.pool_set:
-        data_dict = {'pool': AseDataset(read_trajectory(config.pool_set), cutoff=cutoff)}
+        data_dict = {'pool': AseDataset(read_trajectory(config.pool_set), cutoff=cutoff, transforms=config.transforms)}
         if config.train_set:
-            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff)
+            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff, transforms=config.transforms)
     else:
         raise RuntimeError("Please give valid pool data set for selection!")
 
