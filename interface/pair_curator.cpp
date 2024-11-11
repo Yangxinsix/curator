@@ -36,6 +36,8 @@ using namespace LAMMPS_NS;
 PairCurator::PairCurator(LAMMPS *lmp) : Pair(lmp) {
   restartinfo = 0;
   manybody_flag = 1;
+  compute_uncertainty = 0;
+  debug_mode = 0;
 
   if(torch::cuda::is_available()){
     device = torch::kCUDA;
@@ -43,10 +45,15 @@ PairCurator::PairCurator(LAMMPS *lmp) : Pair(lmp) {
   else {
     device = torch::kCPU;
   }
-  std::cout << "curator is using device " << device << "\n";
 
-  if(const char* env_p = std::getenv("curator_DEBUG")){
-    std::cout << "PairCurator is in DEBUG mode, since curator_DEBUG is in env\n";
+  if (comm->me == 0) {
+    std::cout << "CURATOR is using device: " << device << std::endl;
+  }
+
+  if(const char* env_p = std::getenv("CURATOR_DEBUG")){
+    if (comm->me == 0) {
+      std::cout << "PairCurator is in DEBUG mode, since CURATOR_DEBUG is set in the environment" << std::endl;
+    }
     debug_mode = 1;
   }
 }
@@ -91,13 +98,22 @@ void PairCurator::allocate()
 }
 
 void PairCurator::settings(int narg, char **arg) {
-  // "uncertainty" should be the only word after "pair_style" in the input file.
-  if (narg > 1)
-    error->all(FLERR, "Illegal pair_style command");  
-  else if (narg == 1){
-    if (strcmp(arg[0], "uncertainty") == 0) compute_uncertainty = 1;
-    else error->all(FLERR, "Only uncertainty is supported!");
-  } 
+  // "uncertainty" should be after "pair_style" in the input file if you want to calculate uncertainty.
+  if (narg > 0) {
+    if (strcmp(arg[0], "uncertainty") == 0) {
+      compute_uncertainty = 1;
+      if (narg == 1) uncertainty_names.push_back("f_sd");      // default is to extract force standard deviation
+      else {
+        for (int i = 1; i < narg; ++i) {
+          uncertainty_names.push_back(std::string(arg[i]));
+        }
+      }
+      uncertainty_values.resize(uncertainty_names.size(), 0.0);
+    }
+    else {
+      error->all(FLERR, "Illegal pair_style command: unknown keyword");
+    }
+  }
 }
 
 void PairCurator::coeff(int narg, char **arg) {
@@ -124,7 +140,9 @@ void PairCurator::coeff(int narg, char **arg) {
       type_mapper[i] = -1;
   }
 
-  std::cout << "Loading model from " << arg[2] << "\n";
+  if (comm->me == 0) {
+    std::cout << "Loading model from " << arg[2] << std::endl;
+  }
 
   
   std::unordered_map<std::string, std::string> metadata = {
@@ -142,7 +160,7 @@ void PairCurator::coeff(int narg, char **arg) {
       counter++;
   }
   
-  if(debug_mode){
+  if(debug_mode && comm->me == 0){
     std::cout << "cutoff" << cutoff << "\n";
     for (int i = 0; i <= ntypes+1; i++){
         std::cout << type_mapper[i] << "\n";
@@ -339,4 +357,16 @@ void PairCurator::compute(int eflag, int vflag){
     f[i][1] = forces[itag][1];
     f[i][2] = forces[itag][2];
   }
+}
+
+void *PairCURATOR::extract(const char *str, int &dim) {
+  if (compute_uncertainty) {
+    auto it = std::find(uncertainty_names.begin(), uncertainty_names.end(), std::string(str));
+    if (it != uncertainty_names.end()) {
+      size_t idx = std::distance(uncertainty_names.begin(), it);
+      dim = 0; // Scalar value
+      return (void *)(&uncertainty_values[idx]);
+    }
+  }
+  return NULL;
 }

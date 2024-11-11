@@ -17,7 +17,7 @@ from .utils import (
 import logging
 import socket
 import contextlib
-from typing import Optional
+from typing import Optional, Union, Dict, List
 from pytorch_lightning import seed_everything
 
 # very ugly solution for solving pytorch lighting and myqueue conflictions
@@ -229,7 +229,7 @@ def tmp_train(config: DictConfig):
 
 # Deploy the model and save a compiled model
 def deploy(
-        model_path: str, 
+        model_path: Union[str, list], 
         target_path: str = 'compiled_model.pt', 
         load_weights_only: bool=False,
         cfg_path: Optional[str] = None,
@@ -246,36 +246,49 @@ def deploy(
     from curator.model import LitNNP
     from e3nn.util.jit import script
     from collections import OrderedDict
+    from omegaconf import ListConfig
+    from curator.model import EnsembleModel
+    from curator.layer.utils import find_layer_by_name_recursive
+
+    def load_model(model_path):
+        try:
+            loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
+        except:
+            original_torch_jit_load = torch.jit.load
+            def torch_jit_load_cpu(*args, **kwargs):
+                kwargs['map_location'] = 'cpu'
+                return original_torch_jit_load(*args, **kwargs)       
+            torch.jit.load = torch_jit_load_cpu
+            loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
+
+        if 'model' in loaded_model and not load_weights_only:
+            model = loaded_model['model']
+        else:          
+            # Set up model, optimizer and scheduler
+            if cfg_path is None:
+                model = instantiate(loaded_model['model_params'], _convert_="all")
+            else:
+                cfg = read_user_config(cfg_path, config_path="configs", config_name="train")
+                model = instantiate(cfg.model, _convert_="all")
+
+            new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in loaded_model['state_dict'].items())
+            model.load_state_dict(new_state_dict, strict=False)
+        return model
 
     # Load model
-    try:
-        loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
-    except:
-        original_torch_jit_load = torch.jit.load
-        def torch_jit_load_cpu(*args, **kwargs):
-            kwargs['map_location'] = 'cpu'
-            return original_torch_jit_load(*args, **kwargs)       
-        torch.jit.load = torch_jit_load_cpu
-        loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
-
-    if 'model' in loaded_model and not load_weights_only:
-        model = loaded_model['model']
-    else:          
-        # Set up model, optimizer and scheduler
-        if cfg_path is None:
-            model = instantiate(loaded_model['model_params'], _convert_="all")
+    if isinstance(model_path, (list, ListConfig)):
+        if len(model_path) > 1:
+            model = EnsembleModel([load_model(path) for path in model_path])
         else:
-            cfg = read_user_config(cfg_path, config_path="configs", config_name="train")
-            model = instantiate(cfg.model, _convert_="all")
-
-        new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in loaded_model['state_dict'].items())
-        model.load_state_dict(new_state_dict, strict=False)
+            model = load_model(model_path[0])
+    else:
+        model = load_model(model_path)
 
     # Compile the model
     model_compiled = script(model)
-    metadata = {"cutoff": str(model_compiled.representation.cutoff).encode("ascii")}
+    metadata = {"cutoff": str(find_layer_by_name_recursive(model_compiled, 'cutoff')).encode("ascii")}
     model_compiled.save(target_path, _extra_files=metadata)
-    log.info(f"Deploying compiled model at <{target_path}>")
+    log.info(f"Deploying compiled model at <{target_path}> from <{model_path}>")
 
 # Simulate with the model
 @hydra.main(config_path="configs", config_name="simulate", version_base=None)
