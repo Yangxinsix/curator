@@ -30,6 +30,11 @@ void ComputeUncertainty::init() {
   if (pair_ptr == NULL)
     error->all(FLERR, "Compute uncertainty requires a pair style to be defined");
 
+  // Check if the pair style is PairCURATOR
+  pair_curator = dynamic_cast<PairCURATOR *>(pair_ptr);
+  if (pair_curator == NULL)
+    error->all(FLERR, "Compute uncertainty can only be used with pair style 'curator'");
+
   int dim;
   uncertainty_value = (double *)pair_ptr->extract(uncertainty_name.c_str(), dim);
   if (uncertainty_value == NULL || dim != 0)
