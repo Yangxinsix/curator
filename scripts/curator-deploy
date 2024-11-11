@@ -10,6 +10,7 @@ def get_arguments(arg_list=None):
         "model_path",
         metavar="INPUT_FILE",
         type=str,
+        nargs="+",
         help="Path to model that to be compiled",
     )
     parser.add_argument(
