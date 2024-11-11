@@ -350,7 +350,7 @@ void PairCurator::compute(int eflag, int vflag){
   }
 }
 
-void *PairCURATOR::extract(const char *str, int &dim) {
+void *PairCurator::extract(const char *str, int &dim) {
   if (compute_uncertainty) {
     auto it = std::find(uncertainty_names.begin(), uncertainty_names.end(), std::string(str));
     if (it != uncertainty_names.end()) {
