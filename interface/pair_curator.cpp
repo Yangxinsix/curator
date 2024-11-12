@@ -318,6 +318,8 @@ void PairCurator::compute(int eflag, int vflag){
 
   // get energy
   torch::Tensor total_energy_tensor = output.at("energy").toTensor().cpu();
+  // store the total energy where LAMMPS wants it
+  eng_vdwl = total_energy_tensor.data_ptr<float>()[0];
 
   // get virial
   auto it = output.find("virial");
@@ -332,8 +334,20 @@ void PairCurator::compute(int eflag, int vflag){
     virial[5] = pred_virials[5];
   }
 
-  // store the total energy where LAMMPS wants it
-  eng_vdwl = total_energy_tensor.data_ptr<float>()[0];
+  // Get uncertainties
+  if (compute_uncertainty) {
+    for (size_t idx = 0; idx < uncertainty_names.size(); ++idx) {
+      const std::string &name = uncertainty_names[idx];
+      it = output.find(name);
+      if (it != output.end()) {
+        torch::Tensor uncertainty_tensor = output.at(name).toTensor().cpu();
+        uncertainty_values[idx] = uncertainty_tensor.item<float>();
+      } else {
+        std::string error_msg = "Uncertainty key '" + name + "' not found in model output.";
+        error->all(FLERR, error_msg.c_str());
+      }
+    }
+  }
 
   if(debug_mode){
     std::cout << "curator model output:\n";
