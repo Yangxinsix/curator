@@ -12,7 +12,7 @@ namespace LAMMPS_NS {
 class ComputeUncertainty : public Compute {
 public:
   ComputeUncertainty(class LAMMPS *, int, char **);
-  ~ComputeUncertainty();
+  ~ComputeUncertainty() {};
   void init();
   double compute_scalar();
   double memory_usage();
