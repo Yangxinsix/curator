@@ -19,7 +19,6 @@ public:
 
  private:
   std::string uncertainty_name; // Name of the uncertainty to extract
-  double *uncertainty_value;    // Pointer to the uncertainty value
   class Pair *pair_ptr; 
   class PairCurator *pair_curator;
 };
