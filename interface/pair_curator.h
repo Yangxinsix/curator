@@ -31,8 +31,6 @@ class PairCurator : public Pair {
   virtual double init_one(int, int);
   virtual void init_style();
   void allocate();
-  void *extract(const char *, int &);         // extract values in pair style
-
   double cutoff;
   torch::jit::script::Module model;
   torch::Device device = torch::kCPU;
@@ -42,7 +40,11 @@ class PairCurator : public Pair {
   int compute_uncertainty;
 
   std::vector<std::string> uncertainty_names;
-  std::vector<double> uncertainty_values;
+  // Method to access uncertainties
+  double get_uncertainty(const std::string &name) const;
+
+  // Uncertainty storage
+  std::unordered_map<std::string, double> uncertainties;
 
  protected:
   int * type_mapper;

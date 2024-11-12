@@ -19,6 +19,8 @@ References:
 #include "potential_file_reader.h"
 #include "tokenizer.h"
 
+#include <unordered_map>
+#include <string>
 #include <cmath>
 #include <cstring>
 #include <numeric>
@@ -102,13 +104,12 @@ void PairCurator::settings(int narg, char **arg) {
   if (narg > 0) {
     if (strcmp(arg[0], "uncertainty") == 0) {
       compute_uncertainty = 1;
-      if (narg == 1) uncertainty_names.push_back("f_sd");      // default is to extract force standard deviation
+      if (narg == 1) uncertainty_names.push_back("force_sd");      // default is to extract force standard deviation
       else {
         for (int i = 1; i < narg; ++i) {
           uncertainty_names.push_back(std::string(arg[i]));
         }
       }
-      uncertainty_values.resize(uncertainty_names.size(), 0.0);
     }
     else {
       error->all(FLERR, "Illegal pair_style command: unknown keyword");
@@ -341,7 +342,7 @@ void PairCurator::compute(int eflag, int vflag){
       it = output.find(name);
       if (it != output.end()) {
         torch::Tensor uncertainty_tensor = output.at(name).toTensor().cpu();
-        uncertainty_values[idx] = uncertainty_tensor.item<float>();
+        uncertainties[name] = uncertainty_tensor.item<float>();
       } else {
         std::string error_msg = "Uncertainty key '" + name + "' not found in model output.";
         error->all(FLERR, error_msg.c_str());
@@ -364,14 +365,13 @@ void PairCurator::compute(int eflag, int vflag){
   }
 }
 
-void *PairCurator::extract(const char *str, int &dim) {
-  if (compute_uncertainty) {
-    auto it = std::find(uncertainty_names.begin(), uncertainty_names.end(), std::string(str));
-    if (it != uncertainty_names.end()) {
-      size_t idx = std::distance(uncertainty_names.begin(), it);
-      dim = 0; // Scalar value
-      return (void *)(&uncertainty_values[idx]);
-    }
+double PairCurator::get_uncertainty(const std::string &name) const {
+  auto it = uncertainties.find(name);
+  if (it != uncertainties.end()) {
+    return it->second;
+  } else {
+    std::string error_msg = "Uncertainty '" + name + "' not found in PairCURATOR.";
+    error->all(FLERR, error_msg.c_str());
+    return 0.0; // This line will not be reached due to error->all()
   }
-  return NULL;
 }
