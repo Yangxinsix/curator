@@ -53,8 +53,9 @@ class EnsembleModel(nn.Module):
             result_dict[properties.e_se] = torch.square(e_diff)
             result_dict[properties.f_ae] = scatter_mean(torch.abs(f_diff).mean(dim=1), data[properties.image_idx], dim=0)
             result_dict[properties.f_se] = scatter_mean(torch.square(f_diff).mean(dim=1), data[properties.image_idx], dim=0)
-            result_dict[properties.f_maxe], _ = scatter_max(f_diff.square().sum(dim=1).sqrt(), data[properties.image_idx], dim=0)
-            result_dict[properties.f_mine], _ = scatter_min(f_diff.square().sum(dim=1).sqrt(), data[properties.image_idx], dim=0)
+            # currently torch scatter does not support jit script these two operations
+            # result_dict[properties.f_maxe], _ = scatter_max(f_diff.square().sum(dim=1).sqrt(), data[properties.image_idx], dim=0)
+            # result_dict[properties.f_mine], _ = scatter_min(f_diff.square().sum(dim=1).sqrt(), data[properties.image_idx], dim=0)
 
         return result_dict
 
