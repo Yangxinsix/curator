@@ -104,10 +104,11 @@ void PairCurator::settings(int narg, char **arg) {
   if (narg > 0) {
     if (strcmp(arg[0], "uncertainty") == 0) {
       compute_uncertainty = 1;
-      if (narg == 1) uncertainty_names.push_back("force_sd");      // default is to extract force standard deviation
+      uncertainties.clear();
+      if (narg == 1) uncertainties["force_sd"] = 0.0;      // default is to extract force standard deviation
       else {
         for (int i = 1; i < narg; ++i) {
-          uncertainty_names.push_back(std::string(arg[i]));
+          uncertainties[std::string(arg[i])] = 0.0;
         }
       }
     }
@@ -337,12 +338,12 @@ void PairCurator::compute(int eflag, int vflag){
 
   // Get uncertainties
   if (compute_uncertainty) {
-    for (size_t idx = 0; idx < uncertainty_names.size(); ++idx) {
-      const std::string &name = uncertainty_names[idx];
-      it = output.find(name);
+    for (auto& pair : uncertainties) {
+      const std::string &name = pair.first;
+      auto it = output.find(name);
       if (it != output.end()) {
         torch::Tensor uncertainty_tensor = output.at(name).toTensor().cpu();
-        uncertainties[name] = uncertainty_tensor.item<float>();
+        pair.second = uncertainty_tensor.item<float>(); // Update the uncertainty value
       } else {
         std::string error_msg = "Uncertainty key '" + name + "' not found in model output.";
         error->all(FLERR, error_msg.c_str());
@@ -375,7 +376,7 @@ double PairCurator::get_uncertainty(const std::string &name) const {
   if (it != uncertainties.end()) {
     return it->second;
   } else {
-    std::string error_msg = "Uncertainty '" + name + "' not found in PairCURATOR.";
+    std::string error_msg = "Uncertainty '" + name + "' not found in PairCurator.";
     error->all(FLERR, error_msg.c_str());
     return 0.0; // This line will not be reached due to error->all()
   }
