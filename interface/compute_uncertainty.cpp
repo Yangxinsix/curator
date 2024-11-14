@@ -44,7 +44,7 @@ double ComputeUncertainty::compute_scalar() {
   invoked_scalar = update->ntimestep;
   double value = pair_curator->get_uncertainty(uncertainty_name);
   if (debug_mode) {
-    std::cout << "Key: " << uncertainty_name << ", Value: " << *uncertainty_value << std::endl;
+    std::cout << "Key: " << uncertainty_name << ", Value: " << value << std::endl;
     std::cout << "Invoked Scalar: " << invoked_scalar << std::endl;
   }
   return value;
