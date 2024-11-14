@@ -42,12 +42,12 @@ void ComputeUncertainty::init() {
 
 double ComputeUncertainty::compute_scalar() {
   invoked_scalar = update->ntimestep;
-  double value = pair_curator->get_uncertainty(uncertainty_name);
+  scalar = pair_curator->get_uncertainty(uncertainty_name);
   if (debug_mode) {
-    std::cout << "Key: " << uncertainty_name << ", Value: " << value << std::endl;
+    std::cout << "Key: " << uncertainty_name << ", Value: " << scalar << std::endl;
     std::cout << "Invoked Scalar: " << invoked_scalar << std::endl;
   }
-  return value;
+  return scalar;
 }
 
 double ComputeUncertainty::memory_usage() {
