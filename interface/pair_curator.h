@@ -34,21 +34,18 @@ class PairCurator : public Pair {
   double cutoff;
   torch::jit::script::Module model;
   torch::Device device = torch::kCPU;
+  std::vector<std::string> uncertainty_names;
+  // Method to access uncertainties
+  double get_uncertainty(const std::string &name) const;
+  // Uncertainty storage
+  std::unordered_map<std::string, double> uncertainties;
 
  private:
   int debug_mode;
   int compute_uncertainty;
 
-  std::vector<std::string> uncertainty_names;
-  // Method to access uncertainties
-  double get_uncertainty(const std::string &name) const;
-
-  // Uncertainty storage
-  std::unordered_map<std::string, double> uncertainties;
-
  protected:
   int * type_mapper;
-
 
 };
 
