@@ -18,9 +18,14 @@ ComputeUncertainty::ComputeUncertainty(LAMMPS *lmp, int narg, char **arg)
 
   scalar_flag = 1;
   extscalar = 0;
+  
+  debug_mode = 0;
 
   // initialize pair and uncertainty pointer
   pair_ptr = NULL;
+  if(const char* env_p = std::getenv("CURATOR_DEBUG")){
+    debug_mode = 1;
+  }
 }
 
 void ComputeUncertainty::init() {
@@ -38,6 +43,9 @@ void ComputeUncertainty::init() {
 double ComputeUncertainty::compute_scalar() {
   invoked_scalar = update->ntimestep;
   double value = pair_curator->get_uncertainty(uncertainty_name);
+  if (debug_mode) {
+    std::cout << "Key: " << uncertainty_name << ", Value: " << value << std::endl;
+  }
   return value;
 }
 
