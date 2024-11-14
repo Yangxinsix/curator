@@ -19,6 +19,7 @@ public:
 
  private:
   std::string uncertainty_name; // Name of the uncertainty to extract
+  int debug_mode;
   class Pair *pair_ptr; 
   class PairCurator *pair_curator;
 };
