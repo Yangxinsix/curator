@@ -38,19 +38,16 @@ void ComputeUncertainty::init() {
   pair_curator = dynamic_cast<PairCurator *>(pair_ptr);
   if (pair_curator == NULL)
     error->all(FLERR, "Compute uncertainty can only be used with pair style 'curator'");
-
-  // Get the uncertainty value from the PairCurator
-  double value = pair_curator->get_uncertainty(uncertainty_name);
-  uncertainty_value = &value;  // Set the pointer to the uncertainty value
 }
 
 double ComputeUncertainty::compute_scalar() {
   invoked_scalar = update->ntimestep;
+  double value = pair_curator->get_uncertainty(uncertainty_name);
   if (debug_mode) {
     std::cout << "Key: " << uncertainty_name << ", Value: " << *uncertainty_value << std::endl;
     std::cout << "Invoked Scalar: " << invoked_scalar << std::endl;
   }
-  return *uncertainty_value;
+  return value;
 }
 
 double ComputeUncertainty::memory_usage() {

@@ -243,7 +243,7 @@ void PairCurator::compute(int eflag, int vflag){
   if (debug_mode) {
     std::cout << "num_atoms = " << nlocal << std::endl;
     std::cout << "nedges = " << nedges << std::endl;
-    std::cout << "elems = " << tag2type_tensor << std::endl;
+    // std::cout << "elems = " << tag2type_tensor << std::endl;
   }
   // if (debug_mode) printf("curator edges: i j xi[:] xj[:]\n");
   for(int ii = 0; ii < nlocal; ii++){
