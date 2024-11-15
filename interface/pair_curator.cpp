@@ -243,9 +243,9 @@ void PairCurator::compute(int eflag, int vflag){
   if (debug_mode) {
     std::cout << "num_atoms = " << nlocal << std::endl;
     std::cout << "nedges = " << nedges << std::endl;
-    // std::cout << "elems = " << tag2type_tensor << std::endl;
+    std::cout << "elems = " << tag2type_tensor << std::endl;
   }
-  // if (debug_mode) printf("curator edges: i j xi[:] xj[:]\n");
+  if (debug_mode) printf("curator edges: i j xi[:] xj[:]\n");
   for(int ii = 0; ii < nlocal; ii++){
     int i = ilist[ii];
     int itag = tag[i];
@@ -273,15 +273,15 @@ void PairCurator::compute(int eflag, int vflag){
           edge_diff[edge_counter][2] = dz;
           edge_counter++;
 
-          // if (debug_mode){
-          //     printf("%d %d %.10g %.10g %.10g %.10g\n", itag-1, jtag-1,
-          //       dx,dy,dz,sqrt(rsq));
-          // }
+          if (debug_mode){
+              printf("%d %d %.10g %.10g %.10g %.10g\n", itag-1, jtag-1,
+                dx,dy,dz,sqrt(rsq));
+          }
 
       }
     }
   }
-  // if (debug_mode) printf("end curator edges\n");
+  if (debug_mode) printf("end curator edges\n");
 
   // shorten the list before sending to nequip
   torch::Tensor edges_tensor = torch::from_blob(edges, {edge_counter, 2}, torch::TensorOptions().dtype(torch::kInt64));
@@ -301,14 +301,14 @@ void PairCurator::compute(int eflag, int vflag){
   input.insert("_edge_difference", edge_diff_tensor.to(device));
   input.insert("atomic_numbers", tag2type_tensor.to(device));
 
-  // if(debug_mode){
-  //   std::cout << "curator model input:\n";
-  //   std::cout << "num_atoms:\n" << n_atoms_tensor << "\n";
-  //   std::cout << "num_pairs:\n" << n_pairs_tensor << "\n";
-  //   std::cout << "edge_index:\n" << edges_tensor << "\n";
-  //   std::cout << "edge_difference:\n" << edge_diff_tensor<< "\n";
-  //   std::cout << "atomic_numbers:\n" << tag2type_tensor << "\n";
-  // }
+  if(debug_mode){
+    std::cout << "curator model input:\n";
+    std::cout << "num_atoms:\n" << n_atoms_tensor << "\n";
+    std::cout << "num_pairs:\n" << n_pairs_tensor << "\n";
+    std::cout << "edge_index:\n" << edges_tensor << "\n";
+    std::cout << "edge_difference:\n" << edge_diff_tensor<< "\n";
+    std::cout << "atomic_numbers:\n" << tag2type_tensor << "\n";
+  }
 
   std::vector<torch::IValue> input_vector(1, input);
 
@@ -353,7 +353,7 @@ void PairCurator::compute(int eflag, int vflag){
 
   if(debug_mode){
     std::cout << "curator model output:\n";
-    // std::cout << "forces: " << forces_tensor << "\n";
+    std::cout << "forces: " << forces_tensor << "\n";
     std::cout << "energy: " << total_energy_tensor << "\n";
     if (compute_uncertainty) {
       for (const auto& pair : uncertainties) {
