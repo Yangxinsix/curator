@@ -21,8 +21,8 @@ Requirements: [PyTorch Lightning](https://lightning.ai/), [ASE](https://wiki.fys
 
 ```
 $ conda install pytorch pytorch-cuda=11.8 -c pytorch -c nvidia
-$ git clone https://gitlab.gbar.dtu.dk/swano/Curator.git
-$ cd Curator 
+$ git clone https://github.com/dtu-energy/curator.git
+$ cd curator 
 $ pip install .
 ```
 
