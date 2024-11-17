@@ -231,7 +231,7 @@ void PairCurator::compute(int eflag, int vflag){
     int i = list->ilist[ii];
     int itag = atom->tag[i];   // atom tag is 1-based
     int itype = atom->type[i];
-    if (debug_mode) printf("i_index: %d type%d num_neigh%d\n", itag, itype, list->numneigh[i]);
+    if (debug_mode) printf("i_index: %d type: %d num_neigh: %d\n", itag, itype, list->numneigh[i]);
 
     for(int jj = 0; jj < list->numneigh[ii]; jj++){
       int j = list->firstneigh[ii][jj];
@@ -243,6 +243,7 @@ void PairCurator::compute(int eflag, int vflag){
       double dy = x[j][1] - x[i][1];
       double dz = x[j][2] - x[i][2];
 
+      domain->minimum_image(dx, dy, dz);
       double rsq = dx*dx + dy*dy + dz*dz;
       if (rsq < cutoff*cutoff){
           // TODO: double check order
