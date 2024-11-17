@@ -231,9 +231,10 @@ void PairCurator::compute(int eflag, int vflag){
     int i = list->ilist[ii];
     int itag = atom->tag[i];   // atom tag is 1-based
     int itype = atom->type[i];
+    if (debug_mode) printf("i_index: %d type%d num_neigh%d\n", itag, itype, list->numneigh[i]);
 
-    for(int jj = 0; jj < list->numneigh[i]; jj++){
-      int j = list->firstneigh[i][jj];
+    for(int jj = 0; jj < list->numneigh[ii]; jj++){
+      int j = list->firstneigh[ii][jj];
       j &= NEIGHMASK;
       int jtag = atom->tag[j];
       int jtype = atom->type[j];
