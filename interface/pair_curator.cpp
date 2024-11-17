@@ -182,51 +182,32 @@ void PairCurator::compute(int eflag, int vflag){
   ev_init(eflag, vflag);
 
   // Get info from lammps:
-
   // Atom positions, including ghost atoms
   double **x = atom->x;
   // Atom forces
   double **f = atom->f;
-  // Atom IDs, unique, reproducible, the "real" indices
-  // Probably 1-based
-  tagint *tag = atom->tag;
-  // Atom types, 1-based
-  int *type = atom->type;
-  // Number of local/real atoms
-  int nlocal = atom->nlocal;
   // Whether Newton is on (i.e. reverse "communication" of forces on ghost atoms).
-  int newton_pair = force->newton_pair;
   // Should probably be off.
-  if (newton_pair==1)
+  if (force->newton_pair==1)
     error->all(FLERR, "Pair style curator requires 'newton off'");
 
-  // Number of local/real atoms
-  int inum = list->inum;
-  assert(inum==nlocal); // This should be true, if my understanding is correct
-  // Number of ghost atoms
-  int nghost = list->gnum;
+  assert(list->inum==atom->nlocal); // This should be true, if my understanding is correct
   // Total number of atoms
-  int ntotal = inum + nghost;
-  // Mapping from neigh list ordering to x/f ordering
-  int *ilist = list->ilist;
-  // Number of neighbors per atom
-  int *numneigh = list->numneigh;
-  // Neighbor list per atom
-  int **firstneigh = list->firstneigh;
+  int ntotal = list->inum + list->gnum;;
 
   // Total number of bonds (sum of number of neighbors)
-  int nedges = std::accumulate(numneigh, numneigh+ntotal, 0);
-  torch::Tensor tag2type_tensor = torch::zeros({nlocal}, torch::TensorOptions().dtype(torch::kInt64));
+  int nedges = std::accumulate(list->numneigh, list->numneigh+ntotal, 0);
+  torch::Tensor tag2type_tensor = torch::zeros({atom->nlocal}, torch::TensorOptions().dtype(torch::kInt64));
   auto tag2type = tag2type_tensor.accessor<long, 1>();
 
   // Inverse mapping from tag to "real" atom index
-  std::vector<int> tag2i(inum);
+  std::vector<int> tag2i(list->inum);
 
   // Loop over real atoms to store tags, types and positions
-  for(int ii = 0; ii < inum; ii++){
-    int i = ilist[ii];
-    int itag = tag[i];
-    int itype = type[i];
+  for(int ii = 0; ii < list->inum; ii++){
+    int i = list->ilist[ii];
+    int itag = atom->tag[i];
+    int itype = atom->type[i];  // type is 1-based
 
     // Inverse mapping from tag to x/f atom index
     tag2i[itag-1] = i; // tag is probably 1-based
@@ -241,23 +222,21 @@ void PairCurator::compute(int eflag, int vflag){
   double edge_diff[nedges][3];
   int edge_counter = 0;
   if (debug_mode) {
-    std::cout << "num_atoms = " << nlocal << std::endl;
+    std::cout << "num_atoms = " << atom->nlocal << std::endl;
     std::cout << "nedges = " << nedges << std::endl;
     std::cout << "elems = " << tag2type_tensor << std::endl;
   }
   if (debug_mode) printf("curator edges: i j xi[:] xj[:]\n");
-  for(int ii = 0; ii < nlocal; ii++){
-    int i = ilist[ii];
-    int itag = tag[i];
-    int itype = type[i];
+  for(int ii = 0; ii < list->inum; ii++){
+    int i = list->ilist[ii];
+    int itag = atom->tag[i];   // atom tag is 1-based
+    int itype = atom->type[i];
 
-    int jnum = numneigh[i];
-    int *jlist = firstneigh[i];
-    for(int jj = 0; jj < jnum; jj++){
-      int j = jlist[jj];
+    for(int jj = 0; jj < list->numneigh[i]; jj++){
+      int j = list->firstneigh[i][jj];
       j &= NEIGHMASK;
-      int jtag = tag[j];
-      int jtype = type[j];
+      int jtag = atom->tag[j];
+      int jtype = atom->type[j];
 
       double dx = x[j][0] - x[i][0];
       double dy = x[j][1] - x[i][1];
@@ -290,7 +269,7 @@ void PairCurator::compute(int eflag, int vflag){
  
   // define curator n_atoms input
   torch::Tensor n_atoms_tensor = torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64));
-  n_atoms_tensor[0] = nlocal;
+  n_atoms_tensor[0] = atom->nlocal;
   torch::Tensor n_pairs_tensor = torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64));
   n_pairs_tensor[0] = edge_counter;
 
@@ -363,7 +342,7 @@ void PairCurator::compute(int eflag, int vflag){
   }
   
   // Write forces and per-atom energies (0-based tags here)
-  for(int itag = 0; itag < inum; itag++){
+  for(int itag = 0; itag < list->inum; itag++){
     int i = tag2i[itag];
     f[i][0] = forces[itag][0];
     f[i][1] = forces[itag][1];
