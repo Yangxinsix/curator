@@ -73,7 +73,7 @@ void PairCurator::init_style(){
     error->all(FLERR,"Pair style curator requires atom IDs");
 
   // need a full neighbor list
-  neighbor->add_request(this, NeighConst::REQ_FULL);
+  neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
 
   // TODO: I think Newton should be off, enforce this.
   // The network should just directly compute the total forces
@@ -192,11 +192,9 @@ void PairCurator::compute(int eflag, int vflag){
     error->all(FLERR, "Pair style curator requires 'newton off'");
 
   assert(list->inum==atom->nlocal); // This should be true, if my understanding is correct
-  // Total number of atoms
-  int ntotal = list->inum + list->gnum;;
 
   // Total number of bonds (sum of number of neighbors)
-  int nedges = std::accumulate(list->numneigh, list->numneigh+ntotal, 0);
+  int nedges = std::accumulate(list->numneigh, list->numneigh+list->inum, 0);
   torch::Tensor tag2type_tensor = torch::zeros({atom->nlocal}, torch::TensorOptions().dtype(torch::kInt64));
   auto tag2type = tag2type_tensor.accessor<long, 1>();
 
@@ -231,7 +229,7 @@ void PairCurator::compute(int eflag, int vflag){
     int i = list->ilist[ii];
     int itag = atom->tag[i];   // atom tag is 1-based
     int itype = atom->type[i];
-    if (debug_mode) printf("i_index: %d type: %d num_neigh: %d\n", itag, itype, list->numneigh[i]);
+    if (debug_mode) printf("i_index: %d type: %d num_neigh: %d\n", itag, itype, list->numneigh[ii]);
 
     for(int jj = 0; jj < list->numneigh[ii]; jj++){
       int j = list->firstneigh[ii][jj];
@@ -243,7 +241,6 @@ void PairCurator::compute(int eflag, int vflag){
       double dy = x[j][1] - x[i][1];
       double dz = x[j][2] - x[i][2];
 
-      domain->minimum_image(dx, dy, dz);
       double rsq = dx*dx + dy*dy + dz*dz;
       if (rsq < cutoff*cutoff){
           // TODO: double check order
