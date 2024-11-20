@@ -229,18 +229,19 @@ void PairCurator::compute(int eflag, int vflag){
     int i = list->ilist[ii];
     int itag = atom->tag[i];   // atom tag is 1-based
     int itype = atom->type[i];
-    if (debug_mode) printf("i_index: %d type: %d num_neigh: %d\n", itag, itype, list->numneigh[ii]);
+    if (debug_mode) printf("i_index: %d type: %d num_neigh: %d\n", itag-1, itype, list->numneigh[ii]);
 
-    for(int jj = 0; jj < list->numneigh[ii]; jj++){
-      int j = list->firstneigh[ii][jj];
+    for(int jj = 0; jj < list->numneigh[i]; jj++){
+      int j = list->firstneigh[i][jj];
       j &= NEIGHMASK;
       int jtag = atom->tag[j];
-      int jtype = atom->type[j];
+//      int jtype = atom->type[j];
 
       double dx = x[j][0] - x[i][0];
       double dy = x[j][1] - x[i][1];
       double dz = x[j][2] - x[i][2];
 
+      domain->minimum_image(dx, dy, dz);
       double rsq = dx*dx + dy*dy + dz*dz;
       if (rsq < cutoff*cutoff){
           // TODO: double check order
