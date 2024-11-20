@@ -27,6 +27,46 @@ class BaseSimulator(ABC):
     def run(self):
         pass
 
+class LammpsSimulator(BaseSimulator):
+    def __init__(
+        self,
+        init_traj: str,
+        start_index: int = -1,
+        out_traj: str = 'MD.traj',
+        lammps_input: str = 'in.lammps',
+        masses: bool=True,
+        units: str='metal',
+        atom_style: str='atomic',
+    ):
+        super().__init__()
+        self.init_traj = init_traj
+        self.start_index = start_index
+        self.out_traj = out_traj
+        self.masses = masses
+        self.units = units
+        self.atom_style = atom_style
+        self.lammps_input = lammps_input
+        
+    def setup_atoms(self):
+        if not os.path.isfile(self.init_traj):
+            raise RuntimeError("Please provide valid initial data path!")
+        
+        images = read_trajectory(self.init_traj)
+        start_index = np.random.choice(len(images)) if self.start_index is None else self.start_index
+        self.logger.info(f'Simulation starts from No.{start_index} configuration in {self.init_traj}')
+        self.atoms = images[start_index]
+
+    def configure_atoms(self):
+        from ase.io import write
+        if not os.path.isfile(self.lammps_input):
+            raise RuntimeError(f"Please provide {self.lammps_input} for running Lammps!")
+        write('in.data', self.atoms, format='lammps-data', masses=self.masses, units=self.units, atom_style=self.atom_style)
+
+    def run(self):
+        from lammps import lammps
+        lmp = lammps()
+        lmp.file(self.lammps_input)
+
 class MDSimulator(BaseSimulator):
     def __init__(
             self, 
