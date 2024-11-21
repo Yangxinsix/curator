@@ -331,8 +331,13 @@ def simulate(config: DictConfig):
     
     # Load model. Uses a compiled model, if any, otherwise a uncompiled model
     log.info("Using model from <{}>".format(config.model_path))
-    if config.deploy:
-        model = deploy(config.model_path, return_model=True)
+    if config.deploy is not None:
+        model = deploy(
+            config.model_path, 
+            load_weights_only=config.deploy.load_weights_only,
+            target_path=config.deploy.target_path,
+            return_model=True,
+        )
     else:
         model = load_models(config.model_path, config.device)
         model = EnsembleModel(model) if len(model) > 1 else model[0]
