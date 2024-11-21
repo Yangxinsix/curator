@@ -1,8 +1,8 @@
 _target_: curator.simulate.simulator.LammpsSimulator
 init_traj: null
 start_index: -1
-out_traj: MD.traj
-uncertain_traj: warning_struct.traj
+out_traj: ${run_path}/MD.traj
+uncertain_traj: ${run_path}/warning_struct.traj
 lammps_input: in.lammps
 masses: true
 units: metal
