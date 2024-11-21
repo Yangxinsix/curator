@@ -15,4 +15,3 @@ n_random_features: 500
 save_features: false
 save_images: false
 debug: false
-transforms: []
