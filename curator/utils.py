@@ -171,12 +171,12 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     # reload hyperparameters         
     hydra.core.global_hydra.GlobalHydra.instance().clear()
     with initialize(version_base=None, config_path=config_path):
-        cfg = compose(config_name=config_name, overrides=override_list)
+        composed_cfg = compose(config_name=config_name, overrides=override_list)
     
     # Allow write access to unknown fields
-    OmegaConf.set_struct(cfg, False)
+    OmegaConf.set_struct(composed_cfg, False)
         
-    return cfg
+    return composed_cfg
 
 def escape_special_characters(value: str) -> str:
     special_characters = r"\()[]{}:=,"
