@@ -1,5 +1,5 @@
 _target_: curator.simulate.calculator.MLCalculator
-_partial: true
+_partial_: true
 transforms: []
 energy_scale: 1.0
 forces_scale: 1.0
