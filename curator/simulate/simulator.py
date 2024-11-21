@@ -41,6 +41,8 @@ class LammpsSimulator(BaseSimulator):
         lammps_output: Union[str, List[str]] = 'dump.lammps',
         uncertain_output: Union[str, List[str], None] = None, 
         specorder: Optional[List[int]] = None,       # type to species mapping
+        *args,
+        **kwargs,
     ):
         super().__init__()
         self.init_traj = init_traj
@@ -75,6 +77,10 @@ class LammpsSimulator(BaseSimulator):
     def run(self):
         from ase.io import write
         from lammps import lammps
+
+        self.setup_atoms()
+        self.configure_atoms()
+
         try:
             lmp = lammps()
             lmp.file(self.lammps_input)
@@ -92,6 +98,7 @@ class MDSimulator(BaseSimulator):
             self, 
             init_traj: str,
             calculator,
+            model,
             logger: BaseLogger,
             dynamics: MolecularDynamics,
             uncertainty: Optional[BaseUncertainty] = None,
@@ -120,7 +127,7 @@ class MDSimulator(BaseSimulator):
         self.temperature = temperature
 
         # initialize objects
-        self.calculator = calculator
+        self.calculator = calculator(model=model)           # partial instantiation
         self.logger = logger.logger
         self.md_logger = logger
         if uncertainty is not None:

@@ -1,0 +1,12 @@
+_target_: curator.simulate.simulator.LammpsSimulator
+init_traj: null
+start_index: -1
+out_traj: MD.traj
+uncertain_traj: warning_struct.traj
+lammps_input: in.lammps
+masses: true
+units: metal
+atom_style: atomic
+lammps_output: dump.lammps
+uncertain_output: null
+specorder: null 

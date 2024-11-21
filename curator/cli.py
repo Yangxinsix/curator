@@ -234,6 +234,7 @@ def deploy(
         target_path: str = 'compiled_model.pt', 
         load_weights_only: bool=False,
         cfg_path: Optional[str] = None,
+        return_model: bool = False,
     ):
     """ Deploy the model and save a compiled model.
 
@@ -290,6 +291,8 @@ def deploy(
     metadata = {"cutoff": str(find_layer_by_name_recursive(model_compiled, 'cutoff')).encode("ascii")}
     model_compiled.save(target_path, _extra_files=metadata)
     log.info(f"Deploying compiled model at <{target_path}> from <{model_path}>")
+    if return_model:
+        return model_compiled
 
 # Simulate with the model
 @hydra.main(config_path="configs", config_name="simulate", version_base=None)
@@ -328,14 +331,14 @@ def simulate(config: DictConfig):
     
     # Load model. Uses a compiled model, if any, otherwise a uncompiled model
     log.info("Using model from <{}>".format(config.model_path))
-    model = load_models(config.model_path, config.device)
-    
-    # Set up calculator
-    model = EnsembleModel(model) if len(model) > 1 else model[0]
-    calculator = instantiate(config.calculator, model=model)
+    if config.deploy:
+        model = deploy(config.model_path, return_model=True)
+    else:
+        model = load_models(config.model_path, config.device)
+        model = EnsembleModel(model) if len(model) > 1 else model[0]
 
     # Setup simulator
-    simulator = instantiate(config.simulator, calculator=calculator)
+    simulator = instantiate(config.simulator, model=model)
     simulator.run()
     
 @hydra.main(config_path="configs", config_name="select", version_base=None)   
