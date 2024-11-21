@@ -1,7 +1,7 @@
 from ase.md.md import MolecularDynamics
 from abc import ABC, abstractmethod
 from curator.data import read_trajectory, Trajectory
-import os
+import os, shutil
 import numpy as np
 from typing import Optional, Union, List, Dict
 from .uncertainty import BaseUncertainty
@@ -72,6 +72,8 @@ class LammpsSimulator(BaseSimulator):
         from ase.io import write
         if not os.path.isfile(self.lammps_input):
             raise RuntimeError(f"Please provide {self.lammps_input} for running Lammps!")
+        else:
+            shutil.copy(self.lammps_input, './in.lammps')
         write('in.data', self.atoms, format='lammps-data', masses=self.masses, units=self.units, atom_style=self.atom_style)
 
     def run(self):
@@ -83,7 +85,7 @@ class LammpsSimulator(BaseSimulator):
 
         try:
             lmp = lammps()
-            lmp.file(self.lammps_input)
+            lmp.file('in.lammps')
         except:
             self.logger.info('Lammps simulation terminated!')
         finally:
