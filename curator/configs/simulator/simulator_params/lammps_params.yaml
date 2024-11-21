@@ -1,4 +1,4 @@
 # @package _global_
 deploy:
   load_weights_only: false
-  target_path: compiled_model.pt
+  target_path: ${run_path}/compiled_model.pt
