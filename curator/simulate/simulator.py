@@ -40,7 +40,7 @@ class LammpsSimulator(BaseSimulator):
         atom_style: str='atomic',
         lammps_output: Union[str, List[str]] = 'dump.lammps',
         uncertain_output: Union[str, List[str], None] = None, 
-        symbol_map: Optional[Dict[int, int]] = None,
+        specorder: Optional[List[int]] = None,       # type to species mapping
     ):
         super().__init__()
         self.init_traj = init_traj
@@ -53,7 +53,7 @@ class LammpsSimulator(BaseSimulator):
         self.lammps_input = lammps_input
         self.lammps_output = lammps_output
         self.uncertain_output = uncertain_output
-        self.symbol_map = symbol_map
+        self.specorder = specorder
         
         self.logger = logging.getLogger(__name__)
 
@@ -81,10 +81,10 @@ class LammpsSimulator(BaseSimulator):
         except:
             self.logger.info('Lammps simulation terminated!')
         finally:
-            images = read_trajectory(self.lammps_output, format='lammps-data', Z_of_type=self.symbol_map)
+            images = read_trajectory(self.lammps_output, specorder=self.specorder)
             write(self.out_traj, images)
             if self.uncertain_output is not None:
-                uncertain_images = read_trajectory(self.uncertain_output, format='lammps-data', Z_of_type=self.symbol_map)
+                uncertain_images = read_trajectory(self.uncertain_output, specorder=self.specorder)
                 write(self.uncertain_traj, uncertain_images)
 
 class MDSimulator(BaseSimulator):
