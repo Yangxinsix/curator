@@ -63,7 +63,7 @@ class EnsembleUncertainty(BaseUncertainty):
         return self.calculate(atoms, return_check=return_check)
 
     def calculate(self, atoms: ase.Atoms, return_check=False) -> Dict:
-        uncertainty = self.get_uncertainties(atoms)
+        uncertainty = self.get_uncertainty(atoms)
         
         # check uncertainty
         check = self.check()
@@ -86,7 +86,7 @@ class EnsembleUncertainty(BaseUncertainty):
         else:
             return self.uncertainty
 
-    def get_uncertainties(self, atoms: ase.Atoms):
+    def get_uncertainty(self, atoms: ase.Atoms):
         if atoms.calc and self.key in atoms.calc.results:
             self.uncertainty = {k: atoms.calc.results[k] for k in self.uncertainty_keys}
         elif self.calc is not None:
