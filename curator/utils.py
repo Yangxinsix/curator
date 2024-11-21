@@ -138,7 +138,7 @@ def get_all_pairs(d, keys=()):
 def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_path="configs", config_name="train.yaml"):
     # load cfg
     if isinstance(cfg, DictConfig):
-        user_cfg = cfg
+        user_cfg = cfg.copy()
     elif isinstance(cfg, (PosixPath, str)):
         user_cfg = OmegaConf.load(cfg)
     else:
