@@ -3,9 +3,9 @@ from abc import ABC, abstractmethod
 from curator.data import read_trajectory, Trajectory
 import os
 import numpy as np
-from typing import Optional
+from typing import Optional, Union, List, Dict
 from .uncertainty import BaseUncertainty
-
+import logging
 from .logger import BaseLogger
 
 class BaseSimulator(ABC):
@@ -33,20 +33,30 @@ class LammpsSimulator(BaseSimulator):
         init_traj: str,
         start_index: int = -1,
         out_traj: str = 'MD.traj',
+        uncertain_traj: Optional[str] = 'warning_struct.traj',
         lammps_input: str = 'in.lammps',
         masses: bool=True,
         units: str='metal',
         atom_style: str='atomic',
+        lammps_output: Union[str, List[str]] = 'dump.lammps',
+        uncertain_output: Union[str, List[str], None] = None, 
+        symbol_map: Optional[Dict[int, int]] = None,
     ):
         super().__init__()
         self.init_traj = init_traj
         self.start_index = start_index
         self.out_traj = out_traj
+        self.uncertain_traj = uncertain_traj
         self.masses = masses
         self.units = units
         self.atom_style = atom_style
         self.lammps_input = lammps_input
+        self.lammps_output = lammps_output
+        self.uncertain_output = uncertain_output
+        self.symbol_map = symbol_map
         
+        self.logger = logging.getLogger(__name__)
+
     def setup_atoms(self):
         if not os.path.isfile(self.init_traj):
             raise RuntimeError("Please provide valid initial data path!")
@@ -63,9 +73,19 @@ class LammpsSimulator(BaseSimulator):
         write('in.data', self.atoms, format='lammps-data', masses=self.masses, units=self.units, atom_style=self.atom_style)
 
     def run(self):
+        from ase.io import write
         from lammps import lammps
-        lmp = lammps()
-        lmp.file(self.lammps_input)
+        try:
+            lmp = lammps()
+            lmp.file(self.lammps_input)
+        except:
+            self.logger.info('Lammps simulation terminated!')
+        finally:
+            images = read_trajectory(self.lammps_output, format='lammps-data', Z_of_type=self.symbol_map)
+            write(self.out_traj, images)
+            if self.uncertain_output is not None:
+                uncertain_images = read_trajectory(self.uncertain_output, format='lammps-data', Z_of_type=self.symbol_map)
+                write(self.uncertain_traj, uncertain_images)
 
 class MDSimulator(BaseSimulator):
     def __init__(
