@@ -1,5 +1,6 @@
 defaults:
   - simulator: ase_md
+  - optional: simulator/simulator_params: ${simulator}_params
   - _self_
 
 cfg: null
