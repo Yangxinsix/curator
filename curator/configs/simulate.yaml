@@ -6,4 +6,5 @@ cfg: null
 seed: 1234
 run_path: .
 model_path: null
+deploy: false
 device: cuda
