@@ -280,7 +280,7 @@ def deploy(
     # Load model
     if isinstance(model_path, (list, ListConfig)):
         if len(model_path) > 1:
-            model = EnsembleModel([load_model(path) for path in model_path])
+            model = EnsembleModel([load_model(find_best_model(path)[0]) for path in model_path])
         else:
             model = load_model(model_path[0])
     else:
