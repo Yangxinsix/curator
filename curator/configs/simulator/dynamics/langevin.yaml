@@ -2,4 +2,4 @@ _target_: ase.md.Langevin
 _partial_: True
 timestep: "${multiply_fs: ${simulator.timestep}}"                # take care of the unit. fs -> ase.units.fs
 temperature_K: ${simulator.temperature}
-# friction: "${divide_by_fs: 0.01}"              # take care of the unit. fs -> ase.units.fs
+friction: "${divide_by_fs: 0.01}"              # take care of the unit. fs -> ase.units.fs
