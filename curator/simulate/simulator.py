@@ -70,25 +70,24 @@ class LammpsSimulator(BaseSimulator):
 
     def configure_atoms(self):
         from ase.io import write
-        from lammps import lammps
         if not os.path.isfile(self.lammps_input):
             raise RuntimeError(f"Please provide {self.lammps_input} for running Lammps!")
         else:
             shutil.copy(self.lammps_input, './in.lammps')
         write('in.data', self.atoms, format='lammps-data', masses=self.masses, units=self.units, atom_style=self.atom_style)
 
-        self.lmp = lammps()
-
     def run(self):
         from ase.io import write
+        from lammps import lammps
 
         self.setup_atoms()
         self.configure_atoms()
 
         try:
-            self.lmp.file('in.lammps')
+            lmp = lammps()
+            lmp.file('in.lammps')
         except:
-            self.logger.info('Lammps simulation terminated!')
+            self.logger.info('Running LAMMPS from python failed! Try to run from ')
         finally:
             images = read_trajectory(self.lammps_output, specorder=self.specorder)
             write(self.out_traj, images)

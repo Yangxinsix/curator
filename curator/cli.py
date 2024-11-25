@@ -403,7 +403,7 @@ def select(config: DictConfig):
     elif config.pool_set:
         data_dict = {'pool': AseDataset(read_trajectory(config.pool_set), cutoff=cutoff, transforms=list(config.transforms))}
         if config.train_set:
-            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff, transforms=config.transforms)
+            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff, transforms=list(config.transforms))
     else:
         raise RuntimeError("Please give valid pool data set for selection!")
 
