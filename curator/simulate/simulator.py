@@ -1,7 +1,7 @@
 from ase.md.md import MolecularDynamics
 from abc import ABC, abstractmethod
 from curator.data import read_trajectory, Trajectory
-import os, shutil
+import os, shutil, sys
 import numpy as np
 from typing import Optional, Union, List, Dict
 from .uncertainty import BaseUncertainty
@@ -93,7 +93,15 @@ class LammpsSimulator(BaseSimulator):
 
             try:
                 import subprocess
-                subprocess.run(self.shell_commands, shell=True)
+                for handler in self.logger.handlers:
+                    if isinstance(logging.FileHandler, handler):
+                        log_path = handler.baseFilename
+
+                proc = subprocess.Popen(self.shell_commands, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                with open(log_path, 'a') as f:
+                    for line in proc.stdout:
+                        sys.stdout.write(line)
+                        f.write(line)
             except:
                 self.logger.info('Running LAMMPS from CMD failed! Check your simulation!')
         finally:
