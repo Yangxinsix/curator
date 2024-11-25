@@ -94,7 +94,7 @@ class GlobalRescaleShift(torch.nn.Module):
             if not hasattr(self, "shift_by_E0"):
                 self.register_buffer("shift_by_E0", torch.tensor(True))
             else:
-                self.shift_by_E0.fill_(True)
+                self.shift_by_E0.copy_(torch.tensor(True))
             atomic_energies_dict = torch.zeros((119,), dtype=torch.float)
             if atomic_energies is not None:
                 # convert chemical symbols to atomic numbers
@@ -111,6 +111,8 @@ class GlobalRescaleShift(torch.nn.Module):
         else:
             if not hasattr(self, "shift_by_E0"):
                 self.register_buffer("shift_by_E0", torch.tensor(False))
+            else:
+                self.shift_by_E0.copy_(torch.tensor(False))
             if not hasattr(self, "atomic_energies"):
                 self.register_buffer("atomic_energies", torch.zeros((119,), dtype=torch.float))    # dummy buffer for torch script
             else:
