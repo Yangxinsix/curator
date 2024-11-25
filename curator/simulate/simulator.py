@@ -41,6 +41,7 @@ class LammpsSimulator(BaseSimulator):
         lammps_output: Union[str, List[str]] = 'dump.lammps',
         uncertain_output: Union[str, List[str], None] = None, 
         specorder: Optional[List[int]] = None,       # type to species mapping
+        shell_commands: str = 'lmp -in in.lammps',
         *args,
         **kwargs,
     ):
@@ -54,6 +55,7 @@ class LammpsSimulator(BaseSimulator):
         self.atom_style = atom_style
         self.lammps_input = lammps_input
         self.lammps_output = lammps_output
+        self.shell_commands = shell_commands
         self.uncertain_output = uncertain_output
         self.specorder = specorder
         
@@ -88,14 +90,20 @@ class LammpsSimulator(BaseSimulator):
             lmp.file('in.lammps')
         except:
             self.logger.info('Running LAMMPS from python failed! Try to run from CMD.')
-            import subprocess
 
+            try:
+                import subprocess
+                subprocess.run(self.shell_commands, shell=True)
+            except:
+                self.logger.info('Running LAMMPS from CMD failed! Check your simulation!')
         finally:
             images = read_trajectory(self.lammps_output, specorder=self.specorder)
             write(self.out_traj, images)
+            self.logger.info('Saving LAMMPS simulation trajectory to {}'.format(self.out_traj))
             if self.uncertain_output is not None:
                 uncertain_images = read_trajectory(self.uncertain_output, specorder=self.specorder)
                 write(self.uncertain_traj, uncertain_images)
+                self.logger.info('Saving uncertain simulation trajectory to {}'.format(self.uncertain_traj))
 
 class MDSimulator(BaseSimulator):
     def __init__(
