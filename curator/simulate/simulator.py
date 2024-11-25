@@ -93,15 +93,17 @@ class LammpsSimulator(BaseSimulator):
 
             try:
                 import subprocess
-                for handler in self.logger.handlers:
-                    if isinstance(logging.FileHandler, handler):
-                        log_path = handler.baseFilename
+                # TODO: redirect output to stdout and log file
+                # for handler in self.logger.handlers:
+                #     if isinstance(logging.FileHandler, handler):
+                #         log_path = handler.baseFilename
 
-                proc = subprocess.Popen(self.shell_commands, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                with open(log_path, 'a') as f:
-                    for line in proc.stdout:
-                        sys.stdout.write(line)
-                        f.write(line)
+                # proc = subprocess.Popen(self.shell_commands, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                # with open(log_path, 'a') as f:
+                #     for line in proc.stdout:
+                #         sys.stdout.write(line)
+                #         f.write(line)
+                subprocess.run(self.shell_commands, shell=True)
             except:
                 self.logger.info('Running LAMMPS from CMD failed! Check your simulation!')
         finally:
