@@ -335,7 +335,6 @@ def simulate(config: DictConfig):
         model = deploy(
             config.model_path, 
             load_weights_only=config.deploy.load_weights_only,
-            target_path=config.deploy.target_path,
             return_model=True,
         )
     else:
