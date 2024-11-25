@@ -91,7 +91,10 @@ class GlobalRescaleShift(torch.nn.Module):
         
     def _get_atomic_energies_list(self, atomic_energies: Union[Dict[int, float], Dict[str, float], None]):
         if atomic_energies is not None:
-            self.register_buffer("shift_by_E0", torch.tensor(True))
+            if not hasattr(self, "shift_by_E0"):
+                self.register_buffer("shift_by_E0", torch.tensor(True))
+            else:
+                self.shift_by_E0.fill_(True)
             atomic_energies_dict = torch.zeros((119,), dtype=torch.float)
             if atomic_energies is not None:
                 # convert chemical symbols to atomic numbers
@@ -101,10 +104,17 @@ class GlobalRescaleShift(torch.nn.Module):
                             atomic_energies_dict[atomic_numbers[k]] = v
                         else:
                             atomic_energies_dict[k] = v
-            self.register_buffer("atomic_energies", atomic_energies_dict)
+            if not hasattr(self, "atomic_energies"):
+                self.register_buffer("atomic_energies", atomic_energies_dict)
+            else:
+                self.atomic_energies.copy_(atomic_energies_dict)
         else:
-            self.register_buffer("shift_by_E0", torch.tensor(False))
-            self.register_buffer("atomic_energies", torch.zeros((119,), dtype=torch.float))    # dummy buffer for torch script
+            if not hasattr(self, "shift_by_E0"):
+                self.register_buffer("shift_by_E0", torch.tensor(False))
+            if not hasattr(self, "atomic_energies"):
+                self.register_buffer("atomic_energies", torch.zeros((119,), dtype=torch.float))    # dummy buffer for torch script
+            else:
+                self.atomic_energies.copy_(torch.zeros((119,), dtype=torch.float))
         
     def datamodule(self, _datamodule):
         if not self._initialized:
@@ -123,7 +133,7 @@ class GlobalRescaleShift(torch.nn.Module):
     def __repr__(self):
         atomic_energies_dict = {chemical_symbols[i]: self.atomic_energies[i] for i in self.atomic_energies.nonzero().squeeze().cpu().numpy()}
         return (f"{self.__class__.__name__}(scale_by={self.scale_by}, shift_by={self.shift_by}"
-            f", shift_by_E0={self.shift_by_E0}, atomic_energies={atomic_energies_dict}"
+            f", shift_by_E0={self.shift_by_E0}, atomic_energies={atomic_energies_dict}" if self.shift_by_E0 else ""
             f", scale_keys={self.scale_keys}, shift_keys={self.shift_keys}, atomwise_normalization={self.atomwise_normalization})"
         )
             
