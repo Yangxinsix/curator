@@ -87,7 +87,9 @@ class LammpsSimulator(BaseSimulator):
             lmp = lammps()
             lmp.file('in.lammps')
         except:
-            self.logger.info('Running LAMMPS from python failed! Try to run from ')
+            self.logger.info('Running LAMMPS from python failed! Try to run from CMD.')
+            import subprocess
+
         finally:
             images = read_trajectory(self.lammps_output, specorder=self.specorder)
             write(self.out_traj, images)
