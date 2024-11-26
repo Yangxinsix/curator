@@ -57,7 +57,7 @@ class LammpsSimulator(BaseSimulator):
         self.lammps_output = lammps_output
         self.shell_commands = shell_commands
         self.uncertain_output = uncertain_output
-        self.specorder = specorder
+        self.specorder = list(specorder) if specorder is not None else None
         
         self.logger = logging.getLogger(__name__)
 

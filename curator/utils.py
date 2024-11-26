@@ -179,7 +179,7 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     return composed_cfg
 
 def escape_special_characters(value: str) -> str:
-    special_characters = r"\()[]{}:=,"
+    special_characters = r"\()[]{}:=,&"
     for char in special_characters:
         if char in value:
             value = f'"{value}"'
