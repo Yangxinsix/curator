@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from typing import List, Union, Optional, Callable
+from typing import List, Union, Optional, Callable, Dict
 from e3nn import o3
 from e3nn.nn import Activation
 from curator.data.properties import activation_fn
@@ -44,6 +44,9 @@ class Dense(nn.Module):
         return y
 
 class AtomwiseNN(nn.Module):
+    # 1. Output structure-based property: per_atom=False, aggregation_mode='mean' or 'sum'
+    # 2. Output structure-based property + per-atom property: per_atom=True, aggregation_mode='mean' or 'sum'
+    # 3. Output per-atom property: per_atom=False, aggregation_mode = None
     def __init__(
         self,
         in_features: Union[int, o3.Irreps],
@@ -52,9 +55,7 @@ class AtomwiseNN(nn.Module):
         n_hidden_layers: int = 1,
         use_e3nn: bool = False,
         activation: Union[Callable, nn.Module, str, List[Callable], List[nn.Module], List[str]] = 'silu',
-        output_keys: List[str] = ["energy"],
-        per_atom_output_keys: Union[List[str], None] = None,
-        aggregation_mode: Union[List[str], str] = "sum",     # should be sum or mean
+        output_keys: Union[List[str], List[Dict]] = ["energy"],
         *args,
         **kwargs,
     ):
@@ -95,7 +96,32 @@ class AtomwiseNN(nn.Module):
         self.readout_mlp = nn.Sequential(**layers)
 
         # output keys
+        n_out = out_features if isinstance(out_features, int) else out_features.dim
+        self.output_keys = output_keys
+        # 1. Output structure-based property: per_atom=False, aggregation_mode='mean' or 'sum'
+        # 2. Output structure-based property + per-atom property: per_atom=True, aggregation_mode='mean' or 'sum'
+        # 3. Output per-atom property: per_atom=False, aggregation_mode = None
+        for i, spec in enumerate(self.output_keys):
+            if isinstance(spec, str):
+                self.output_keys[i] = {
+                    'key': spec,
+                    'per_atom': False,            # this means per_atom property will be outputed
+                    'aggregation_mode': 'mean',   # if this property is per atom, use None and output as is
+                    'per_atom_key': spec + '_pa',  # name of per_atom property
+                    'split_size': 1,
+                }
+            else:
+                if 'key' not in spec:
+                    raise ValueError("No output key is specified!")
+                if 'aggregation_mode' not in spec:
+                    spec['aggregation_mode'] = 'mean'  # Default to mean aggregation
+                if 'per_atom' not in spec:
+                    spec['per_atom'] = False
+                if 'split_size' not in spec:
+                    spec['split_size'] = 1
+        self.split_size = [spec['split_size'] for spec in self.output_keys]
+        assert sum(self.split_size) == n_out, "The dimensionality of output features does not match number of output keys!"
 
         def forward(self, input: torch.Tensor):
-
-
+            pass
+            out = self.readout_mlp(input)
