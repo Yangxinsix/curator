@@ -126,3 +126,14 @@ _NODE_FIELDS: Set[str] = set(_DEFAULT_NODE_FIELDS)
 _EDGE_FIELDS: Set[str] = set(_DEFAULT_EDGE_FIELDS)
 _GRAPH_FIELDS: Set[str] = set(_DEFAULT_GRAPH_FIELDS)
 _INDEX_FIELDS: Set[str] = set(_DEFAULT_INDEX_FIELDS)
+
+# activation functions
+activation_fn = {
+    "silu": torch.nn.SiLU(),
+    'identity': torch.nn.Identity(),
+    "tanh": torch.tanh,
+    "abs": torch.abs,
+    "None": None,
+}
+
+# output modules
