@@ -150,7 +150,6 @@ class MACE(nn.Module):
         
         self.interactions = torch.nn.ModuleList()
         self.products = torch.nn.ModuleList()
-        self.readouts = torch.nn.ModuleList()
         # gate_fn = activation_fn[gate] if isinstance(gate, str) else gate
         # interaction blocks
         # for last layer: only select scalar 0e
@@ -186,15 +185,6 @@ class MACE(nn.Module):
             )
             self.products.append(prod)
             
-            if i != num_interactions - 1:
-                readout = o3.Linear(irreps_in=self.hidden_irreps, irreps_out=o3.Irreps('1x0e'))
-                self.readouts.append(readout)
-                # readout = AtomwiseNonLinear(
-                #     irreps_in=hidden_irreps_out, 
-                #     MLP_irreps=self.MLP_irreps,
-                #     gate=gate_fn,
-                # )
-            
     def forward(self, data: properties.Type) -> properties.Type:
         # node_e0 = self.reference_energies[data[properties.Z]]
         # e0 = scatter_add(node_e0, data[properties.image_idx])
@@ -205,8 +195,8 @@ class MACE(nn.Module):
         node_feat = data[properties.node_feat]
         node_feat_list = []
         
-        for interaction, product, readout in zip(
-            self.interactions, self.products, self.readouts
+        for interaction, product in zip(
+            self.interactions, self.products
         ):
             node_feat, sc = interaction(
                 node_feat, 
@@ -221,11 +211,8 @@ class MACE(nn.Module):
                 node_attrs=data[properties.node_attr],
             )
             node_feat_list.append(node_feat)
-            node_es_list.append(readout(node_feat).squeeze())
         
         node_feat_list = torch.cat(node_feat_list, dim=-1)
-        node_es = torch.sum(torch.stack(node_es_list, dim=0), dim=0)
-        data[properties.atomic_energy] = node_es
         data[properties.node_feat] = node_feat_list
         
         return data

@@ -181,6 +181,7 @@ class MACEAtomwiseNN(AtomwiseNN):
     def __init__(
         self,
         num_interactions: int,
+        out_features: Union[int, o3.Irreps],
         hidden_irreps: Union[o3.Irreps, str, None] = None,
         MLP_irreps: Union[o3.Irreps, str, None] = None,
         lmax: int = 2,
@@ -204,30 +205,38 @@ class MACEAtomwiseNN(AtomwiseNN):
             # MACE prohibits some irreps like 0e, 1e to be used
             forbidden_ir = ['0o', '1e', '2o', '3e', '4o']
             self.hidden_irreps = o3.Irreps([irrep for irrep in self.hidden_irreps if str(irrep.ir) not in forbidden_ir])
-            num_features = self.hidden_irreps.count(o3.Irrep(0, 1))
-
+        
         # MLP irreps
         if MLP_irreps is None:
+            num_features = self.hidden_irreps.count(o3.Irrep(0, 1))
             self.MLP_irreps = o3.Irreps([(max(1, num_features // 2), (0, 1))])
         elif isinstance(MLP_irreps, str):
             self.MLP_irreps = o3.Irreps(MLP_irreps)
         else:
             self.MLP_irreps = MLP_irreps
 
-        super().__init__(in_features=self.hidden_irreps[0], n_hidden=self.MLP_irreps, use_e3nn=True, *args, **kwargs)
-        self.readouts = [o3.Linear(irreps_in=self.hidden_irreps, irreps_out=o3.Irreps('1x0e')) for _ in range(num_interactions - 1)]
+        super().__init__(in_features=o3.Irreps(str(self.hidden_irreps[0])), out_features=out_features, n_hidden=self.MLP_irreps, use_e3nn=True, *args, **kwargs)
+        self.num_interactions = num_interactions
+
+        self.readouts = nn.ModuleList()
+        self.in_features_list = []
+        for _ in range(num_interactions - 1):
+            self.in_features_list.append(self.hidden_irreps.dim)
+            self.readouts.append(Dense(self.hidden_irreps, self.out_features, activation=None, use_e3nn=True))
+
         self.readouts.append(self.readout_mlp)
+        self.in_features_list.append(o3.Irreps(str(self.hidden_irreps[0])))
 
     def _reduce(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
+        # split node features to list then calculate contributions from different parts
+        node_feat_list = torch.split(input, self.in_features_list, dim=-1)
         out_list = []
-        for readout, node_feat in zip(self.readouts, input):
+        for readout, node_feat in zip(self.readouts, node_feat_list):
             out_list.append(readout(node_feat))
-            
-        out_list = torch.stack(out_list, dim=0)
-            
-        out = self.readout_mlp(input)
-        out = out.split(self.split_size, dim=1)
+    
+        out = torch.sum(torch.stack(out_list, dim=0), dim=0)
 
+        out = out.split(self.split_size, dim=1)
         output_dict: Dict[str, torch.Tensor] = {}
         for i, spec in enumerate(self.output_keys):
             key = spec['key']
