@@ -34,9 +34,10 @@ class FeatureExtractor(nn.Module):
         layer = find_layer_by_name_recursive(self.model, self.target_layer)
         assert layer is not None, f"Target layer {self.target_layer} is not found!"
         
-        from curator.model import MACE
-        if isinstance(self.model.representation, MACE):
-            layer = layer[-1]
+        #  No need to specify MACE now because we have a better mechanism for accessing readout_mlp!
+        # from curator.model import MACE
+        # if isinstance(self.model.representation, MACE):
+        #     layer = layer[-1]
 
         for child in layer.children():
             if isinstance(child, (nn.Linear, o3.Linear)):
