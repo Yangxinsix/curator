@@ -5,7 +5,12 @@ from typing import List, Union, Optional, Callable, Dict
 from e3nn import o3
 from e3nn.nn import Activation
 from curator.data.properties import activation_fn
+from curator.data import properties
 import warnings
+try:
+    from torch_scatter import scatter_add, scatter_mean
+except ImportError:
+    from curator.utils import scatter_add, scatter_mean
 
 class Dense(nn.Module):
     r"""
@@ -31,10 +36,15 @@ class Dense(nn.Module):
             bias: If False, the layer will not adapt bias :math:`b`.
             activation: if None, no activation function is used.
         """
+        super().__init__()
         if use_e3nn:
+            assert isinstance(in_features, o3.Irreps), "in_features must be e3nn.o3.Irreps when using e3nn Linear layer!"
+            if isinstance(out_features, int):
+                out_features = o3.Irreps(f'{out_features}x0e')
             self.linear = o3.Linear(in_features, out_features, *args, **kwargs)
-            self.activation = Activation(irreps_in=in_features, acts=[activation or nn.Identity()])
+            self.activation = Activation(irreps_in=out_features, acts=[activation])
         else:
+            assert isinstance(in_features, int), 'in_features must be interger for torch.nn.Linear layer!'
             self.linear = nn.Linear(in_features, out_features, *args, **kwargs)
             self.activation = activation or nn.Identity()
 
@@ -51,7 +61,7 @@ class AtomwiseNN(nn.Module):
         self,
         in_features: Union[int, o3.Irreps],
         out_features: Union[int, o3.Irreps],
-        n_hidden: Union[List[int], List[o3.Irreps], int, o3.Irreps, None],
+        n_hidden: Union[List[int], List[o3.Irreps], int, o3.Irreps, None] = None,
         n_hidden_layers: int = 1,
         use_e3nn: bool = False,
         activation: Union[Callable, nn.Module, str, List[Callable], List[nn.Module], List[str]] = 'silu',
@@ -71,7 +81,12 @@ class AtomwiseNN(nn.Module):
         n_neurons = [in_features]
         if n_hidden is None:
             for _ in range(n_hidden_layers):
-                n_neurons.append(in_features)
+                if use_e3nn:
+                    mul = in_features.sort()[0][0].mul // 2
+                    mid_neuron = o3.Irreps(f'{mul}x0e')
+                else:
+                    mid_neuron = in_features
+                n_neurons.append(mid_neuron)
         elif isinstance(n_hidden, list):
             if len(n_hidden) != n_hidden_layers:
                 self.n_hidden_layers = n_hidden
@@ -92,8 +107,8 @@ class AtomwiseNN(nn.Module):
             acts = [activation_fn[activation] if isinstance(activation, str) else activation for _ in range(n_hidden_layers)] + [None]
 
         # layers
-        layers = [Dense(n_neurons[i], n_neurons[i+1], acts[i]) for i in self.n_hidden_layers + 1]
-        self.readout_mlp = nn.Sequential(**layers)
+        layers = [Dense(n_neurons[i], n_neurons[i+1], acts[i], use_e3nn=use_e3nn) for i in range(self.n_hidden_layers + 1)]
+        self.readout_mlp = nn.Sequential(*layers)
 
         # output keys
         n_out = out_features if isinstance(out_features, int) else out_features.dim
@@ -122,6 +137,114 @@ class AtomwiseNN(nn.Module):
         self.split_size = [spec['split_size'] for spec in self.output_keys]
         assert sum(self.split_size) == n_out, "The dimensionality of output features does not match number of output keys!"
 
-        def forward(self, input: torch.Tensor):
-            pass
-            out = self.readout_mlp(input)
+    def _reduce(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
+        out = self.readout_mlp(input)
+        out = out.split(self.split_size, dim=1)
+
+        output_dict: Dict[str, torch.Tensor] = {}
+        for i, spec in enumerate(self.output_keys):
+            key = spec['key']
+            prop = out[i].squeeze()
+            aggregation_mode = spec['aggregation_mode']
+
+            # per-atom property
+            if spec['per_atom']:
+                per_atom_key = spec.get('per_atom_key', key + '_pa')
+                output_dict[per_atom_key] = prop
+            
+            if aggregation_mode is not None:
+                if aggregation_mode == 'sum':
+                    output_dict[key] = scatter_add(prop, index, dim=0) if index is not None else torch.sum(prop, dim=0)
+                if aggregation_mode == 'mean':
+                    output_dict[key] = scatter_mean(prop, index, dim=0) if index is not None else torch.mean(prop, dim=0)
+            else:
+                output_dict[key] = prop       # output as is
+
+        return output_dict
+
+    def forward(self, data: properties.Type) -> properties.Type:
+        if properties.image_idx not in data:
+            data[properties.image_idx] = torch.zeros(data[properties.n_atoms].item(), dtype=data[properties.edge_idx].dtype, device=data[properties.edge_idx].device)
+        
+        input = data[properties.node_feat]
+        index = data[properties.image_idx]
+            
+        return self._reduce(input, index)
+
+class MACEAtomwiseNN(AtomwiseNN):
+    """Atomwise feed-forward neural networks for MACE
+
+    Args:
+        num_layers: number of message-passing layers in MACE
+        hidden_irreps: hidden_irreps in MACE
+    """
+    def __init__(
+        self,
+        num_interactions: int,
+        hidden_irreps: Union[o3.Irreps, str, None] = None,
+        MLP_irreps: Union[o3.Irreps, str, None] = None,
+        lmax: int = 2,
+        parity: bool = True,
+        num_features: Optional[int] = None,
+        *args,
+        **kwargs,
+    ):
+
+        # hidden feature irreps
+        if hidden_irreps is not None:
+            self.hidden_irreps = o3.Irreps(hidden_irreps) if isinstance(hidden_irreps, str) else hidden_irreps
+        else:
+            self.hidden_irreps = o3.Irreps(
+                [
+                    (num_features, (l, p))
+                    for p in ((1, -1) if parity else (1,))
+                    for l in range(lmax + 1)
+                ]
+            ).sort()[0].simplify()
+            # MACE prohibits some irreps like 0e, 1e to be used
+            forbidden_ir = ['0o', '1e', '2o', '3e', '4o']
+            self.hidden_irreps = o3.Irreps([irrep for irrep in self.hidden_irreps if str(irrep.ir) not in forbidden_ir])
+            num_features = self.hidden_irreps.count(o3.Irrep(0, 1))
+
+        # MLP irreps
+        if MLP_irreps is None:
+            self.MLP_irreps = o3.Irreps([(max(1, num_features // 2), (0, 1))])
+        elif isinstance(MLP_irreps, str):
+            self.MLP_irreps = o3.Irreps(MLP_irreps)
+        else:
+            self.MLP_irreps = MLP_irreps
+
+        super().__init__(in_features=self.hidden_irreps[0], n_hidden=self.MLP_irreps, use_e3nn=True, *args, **kwargs)
+        self.readouts = [o3.Linear(irreps_in=self.hidden_irreps, irreps_out=o3.Irreps('1x0e')) for _ in range(num_interactions - 1)]
+        self.readouts.append(self.readout_mlp)
+
+    def _reduce(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
+        out_list = []
+        for readout, node_feat in zip(self.readouts, input):
+            out_list.append(readout(node_feat))
+            
+        out_list = torch.stack(out_list, dim=0)
+            
+        out = self.readout_mlp(input)
+        out = out.split(self.split_size, dim=1)
+
+        output_dict: Dict[str, torch.Tensor] = {}
+        for i, spec in enumerate(self.output_keys):
+            key = spec['key']
+            prop = out[i].squeeze()
+            aggregation_mode = spec['aggregation_mode']
+
+            # per-atom property
+            if spec['per_atom']:
+                per_atom_key = spec.get('per_atom_key', key + '_pa')
+                output_dict[per_atom_key] = prop
+            
+            if aggregation_mode is not None:
+                if aggregation_mode == 'sum':
+                    output_dict[key] = scatter_add(prop, index, dim=0) if index is not None else torch.sum(prop, dim=0)
+                if aggregation_mode == 'mean':
+                    output_dict[key] = scatter_mean(prop, index, dim=0) if index is not None else torch.mean(prop, dim=0)
+            else:
+                output_dict[key] = prop       # output as is
+
+        return output_dict

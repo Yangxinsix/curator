@@ -150,20 +150,20 @@ class MACE(nn.Module):
         
         self.interactions = torch.nn.ModuleList()
         self.products = torch.nn.ModuleList()
-        self.readout_mlp = torch.nn.ModuleList()
-        gate_fn = activation_fn[gate] if isinstance(gate, str) else gate
+        self.readouts = torch.nn.ModuleList()
+        # gate_fn = activation_fn[gate] if isinstance(gate, str) else gate
         # interaction blocks
         # for last layer: only select scalar 0e
         # for first layer: 
         for i in range(num_interactions):
-            hidden_irreps_out = str(self.hidden_irreps[0]) if i == num_interactions - 1 else self.hidden_irreps
+            # hidden_irreps_out = str(self.hidden_irreps[0]) if i == num_interactions - 1 else self.hidden_irreps
             if i > 0:
                 self.irreps_in[properties.node_feat] = self.hidden_irreps
             if i == 0:
                 inter = interaction_cls_first(
                     irreps_in=self.irreps_in,
                     target_irreps=interaction_irreps,
-                    hidden_irreps=hidden_irreps_out,
+                    hidden_irreps=self.hidden_irreps,
                     radial_MLP=radial_MLP,
                     avg_num_neighbors=avg_num_neighbors,
                 )
@@ -171,7 +171,7 @@ class MACE(nn.Module):
                 inter = interaction_cls(
                     irreps_in=self.irreps_in,
                     target_irreps=interaction_irreps,
-                    hidden_irreps=hidden_irreps_out,
+                    hidden_irreps=self.hidden_irreps,
                     radial_MLP=radial_MLP,
                     avg_num_neighbors=avg_num_neighbors,
                 )
@@ -179,22 +179,21 @@ class MACE(nn.Module):
             
             prod = EquivariantProductBasisBlock(
                 node_feats_irreps=inter.target_irreps if i == 0 else interaction_irreps,
-                target_irreps=hidden_irreps_out,
+                target_irreps=self.hidden_irreps,
                 correlation=correlation[i],
                 num_elements=num_elements,
                 use_sc="Residual" in str(interaction_cls_first) if i == 0 else True,
             )
             self.products.append(prod)
             
-            if i == num_interactions - 1:
-                readout = AtomwiseNonLinear(
-                    irreps_in=hidden_irreps_out, 
-                    MLP_irreps=self.MLP_irreps,
-                    gate=gate_fn,
-                )
-            else:
-                readout = o3.Linear(irreps_in=hidden_irreps_out, irreps_out=o3.Irreps('1x0e'))
-            self.readout_mlp.append(readout)
+            if i != num_interactions - 1:
+                readout = o3.Linear(irreps_in=self.hidden_irreps, irreps_out=o3.Irreps('1x0e'))
+                self.readouts.append(readout)
+                # readout = AtomwiseNonLinear(
+                #     irreps_in=hidden_irreps_out, 
+                #     MLP_irreps=self.MLP_irreps,
+                #     gate=gate_fn,
+                # )
             
     def forward(self, data: properties.Type) -> properties.Type:
         # node_e0 = self.reference_energies[data[properties.Z]]
@@ -207,7 +206,7 @@ class MACE(nn.Module):
         node_feat_list = []
         
         for interaction, product, readout in zip(
-            self.interactions, self.products, self.readout_mlp
+            self.interactions, self.products, self.readouts
         ):
             node_feat, sc = interaction(
                 node_feat, 
