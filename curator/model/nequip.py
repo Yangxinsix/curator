@@ -8,6 +8,7 @@ from curator.data import properties
 from curator.layer import (
     OneHotAtomEncoding,
     AtomwiseLinear,
+    AtomwiseNN,
     RadialBasisEdgeEncoding,
     BesselBasis,
     PolynomialCutoff,
@@ -15,7 +16,8 @@ from curator.layer import (
     InteractionLayer,
 )
 
-from typing import OrderedDict, Dict, List, Optional, Union, Callable
+from typing import OrderedDict, Dict, List, Optional, Union, Callable, Type
+from functools import partial
 
 from e3nn.util.jit import compile_mode
 class NequipModel(torch.nn.Module):
@@ -29,7 +31,6 @@ class NequipModel(torch.nn.Module):
         hidden_irreps: Union[o3.Irreps, str, None] = None,
         edge_sh_irreps: Union[o3.Irreps, str, None] = None,
         node_irreps: Union[o3.Irreps, str, None] = None,
-        MLP_irreps: Union[o3.Irreps, str, None] = None,
         lmax: int = 2,
         parity: bool = True,
         num_features: Optional[int] = None,
@@ -41,6 +42,7 @@ class NequipModel(torch.nn.Module):
         nonlinearity_scalars: Dict[int, Callable] = {"e": "ssp", "o": "tanh"},
         nonlinearity_gates: Dict[int, Callable] = {"e": "ssp", "o": "abs"},
         convolution_kwargs: dict = {},
+        readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
         **kwargs,
     ) -> None:
         """Nequip model.
@@ -102,13 +104,6 @@ class NequipModel(torch.nn.Module):
             self.hidden_irreps = o3.Irreps(hidden_irreps)
         else:
             self.hidden_irreps = hidden_irreps
-        # MLP_irreps
-        if MLP_irreps is None:
-            self.MLP_irreps = o3.Irreps([(max(1, num_features // 2), (0, 1))])
-        elif isinstance(MLP_irreps, str):
-            self.MLP_irreps = o3.Irreps(MLP_irreps)
-        else:
-            self.MLP_irreps = MLP_irreps
         
         self.embeddings = nn.ModuleDict()
         self.embeddings['onehot_embedding'] = OneHotAtomEncoding(num_elements=num_elements, species=species)
@@ -144,16 +139,11 @@ class NequipModel(torch.nn.Module):
             self.interactions.append(interaction)
             self.irreps_in.update(interaction.irreps_out)
         
-        self.readout_mlp = nn.Sequential(
-            o3.Linear(
-                irreps_in=self.irreps_in[properties.node_feat],
-                irreps_out=self.MLP_irreps,
-            ),
-            o3.Linear(
-                irreps_in=self.MLP_irreps, 
-                irreps_out=o3.Irreps('1x0e'),
-            ),
-        )
+        # Setup readout function
+        if isinstance(readout, AtomwiseNN):
+            self.readout = readout
+        else:
+            self.readout = readout(self.irreps_in[properties.node_feat], use_e3nn=True)
         
     def forward(self, data: properties.Type) -> properties.Type:        
         for m in self.embeddings.values():
@@ -162,5 +152,5 @@ class NequipModel(torch.nn.Module):
         for m in self.interactions:
             data = m(data)
         
-        data[properties.atomic_energy] = self.readout_mlp(data[properties.node_feat]).squeeze()
+        data = self.readout(data)
         return data

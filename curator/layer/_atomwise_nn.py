@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from typing import List, Union, Optional, Callable, Dict
+from typing import List, Union, Optional, Callable, Dict, NamedTuple
 from e3nn import o3
 from e3nn.nn import Activation
 from curator.data.properties import activation_fn
@@ -11,6 +11,13 @@ try:
     from torch_scatter import scatter_add, scatter_mean
 except ImportError:
     from curator.utils import scatter_add, scatter_mean
+
+class OutputSpec(NamedTuple):
+    key: str                         # name of this properties
+    per_atom: bool                   # if per_atom property should be output
+    aggregation_mode: Optional[str]  # sum, mean or None, when use None output as is, means this property is per atom
+    per_atom_key: str                # the key of per_atom property
+    split_size: int                  # dim size of this property
 
 class Dense(nn.Module):
     r"""
@@ -59,8 +66,8 @@ class AtomwiseNN(nn.Module):
     # 3. Output per-atom property: per_atom=False, aggregation_mode = None
     def __init__(
         self,
-        in_features: Union[int, o3.Irreps],
-        out_features: Union[int, o3.Irreps],
+        in_features: Union[int, o3.Irreps, str],
+        out_features: Union[int, o3.Irreps, str] = 1,
         n_hidden: Union[List[int], List[o3.Irreps], int, o3.Irreps, None] = None,
         n_hidden_layers: int = 1,
         use_e3nn: bool = False,
@@ -75,7 +82,11 @@ class AtomwiseNN(nn.Module):
         self.n_hidden_layers = n_hidden_layers
         self.activation = activation
         self.use_e3nn = use_e3nn
-        self.output_keys = output_keys
+
+        if isinstance(in_features, str):
+            in_features = o3.Irreps(in_features)
+        if isinstance(out_features, str):
+            out_features = o3.Irreps(out_features)
 
         # number of neurons
         n_neurons = [in_features]
@@ -112,44 +123,46 @@ class AtomwiseNN(nn.Module):
 
         # output keys
         n_out = out_features if isinstance(out_features, int) else out_features.dim
-        self.output_keys = output_keys
+        self.output_specs: List[OutputSpec] = []
         # 1. Output structure-based property: per_atom=False, aggregation_mode='mean' or 'sum'
         # 2. Output structure-based property + per-atom property: per_atom=True, aggregation_mode='mean' or 'sum'
         # 3. Output per-atom property: per_atom=False, aggregation_mode = None
-        for i, spec in enumerate(self.output_keys):
+        for spec in output_keys:
             if isinstance(spec, str):
-                self.output_keys[i] = {
-                    'key': spec,
-                    'per_atom': False,            # this means per_atom property will be outputed
-                    'aggregation_mode': 'mean',   # if this property is per atom, use None and output as is
-                    'per_atom_key': spec + '_pa',  # name of per_atom property
-                    'split_size': 1,
-                }
+                self.output_specs.append(OutputSpec(
+                    key=spec,
+                    per_atom=False,
+                    aggregation_mode='mean',
+                    per_atom_key=spec + '_pa',
+                    split_size=1, 
+                ))
             else:
                 if 'key' not in spec:
                     raise ValueError("No output key is specified!")
-                if 'aggregation_mode' not in spec:
-                    spec['aggregation_mode'] = 'mean'  # Default to mean aggregation
-                if 'per_atom' not in spec:
-                    spec['per_atom'] = False
-                if 'split_size' not in spec:
-                    spec['split_size'] = 1
-        self.split_size = [spec['split_size'] for spec in self.output_keys]
+                self.output_specs.append(OutputSpec(
+                    key=spec['key'],
+                    per_atom=spec.get('per_atom', False),
+                    aggregation_mode=spec.get('aggregation_mode', 'mean'),
+                    per_atom_key=spec.get('per_atom_key', spec['key'] + '_pa'),
+                    split_size=spec.get('split_size', 1),
+                ))
+        self.split_size: List[int] = [spec.split_size for spec in self.output_specs]
         assert sum(self.split_size) == n_out, "The dimensionality of output features does not match number of output keys!"
 
-    def _reduce(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
+    def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
         out = self.readout_mlp(input)
+        
         out = out.split(self.split_size, dim=1)
-
         output_dict: Dict[str, torch.Tensor] = {}
-        for i, spec in enumerate(self.output_keys):
-            key = spec['key']
+        for i, spec in enumerate(self.output_specs):
             prop = out[i].squeeze()
-            aggregation_mode = spec['aggregation_mode']
+            key = spec[0]
+            per_atom = spec[1]
+            aggregation_mode = spec[2]
+            per_atom_key = spec[3]
 
             # per-atom property
-            if spec['per_atom']:
-                per_atom_key = spec.get('per_atom_key', key + '_pa')
+            if per_atom:
                 output_dict[per_atom_key] = prop
             
             if aggregation_mode is not None:
@@ -168,8 +181,10 @@ class AtomwiseNN(nn.Module):
         
         input = data[properties.node_feat]
         index = data[properties.image_idx]
-            
-        return self._reduce(input, index)
+        
+        data.update(self._compute(input, index))
+
+        return data
 
 class MACEAtomwiseNN(AtomwiseNN):
     """Atomwise feed-forward neural networks for MACE
@@ -181,7 +196,6 @@ class MACEAtomwiseNN(AtomwiseNN):
     def __init__(
         self,
         num_interactions: int,
-        out_features: Union[int, o3.Irreps],
         hidden_irreps: Union[o3.Irreps, str, None] = None,
         MLP_irreps: Union[o3.Irreps, str, None] = None,
         lmax: int = 2,
@@ -215,7 +229,7 @@ class MACEAtomwiseNN(AtomwiseNN):
         else:
             self.MLP_irreps = MLP_irreps
 
-        super().__init__(in_features=o3.Irreps(str(self.hidden_irreps[0])), out_features=out_features, n_hidden=self.MLP_irreps, use_e3nn=True, *args, **kwargs)
+        super().__init__(in_features=o3.Irreps(str(self.hidden_irreps[0])), n_hidden=self.MLP_irreps, use_e3nn=True, *args, **kwargs)
         self.num_interactions = num_interactions
 
         self.readouts = nn.ModuleList()
@@ -227,7 +241,7 @@ class MACEAtomwiseNN(AtomwiseNN):
         self.readouts.append(self.readout_mlp)
         self.in_features_list.append(o3.Irreps(str(self.hidden_irreps[0])))
 
-    def _reduce(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
+    def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
         # split node features to list then calculate contributions from different parts
         node_feat_list = torch.split(input, self.in_features_list, dim=-1)
         out_list = []
@@ -238,14 +252,15 @@ class MACEAtomwiseNN(AtomwiseNN):
 
         out = out.split(self.split_size, dim=1)
         output_dict: Dict[str, torch.Tensor] = {}
-        for i, spec in enumerate(self.output_keys):
-            key = spec['key']
+        for i, spec in enumerate(self.output_specs):
             prop = out[i].squeeze()
-            aggregation_mode = spec['aggregation_mode']
+            key = spec[0]
+            per_atom = spec[1]
+            aggregation_mode = spec[2]
+            per_atom_key = spec[3]
 
             # per-atom property
-            if spec['per_atom']:
-                per_atom_key = spec.get('per_atom_key', key + '_pa')
+            if per_atom:
                 output_dict[per_atom_key] = prop
             
             if aggregation_mode is not None:

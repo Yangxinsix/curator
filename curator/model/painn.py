@@ -1,13 +1,15 @@
 import torch
 from torch import nn
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Type, Union
+from functools import partial
 
 from curator.data import (
     properties,
 )
 from curator.layer import (
     PainnMessage, 
-    PainnUpdate, 
+    PainnUpdate,
+    AtomwiseNN,
 )
 
 
@@ -21,6 +23,7 @@ class PainnModel(nn.Module):
         num_basis: int = 20,
         cutoff_fn: Optional[nn.Module]=None,
         radial_basis: Optional[nn.Module]=None,
+        readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
         **kwargs,
     ):
         """PainnModel without edge updating
@@ -59,11 +62,10 @@ class PainnModel(nn.Module):
         )
         
         # Setup readout function
-        self.readout_mlp = nn.Sequential(
-            nn.Linear(self.num_features, self.num_features),
-            nn.SiLU(),
-            nn.Linear(self.num_features, 1),
-        )
+        if isinstance(readout, AtomwiseNN):
+            self.readout = readout
+        else:
+            self.readout = readout(num_features)
 
     def forward(
         self, 
@@ -81,7 +83,6 @@ class PainnModel(nn.Module):
             data = message_layer(data)
             data = update_layer(data)
         
-        # it can be any atomic properties like atomic charge although it is called atomic energy
-        data[properties.atomic_energy] = self.readout_mlp(data[properties.node_feat]).squeeze()
+        data = self.readout(data)
         
         return data
