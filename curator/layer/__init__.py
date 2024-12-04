@@ -1,5 +1,6 @@
 from ._atomic_linear import AtomwiseLinear, AtomwiseNonLinear
 from ._atomwise_reduce import AtomwiseReduce
+from ._atomwise_nn import AtomwiseNN, MACEAtomwiseNN
 from ._convnet import ConvNetLayer
 from ._grad_output import GradientOutput
 from ._nequip_interaction import InteractionLayer
@@ -36,6 +37,8 @@ __all__ = [
     AtomwiseLinear,
     AtomwiseNonLinear,
     AtomwiseReduce,
+    AtomwiseNN,
+    MACEAtomwiseNN,
     ConvNetLayer,
     InteractionLayer,
     EquivariantProductBasisBlock,

@@ -4,9 +4,12 @@ from e3nn import o3
 from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
 
+from functools import partial
 from curator.layer import (
     OneHotAtomEncoding,
     AtomwiseLinear,
+    AtomwiseNN,
+    MACEAtomwiseNN,
     AtomwiseNonLinear,
     RadialBasisEdgeEncoding,
     BesselBasis,
@@ -49,7 +52,7 @@ class MACE(nn.Module):
         num_features: Optional[int] = None,
         num_basis: int = 8,
         power: int = 6,
-        gate: Union[str, Callable] = 'silu',
+        readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         **kwargs,
     ) -> None:
         """MACE model.
@@ -150,7 +153,6 @@ class MACE(nn.Module):
         
         self.interactions = torch.nn.ModuleList()
         self.products = torch.nn.ModuleList()
-        # gate_fn = activation_fn[gate] if isinstance(gate, str) else gate
         # interaction blocks
         # for last layer: only select scalar 0e
         # for first layer: 
@@ -184,6 +186,12 @@ class MACE(nn.Module):
                 use_sc="Residual" in str(interaction_cls_first) if i == 0 else True,
             )
             self.products.append(prod)
+
+            # Setup readout function
+            if isinstance(readout, AtomwiseNN):
+                self.readout = readout
+            else:
+                self.readout = readout(num_interactions=num_interactions, hidden_irreps=self.hidden_irreps)
             
     def forward(self, data: properties.Type) -> properties.Type:
         # node_e0 = self.reference_energies[data[properties.Z]]
@@ -214,5 +222,8 @@ class MACE(nn.Module):
         
         node_feat_list = torch.cat(node_feat_list, dim=-1)
         data[properties.node_feat] = node_feat_list
+
+        # get properties
+        data = self.readout(data)
         
         return data
