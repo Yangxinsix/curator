@@ -2,7 +2,6 @@ from e3nn import o3
 from typing import Tuple, List, Union, Dict
 import torch
 from e3nn.util.jit import compile_mode
-from e3nn import o3
 import collections
 from curator.data import properties
 

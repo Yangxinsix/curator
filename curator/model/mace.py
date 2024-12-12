@@ -16,6 +16,7 @@ from curator.layer import (
     RealAgnosticInteractionBlock,
     EquivariantProductBasisBlock,
 )
+from curator.layer._cuequivariance_wrapper import Linear
 from curator.data import properties
 from typing import List, Optional, Dict, Union, Callable, Type
 
@@ -193,7 +194,7 @@ class MACE(nn.Module):
                     gate=gate_fn,
                 )
             else:
-                readout = o3.Linear(irreps_in=hidden_irreps_out, irreps_out=o3.Irreps('1x0e'))
+                readout = Linear(irreps_in=hidden_irreps_out, irreps_out=o3.Irreps('1x0e'))
             self.readout_mlp.append(readout)
             
     def forward(self, data: properties.Type) -> properties.Type:

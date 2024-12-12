@@ -14,6 +14,7 @@ from curator.layer import (
     SphericalHarmonicEdgeAttrs,
     InteractionLayer,
 )
+from curator.layer._cuequivariance_wrapper import Linear
 
 from typing import OrderedDict, Dict, List, Optional, Union, Callable
 
@@ -145,11 +146,11 @@ class NequipModel(torch.nn.Module):
             self.irreps_in.update(interaction.irreps_out)
         
         self.readout_mlp = nn.Sequential(
-            o3.Linear(
+            Linear(
                 irreps_in=self.irreps_in[properties.node_feat],
                 irreps_out=self.MLP_irreps,
             ),
-            o3.Linear(
+            Linear(
                 irreps_in=self.MLP_irreps, 
                 irreps_out=o3.Irreps('1x0e'),
             ),
