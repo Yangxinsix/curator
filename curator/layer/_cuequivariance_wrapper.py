@@ -1,3 +1,5 @@
+# The code is borrowed from https://github.com/ACEsuit/mace/blob/main/mace/modules/wrapper_ops.py with modifications
+
 from e3nn import o3
 import torch
 import numpy as np

@@ -1,4 +1,4 @@
-from e3nn.o3 import Linear
+from ._cuequivariance_wrapper import Linear
 from e3nn import o3
 from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
@@ -42,9 +42,9 @@ class AtomwiseNonLinear(torch.nn.Module):
     ):
         super().__init__()
         self.MLP_irreps = MLP_irreps
-        self.linear_1 = o3.Linear(irreps_in=irreps_in, irreps_out=self.MLP_irreps)
+        self.linear_1 = Linear(irreps_in=irreps_in, irreps_out=self.MLP_irreps)
         self.non_linearity = Activation(irreps_in=self.MLP_irreps, acts=[gate])
-        self.linear_2 = o3.Linear(
+        self.linear_2 = Linear(
             irreps_in=self.MLP_irreps, irreps_out=irreps_out
         )
 
