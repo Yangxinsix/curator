@@ -2,7 +2,12 @@ import torch
 from typing import Optional, Dict, Callable
 from curator.data import properties
 
-from e3nn.o3 import Linear, TensorProduct, FullyConnectedTensorProduct
+from ._cuequivariance_wrapper import (
+    Linear,
+    TensorProduct,
+    FullyConnectedTensorProduct,
+)
+
 from e3nn import o3
 from e3nn.nn import FullyConnectedNet
 
