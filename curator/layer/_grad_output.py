@@ -108,7 +108,7 @@ class GradientOutput(torch.nn.Module):
                     if properties.cell in data:
                         virial = grads[1]
                         if virial is None:
-                            stress = torch.zeros_like(data[properties.cell])
+                            virial = torch.zeros_like(data[properties.cell])
                         cell = data[properties.cell].reshape(-1, 3, 3)
                         volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1)
                         stress = virial / volumes[:, None, None]

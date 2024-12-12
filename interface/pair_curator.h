@@ -8,7 +8,7 @@ References:
 
 #ifdef PAIR_CLASS
 
-PairStyle(painn,PairCURATOR)
+PairStyle(curator,PairCurator)
 
 #else
 
@@ -21,28 +21,30 @@ PairStyle(painn,PairCURATOR)
 
 namespace LAMMPS_NS {
     
-class PairCURATOR : public Pair {
+class PairCurator : public Pair {
  public:
-  PairCURATOR(class LAMMPS *);
-  virtual ~PairCURATOR();
+  PairCurator(class LAMMPS *);
+  virtual ~PairCurator();
   virtual void compute(int, int);
   void settings(int, char **);
   virtual void coeff(int, char **);
   virtual double init_one(int, int);
   virtual void init_style();
   void allocate();
-
   double cutoff;
   torch::jit::script::Module model;
   torch::Device device = torch::kCPU;
+  // Method to access uncertainties
+  double get_uncertainty(const std::string &name) const;
+  // Uncertainty storage
+  std::unordered_map<std::string, double> uncertainties;
 
-  // uncertainty information
-  double uncertainty_scalar;
+ private:
+  int debug_mode;
+  int compute_uncertainty;
 
  protected:
   int * type_mapper;
-  int debug_mode = 0;
-  int ensemble = 0;
 
 };
 

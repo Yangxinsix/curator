@@ -11,7 +11,10 @@ from pytorch_lightning import LightningDataModule
 from omegaconf import DictConfig
 import logging
 from collections import OrderedDict, defaultdict
-from curator.utils import scatter_add, scatter_mean
+try:
+    from torch_scatter import scatter_add, scatter_mean
+except ImportError:
+    from curator.utils import scatter_add, scatter_mean
 
 class NeuralNetworkPotential(nn.Module):
     """ Base class for neural network potentials."""

@@ -350,7 +350,10 @@ class AtomsDataModule(pl.LightningDataModule):
         path_info = "".join(path_info)
         path_info += "\n" if path_info != "" else ""
         path_info += f"datapath={self.datapath}\n" if self.datapath is not None else ""
-        data_info = f"Dataset size={self.datalen or self.num_train + self.num_val + self.num_test}, training dataset size={self.num_train}, validation dataset size={self.num_val}, test dataset size={self.num_test}.\n"
+        if self._train_dataset is not None:
+            data_info = f"Dataset size={self.datalen or self.num_train + self.num_val + self.num_test}, training dataset size={self.num_train}, validation dataset size={self.num_val}, test dataset size={self.num_test}.\n"
+        else:
+            data_info = ""
         scale_info = f"scale={self.std}, shift={self.mean}, atomwise_normalization={self.atomwise_normalization}, scale_forces={self.scale_forces}\n" if self.normalization else ""
         species_info = f"species={self.species}\n" if self.species is not None else ""
         e0_info = f"atomic_energies={self.atomic_energies}" if isinstance(self.atomic_energies, Dict) else ""

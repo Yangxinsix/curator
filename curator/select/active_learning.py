@@ -6,7 +6,10 @@ from curator.data import collate_atomsdata
 from .select import *
 from .kernel import *
 from curator.data import properties
-from curator.utils import scatter_add, scatter_mean
+try:
+    from torch_scatter import scatter_add, scatter_mean
+except ImportError:
+    from curator.utils import scatter_add, scatter_mean
 from e3nn import o3
 from curator.layer.utils import find_layer_by_name_recursive
 import logging

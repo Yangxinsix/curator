@@ -72,6 +72,8 @@ def train(
             # load parameters, create run directory, and save user_cfg file
             job_config = OmegaConf.merge(general, job_config)
             cfg = read_user_config(job_config, config_name='train.yaml')
+            if "defaults" in job_config:
+                cfg.defaults = job_config.defaults   # here cfg has no defaults list
             run_path = Path(train_path) / f'iter_{iteration}' / name
             run_path.mkdir(parents=True, exist_ok=True)
             cfg.run_path = str(run_path.resolve())
@@ -138,6 +140,8 @@ def simulate(
             # load parameters, create run directory, and save user_cfg file
             job_config = OmegaConf.merge(general, job_config)
             cfg = read_user_config(job_config, config_name='simulate.yaml')
+            if "defaults" in job_config:
+                cfg.defaults = job_config.defaults   # here cfg has no defaults list
             run_path = Path(simulate_path) / f'iter_{iteration}' / name
             run_path.mkdir(parents=True, exist_ok=True)
             cfg.run_path = str(run_path.resolve())
@@ -201,6 +205,8 @@ def select(
             # load parameters, create run directory, and save user_cfg file
             job_config = OmegaConf.merge(general, job_config)
             cfg = read_user_config(job_config, config_name='select.yaml')
+            if "defaults" in job_config:
+                cfg.defaults = job_config.defaults   # here cfg has no defaults list
             run_path = Path(select_path) / f'iter_{iteration}' / name
             run_path.mkdir(parents=True, exist_ok=True)
             cfg.run_path = str(run_path.resolve())
@@ -253,6 +259,8 @@ def label(
             # load parameters, create run directory, and save user_cfg file
             job_config = OmegaConf.merge(general, job_config)
             cfg = read_user_config(job_config, config_name='label.yaml')
+            if "defaults" in job_config:
+                cfg.defaults = job_config.defaults   # here cfg has no defaults list
 
             # parse node resources
             job_resources = cfg.pop('resources')

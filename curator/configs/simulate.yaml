@@ -1,6 +1,6 @@
 defaults:
-  - simulator: md
-  - calculator: default_calculator
+  - simulator: ase_md
+  - optional simulator/simulator_params: ${simulator}_params
   - _self_
 
 cfg: null
@@ -8,3 +8,4 @@ seed: 1234
 run_path: .
 model_path: null
 device: cuda
+deploy: null
