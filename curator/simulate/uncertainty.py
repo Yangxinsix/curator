@@ -2,7 +2,7 @@ import numpy as np
 import ase
 import sys
 from ase.calculators.calculator import Calculator
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, List
 from abc import ABC, abstractmethod
 from curator.data import properties
 import torch
@@ -37,7 +37,8 @@ class BaseUncertainty(ABC):
 class EnsembleUncertainty(BaseUncertainty):
     def __init__(
             self, 
-            key: str = properties.f_sd, 
+            key: List[str] = properties.f_sd,
+            uncertainty_keys: List[str] = [properties.f_sd, properties.f_var],
             high_threshold: float = 0.5, 
             low_threshold: float = 0.05,
             calculator: Optional[Calculator] = None,
@@ -45,6 +46,8 @@ class EnsembleUncertainty(BaseUncertainty):
             max_uncertain_calls: int = sys.maxsize,
         ):
         self.key = key
+        self.uncertainty_keys = uncertainty_keys
+        assert self.key in self.uncertainty_keys, f"Uncertainty threshold key {self.key} not in uncertainty keys {self.uncertainty_keys}!"
         self.high_threshold = high_threshold
         self.low_threshold = low_threshold
         self.calc = calculator
@@ -84,11 +87,11 @@ class EnsembleUncertainty(BaseUncertainty):
             return self.uncertainty
 
     def get_uncertainty(self, atoms: ase.Atoms):
-        if atoms.calc and properties.uncertainty in atoms.calc.results:
-            self.uncertainty = atoms.calc.results[properties.uncertainty]
+        if atoms.calc and self.key in atoms.calc.results:
+            self.uncertainty = {k: atoms.calc.results[k] for k in self.uncertainty_keys}
         elif self.calc is not None:
             self.calc.calculate(atoms)
-            self.uncertainty = self.calc.results[properties.uncertainty]
+            self.uncertainty = {k: self.calc.results[k] for k in self.uncertainty_keys}
         else:
             # deal with cases with no uncertainty outputs
             self.uncertainty = {}

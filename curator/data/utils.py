@@ -13,7 +13,7 @@ from ase.io.trajectory import TrajectoryReader
 from omegaconf import ListConfig
 import os
 
-def read_trajectory(ase_db):
+def read_trajectory(ase_db, *args, **kwargs):
     if isinstance(ase_db, (str, PosixPath)):
         ase_db = str(ase_db)  # Convert PosixPath to string if necessary
         if ase_db.endswith('.traj'):
@@ -30,7 +30,7 @@ def read_trajectory(ase_db):
             for item in ase_db:
                 if isinstance(item, (str, PosixPath)) and os.path.getsize(item):
                     item = str(item)  # Convert PosixPath to string if necessary
-                    db += read(item, ':')
+                    db += read(item, index=':', *args, **kwargs)
     elif isinstance(ase_db, TrajectoryReader):
         db = ase_db
 
@@ -72,7 +72,10 @@ def compute_scale_shift(
     per_atom=True,
     atomic_energies: Optional[Dict[int, float]]=None,
 ) -> Tuple[float, float]:
-    from curator.utils import scatter_add
+    try:
+        from torch_scatter import scatter_add
+    except ImportError:
+        from curator.utils import scatter_add
     reference_energies = torch.zeros((119,), dtype=torch.float)
     if atomic_energies is not None:
         for k, v in atomic_energies.items():

@@ -1,4 +1,5 @@
 defaults:
+  - calculator: default_calculator
   - logger: md_logger
   - dynamics: langevin
   - uncertainty: ensemble

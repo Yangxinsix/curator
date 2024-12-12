@@ -4,7 +4,10 @@ from .cutoff import CosineCutoff
 from .radial_basis import SineBasis
 from typing import Optional
 from curator.data import properties
-from curator.utils import scatter_add
+try:
+    from torch_scatter import scatter_add
+except ImportError:
+    from curator.utils import scatter_add
 
 class PainnMessage(nn.Module):
     """Message function"""

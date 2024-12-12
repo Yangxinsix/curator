@@ -2,8 +2,11 @@ import torch
 from torch import nn
 from typing import Optional, Dict, Union, List
 from curator.data import properties
-from curator.utils import scatter_add
-from ase.data import atomic_numbers
+try:
+    from torch_scatter import scatter_add
+except ImportError:
+    from curator.utils import scatter_add
+from ase.data import atomic_numbers, chemical_symbols
 
 # TODO: add __repr__ for modules
 class GlobalRescaleShift(torch.nn.Module):
@@ -31,23 +34,19 @@ class GlobalRescaleShift(torch.nn.Module):
             self._initialized = True
             
         if scale_by is not None:
-            self.has_scale = True
             if scale_trainable:
                 self.register_parameter("scale_by", torch.tensor([scale_by]))
             else:
                 self.register_buffer("scale_by", torch.tensor([scale_by]))
         else:
-            self.has_scale = False
             self.register_buffer("scale_by", torch.tensor([1.0]))
             
         if shift_by is not None:
-            self.has_shift = True
             if shift_trainable:
                 self.register_parameter("shift_by", torch.tensor([shift_by]))
             else:
                 self.register_buffer("shift_by", torch.tensor([shift_by]))
         else:
-            self.has_shift = False
             self.register_buffer("shift_by", torch.tensor([0.0]))
 
         self.model_outputs = output_keys
@@ -60,18 +59,16 @@ class GlobalRescaleShift(torch.nn.Module):
     def scale(self, data: properties.Type, force_process: bool=False) -> properties.Type:
         data = data.copy()
         if not self.training or force_process:
-            if self.has_scale:
-                for key in self.scale_keys:
-                    data[key] = data[key] * self.scale_by
-            if self.has_shift:
-                # add atomic energies
-                shift_by = data[properties.n_atoms] * self.shift_by if self.atomwise_normalization else self.shift_by    
-                if self.shift_by_E0:
-                    node_e0 = self.atomic_energies[data[properties.Z]]
-                    e0 = scatter_add(node_e0, data[properties.image_idx])
-                    shift_by = shift_by + e0
-                for key in self.shift_keys:
-                    data[key] = data[key] + shift_by       
+            for key in self.scale_keys:
+                data[key] = data[key] * self.scale_by
+            # add atomic energies
+            shift_by = data[properties.n_atoms] * self.shift_by if self.atomwise_normalization else self.shift_by    
+            if self.shift_by_E0:
+                node_e0 = self.atomic_energies[data[properties.Z]]
+                e0 = scatter_add(node_e0, data[properties.image_idx])
+                shift_by = shift_by + e0
+            for key in self.shift_keys:
+                data[key] = data[key] + shift_by       
         return data
     
     @torch.jit.export
@@ -79,23 +76,25 @@ class GlobalRescaleShift(torch.nn.Module):
         data = data.copy()
         if self.training or force_process:
             # inverse scale and shift for unscale
-            if self.has_shift:
                 # add atomic energies
-                shift_by = data[properties.n_atoms] * self.shift_by if self.atomwise_normalization else self.shift_by
-                if self.shift_by_E0:
-                    node_e0 = self.atomic_energies[data[properties.Z]]
-                    e0 = scatter_add(node_e0, data[properties.image_idx])
-                    shift_by = shift_by + e0
-                for key in self.shift_keys:
-                    data[key] = data[key] - shift_by
-            if self.has_scale:
-                for key in self.scale_keys:
-                    data[key] = data[key] / self.scale_by
+            shift_by = data[properties.n_atoms] * self.shift_by if self.atomwise_normalization else self.shift_by
+            if self.shift_by_E0:
+                node_e0 = self.atomic_energies[data[properties.Z]]
+                e0 = scatter_add(node_e0, data[properties.image_idx])
+                shift_by = shift_by + e0
+            for key in self.shift_keys:
+                data[key] = data[key] - shift_by
+
+            for key in self.scale_keys:
+                data[key] = data[key] / self.scale_by
         return data
         
     def _get_atomic_energies_list(self, atomic_energies: Union[Dict[int, float], Dict[str, float], None]):
         if atomic_energies is not None:
-            self.shift_by_E0 = True
+            if not hasattr(self, "shift_by_E0"):
+                self.register_buffer("shift_by_E0", torch.tensor(True))
+            else:
+                self.shift_by_E0.copy_(torch.tensor(True))
             atomic_energies_dict = torch.zeros((119,), dtype=torch.float)
             if atomic_energies is not None:
                 # convert chemical symbols to atomic numbers
@@ -105,19 +104,26 @@ class GlobalRescaleShift(torch.nn.Module):
                             atomic_energies_dict[atomic_numbers[k]] = v
                         else:
                             atomic_energies_dict[k] = v
-            self.register_buffer("atomic_energies", atomic_energies_dict)
+            if not hasattr(self, "atomic_energies"):
+                self.register_buffer("atomic_energies", atomic_energies_dict)
+            else:
+                self.atomic_energies.copy_(atomic_energies_dict)
         else:
-            self.shift_by_E0 = False
-            self.register_buffer("atomic_energies", torch.zeros((119,), dtype=torch.float))    # dummy buffer for torch script
+            if not hasattr(self, "shift_by_E0"):
+                self.register_buffer("shift_by_E0", torch.tensor(False))
+            else:
+                self.shift_by_E0.copy_(torch.tensor(False))
+            if not hasattr(self, "atomic_energies"):
+                self.register_buffer("atomic_energies", torch.zeros((119,), dtype=torch.float))    # dummy buffer for torch script
+            else:
+                self.atomic_energies.copy_(torch.zeros((119,), dtype=torch.float))
         
     def datamodule(self, _datamodule):
         if not self._initialized:
             shift_by, scale_by = _datamodule._get_scale_shift()
             if scale_by is not None:
-                self.has_scale = True
                 self.scale_by = torch.tensor([scale_by])
             if shift_by is not None:
-                self.has_shift = True
                 self.shift_by = torch.tensor([shift_by])
                 
             self.atomwise_normalization = torch.tensor(_datamodule.atomwise_normalization)
@@ -127,8 +133,10 @@ class GlobalRescaleShift(torch.nn.Module):
             self._get_atomic_energies_list(_datamodule._get_average_E0())
 
     def __repr__(self):
-        return (f"{self.__class__.__name__}(has_scale={self.has_scale}, has_shift={self.has_shift}, scale_by={self.scale_by}, shift_by={self.shift_by}"
-            f", scale_keys={self.scale_keys}, shift_keys={self.shift_keys})"
+        atomic_energies_dict = {chemical_symbols[i]: self.atomic_energies[i] for i in self.atomic_energies.nonzero().squeeze().cpu().numpy()}
+        return (f"{self.__class__.__name__}(scale_by={self.scale_by}, shift_by={self.shift_by}"
+            f", shift_by_E0={self.shift_by_E0}, atomic_energies={atomic_energies_dict}" if self.shift_by_E0 else ""
+            f", scale_keys={self.scale_keys}, shift_keys={self.shift_keys}, atomwise_normalization={self.atomwise_normalization})"
         )
             
             
@@ -151,7 +159,6 @@ class PerSpeciesRescaleShift(torch.nn.Module):
             self._initialized = True
         
         if scales is not None:
-            self.has_scales = True
             scales_dict = torch.ones((119,), dtype=torch.float)
             for k, v in scales.items():
                 if isinstance(k, str):
@@ -164,11 +171,9 @@ class PerSpeciesRescaleShift(torch.nn.Module):
             else:
                 self.register_buffer("scales", scales)
         else:
-            self.has_scales = False
             self.register_buffer("scales", torch.ones((119,), dtype=torch.float))
         
         if shifts is not None:
-            self.has_shifts = True
             shifts_dict = torch.zeros((119,), dtype=torch.float)
             for k, v in shifts.items():
                 if isinstance(k, str):
@@ -181,18 +186,15 @@ class PerSpeciesRescaleShift(torch.nn.Module):
             else:
                 self.register_buffer("shifts", shifts)
         else:
-            self.has_shifts = False
             self.register_buffer("shifts", torch.zeros((119,), dtype=torch.float))
             
     def forward(self,  data: properties.Type) -> properties.Type:
-        if self.has_scales:
-            for key in self.scales_keys:
-                scales = self.scales[data[properties.Z]]
-                data[key] = data[key] * scales
-        if self.has_shifts:
-            for key in self.shifts_keys:
-                shifts = self.shifts[data[properties.Z]]
-                data[key] = data[key] + shifts
+        for key in self.scales_keys:
+            scales = self.scales[data[properties.Z]]
+            data[key] = data[key] * scales
+        for key in self.shifts_keys:
+            shifts = self.shifts[data[properties.Z]]
+            data[key] = data[key] + shifts
         return data
     
     def datamodule(self, _datamodule):
@@ -201,7 +203,6 @@ class PerSpeciesRescaleShift(torch.nn.Module):
             self.atomwise_normalization = torch.tensor(_datamodule.atomwise_normalization)
 
             if shifts is not None:
-                self.has_shifts = True
                 shifts_dict = torch.zeros((119,), dtype=torch.float)
                 for k, v in shifts.items():
                     if isinstance(k, str):
@@ -211,7 +212,6 @@ class PerSpeciesRescaleShift(torch.nn.Module):
                 self.shifts = shifts_dict
             
             if scales is not None:
-                self.has_scales = True
                 scales_dict = torch.ones((119,), dtype=torch.float)
                 for k, v in scales.items():
                     if isinstance(k, str):

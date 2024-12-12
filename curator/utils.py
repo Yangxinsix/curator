@@ -17,6 +17,14 @@ def register_resolvers():
     OmegaConf.register_new_resolver("multiply_fs", lambda x: x * units.fs, replace=True)
     OmegaConf.register_new_resolver("divide_by_fs", lambda x: x / units.fs, replace=True)
 
+def dummy_load(*args, **kwargs):
+    original_torch_jit_load = torch.jit.load
+    def torch_jit_load_cpu(*args, **kwargs):
+        if not torch.cuda.is_available():
+            kwargs['map_location'] = torch.device('cpu')
+        return original_torch_jit_load(*args, **kwargs)
+    torch.jit.load = torch_jit_load_cpu
+
 def split_list(lst, chunk_or_num, by_chunk_size=False):
     if by_chunk_size:
         num_chunks, remainder = divmod(len(lst), chunk_or_num)
@@ -130,7 +138,7 @@ def get_all_pairs(d, keys=()):
 def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_path="configs", config_name="train.yaml"):
     # load cfg
     if isinstance(cfg, DictConfig):
-        user_cfg = cfg
+        user_cfg = cfg.copy()
     elif isinstance(cfg, (PosixPath, str)):
         user_cfg = OmegaConf.load(cfg)
     else:
@@ -163,15 +171,15 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     # reload hyperparameters         
     hydra.core.global_hydra.GlobalHydra.instance().clear()
     with initialize(version_base=None, config_path=config_path):
-        cfg = compose(config_name=config_name, overrides=override_list)
+        composed_cfg = compose(config_name=config_name, overrides=override_list)
     
     # Allow write access to unknown fields
-    OmegaConf.set_struct(cfg, False)
+    OmegaConf.set_struct(composed_cfg, False)
         
-    return cfg
+    return composed_cfg
 
 def escape_special_characters(value: str) -> str:
-    special_characters = r"\()[]{}:=,"
+    special_characters = r"\()[]{}:=,&"
     for char in special_characters:
         if char in value:
             value = f'"{value}"'
@@ -187,8 +195,19 @@ def escape_all(data):
         return [escape_all(item) for item in data]
     else:
         return data
-    
-def scatter_add(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None):
+
+def _broadcast(src: torch.Tensor, other: torch.Tensor, dim: int) -> torch.Tensor:
+    if dim < 0:
+        dim = other.dim() + dim
+    if src.dim() == 1:
+        for _ in range(0, dim):
+            src = src.unsqueeze(0)
+    for _ in range(src.dim(), other.dim()):
+        src = src.unsqueeze(-1)
+    src = src.expand_as(other)
+    return src
+
+def scatter_add(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Sums all values from the `src` tensor into `out` at the indices specified in the `index` tensor
     along the dimension `dim`. If `out` is not provided, it will be automatically created with the correct size.
@@ -203,19 +222,7 @@ def scatter_add(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torc
     Returns:
         torch.Tensor: The resulting tensor with the summed values scattered at the specified indices.
     """
-    if dim < 0:
-        dim = src.dim() + dim  # Convert negative dimension to positive index
-
-    # Ensure index has the same number of dimensions as src
-    if index.dim() != src.dim():
-        # Expand index to have same number of dimensions as src
-        index_shape = [1] * src.dim()
-        index_shape[dim] = -1  # Let PyTorch infer the size at the specified dimension
-        index = index.view(*index_shape).expand_as(src)
-    else:
-        # Ensure index matches src's shape
-        index = index.expand_as(src)
-
+    index = _broadcast(index, src, dim)
     if out is None:
         # Determine size of output tensor along dimension `dim`
         output_size = list(src.size())
@@ -227,7 +234,7 @@ def scatter_add(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torc
 
     return out
 
-def scatter_mean(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None):
+def scatter_mean(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: Optional[torch.Tensor] = None) -> torch.Tensor:
     """
     Computes the mean of all values from the `src` tensor into `out` at the indices specified in the `index` tensor
     along the dimension `dim`. If `out` is not provided, it will be automatically created to have the correct size.
@@ -241,18 +248,7 @@ def scatter_mean(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: tor
     Returns:
         torch.Tensor: The resulting tensor with the mean values scattered at the specified indices.
     """
-    if dim < 0:
-        dim = src.dim() + dim  # Convert negative dimension to positive
-
-    # Ensure index has same number of dimensions as src
-    if index.dim() != src.dim():
-        # Expand index to have same number of dimensions as src
-        index_shape = [1] * src.dim()
-        index_shape[dim] = -1  # Set the size at the specified dimension
-        index = index.view(*index_shape).expand_as(src)
-    else:
-        # Ensure index is expanded to match src
-        index = index.expand_as(src)
+    index = _broadcast(index, src, dim)
 
     if out is None:
         # Determine size of output tensor along dimension `dim`
@@ -279,7 +275,7 @@ def scatter_mean(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: tor
 
     return out
 
-def scatter_max(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None):
+def scatter_max(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None) -> torch.Tensor:
     """
     Computes the maximum of all values from the `src` tensor into `out` at the indices specified in the `index` tensor
     along the dimension `dim`.
@@ -294,16 +290,7 @@ def scatter_max(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torc
     Returns:
         torch.Tensor: The resulting tensor with the maximum values scattered at the specified indices.
     """
-    if dim < 0:
-        dim = src.dim() + dim
-
-    # Ensure index has the same number of dimensions as src
-    if index.dim() != src.dim():
-        index_shape = [1] * src.dim()
-        index_shape[dim] = -1  # Let PyTorch infer the size at the specified dimension
-        index = index.view(*index_shape).expand_as(src)
-    else:
-        index = index.expand_as(src)
+    index = _broadcast(index, src, dim)
 
     # Determine size of output tensor along dimension `dim`
     output_size = list(src.size())
@@ -320,7 +307,7 @@ def scatter_max(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torc
 
     return out
 
-def scatter_min(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None):
+def scatter_min(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None) -> torch.Tensor:
     """
     Computes the minimum of all values from the `src` tensor into `out` at the indices specified in the `index` tensor
     along the dimension `dim`.
@@ -335,16 +322,7 @@ def scatter_min(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torc
     Returns:
         torch.Tensor: The resulting tensor with the minimum values scattered at the specified indices.
     """
-    if dim < 0:
-        dim = src.dim() + dim
-
-    # Ensure index has the same number of dimensions as src
-    if index.dim() != src.dim():
-        index_shape = [1] * src.dim()
-        index_shape[dim] = -1
-        index = index.view(*index_shape).expand_as(src)
-    else:
-        index = index.expand_as(src)
+    index = _broadcast(index, src, dim)
 
     # Determine size of output tensor along dimension `dim`
     output_size = list(src.size())
@@ -362,7 +340,7 @@ def scatter_min(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torc
     return out
 
 def scatter_reduce(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None,
-                   reduce: str = 'sum', include_self: bool = False):
+                   reduce: str = 'sum', include_self: bool = False) -> torch.Tensor:
     """
     Reduces all values from the `src` tensor into `out` at the indices specified in the `index` tensor
     along the dimension `dim` using the specified reduction ('sum', 'mean', 'max', 'min').
@@ -379,20 +357,12 @@ def scatter_reduce(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: t
     Returns:
         torch.Tensor: The resulting tensor with the reduced values scattered at the specified indices.
     """
-    if dim < 0:
-        dim = src.dim() + dim
-
     # Validate reduce operation
     if reduce not in ['sum', 'mean', 'max', 'min']:
         raise ValueError(f"Invalid reduce operation '{reduce}'. Supported operations: 'sum', 'mean', 'max', 'min'.")
 
     # Ensure index has the same number of dimensions as src
-    if index.dim() != src.dim():
-        index_shape = [1] * src.dim()
-        index_shape[dim] = -1
-        index = index.view(*index_shape).expand_as(src)
-    else:
-        index = index.expand_as(src)
+    index = _broadcast(index, src, dim)
 
     # Determine size of output tensor along dimension `dim`
     output_size = list(src.size())

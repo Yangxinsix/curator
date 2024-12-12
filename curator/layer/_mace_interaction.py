@@ -9,7 +9,10 @@ from .utils import (
     linear_out_irreps,
     reshape_irreps,
 )
-from curator.utils import scatter_add
+try:
+    from torch_scatter import scatter_add
+except ImportError:
+    from curator.utils import scatter_add
 from typing import Optional, Callable, Tuple
 from ._symmetric_contraction import SymmetricContraction
 

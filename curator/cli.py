@@ -17,7 +17,7 @@ from .utils import (
 import logging
 import socket
 import contextlib
-from typing import Optional
+from typing import Optional, Union, Dict, List
 from pytorch_lightning import seed_everything
 
 # very ugly solution for solving pytorch lighting and myqueue conflictions
@@ -97,7 +97,7 @@ def train(config: DictConfig) -> None:
             state_dict = torch.load(config.model_path)
             new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in state_dict['state_dict'].items())
             model = instantiate(config.model)
-            model.load_state_dict(new_state_dict)
+            model.load_state_dict(new_state_dict, strict=False)      # in case frequent model structure revision
             outputs = instantiate(config.task.outputs)
             
         log.debug(f"Instantiating task <{config.task._target_}>")
@@ -109,6 +109,7 @@ def train(config: DictConfig) -> None:
                 checkpoint_path=config.model_path, 
                 model=model, 
                 outputs=outputs,
+                strict=False,
             )
     else:
         # Initiate the model
@@ -229,9 +230,11 @@ def tmp_train(config: DictConfig):
 
 # Deploy the model and save a compiled model
 def deploy(
-        model_path: str, 
-        compiled_model_path: str = 'compiled_model.pt', 
-        cfg_path: Optional[str] = None
+        model_path: Union[str, list], 
+        target_path: str = 'compiled_model.pt', 
+        load_weights_only: bool=False,
+        cfg_path: Optional[str] = None,
+        return_model: bool = False,
     ):
     """ Deploy the model and save a compiled model.
 
@@ -244,32 +247,52 @@ def deploy(
     import torch
     from curator.model import LitNNP
     from e3nn.util.jit import script
+    from collections import OrderedDict
+    from omegaconf import ListConfig
+    from curator.model import EnsembleModel
+    from curator.layer.utils import find_layer_by_name_recursive
+
+    def load_model(model_path):
+        try:
+            loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
+        except:
+            original_torch_jit_load = torch.jit.load
+            def torch_jit_load_cpu(*args, **kwargs):
+                kwargs['map_location'] = 'cpu'
+                return original_torch_jit_load(*args, **kwargs)       
+            torch.jit.load = torch_jit_load_cpu
+            loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
+
+        if 'model' in loaded_model and not load_weights_only:
+            model = loaded_model['model']
+        else:          
+            # Set up model, optimizer and scheduler
+            if cfg_path is None:
+                model = instantiate(loaded_model['model_params'], _convert_="all")
+            else:
+                cfg = read_user_config(cfg_path, config_path="configs", config_name="train")
+                model = instantiate(cfg.model, _convert_="all")
+
+            new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in loaded_model['state_dict'].items())
+            model.load_state_dict(new_state_dict, strict=False)
+        return model
 
     # Load model
-    loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
-
-    if 'model' in loaded_model and cfg_path is None:
-        model = loaded_model['model']
+    if isinstance(model_path, (list, ListConfig)):
+        if len(model_path) > 1:
+            model = EnsembleModel([load_model(find_best_model(path)[0]) for path in model_path])
+        else:
+            model = load_model(model_path[0])
     else:
-        # Load the arguments
-        config = read_user_config(cfg_path, config_path="configs", config_name="train")
-
-        # Set up datamodule and load training and validation set
-        if not os.path.isfile(config.data.datapath):
-            raise RuntimeError("Please provide valid data path!")
-        datamodule = instantiate(config.data)
-        datamodule.setup()
-        
-        # Set up model, optimizer and scheduler
-        model = instantiate(config.model)
-        model.initialize_modules(datamodule)
-        model.load_state_dict(loaded_model["state_dict"])
+        model = load_model(model_path)
 
     # Compile the model
     model_compiled = script(model)
-    metadata = {"cutoff": str(model_compiled.representation.cutoff).encode("ascii")}
-    model_compiled.save(compiled_model_path, _extra_files=metadata)
-    log.info(f"Deploying compiled model at <{compiled_model_path}>")
+    metadata = {"cutoff": str(find_layer_by_name_recursive(model_compiled, 'cutoff')).encode("ascii")}
+    model_compiled.save(target_path, _extra_files=metadata)
+    log.info(f"Deploying compiled model at <{target_path}> from <{model_path}>")
+    if return_model:
+        return model_compiled
 
 # Simulate with the model
 @hydra.main(config_path="configs", config_name="simulate", version_base=None)
@@ -308,14 +331,18 @@ def simulate(config: DictConfig):
     
     # Load model. Uses a compiled model, if any, otherwise a uncompiled model
     log.info("Using model from <{}>".format(config.model_path))
-    model = load_models(config.model_path, config.device)
-    
-    # Set up calculator
-    model = EnsembleModel(model) if len(model) > 1 else model[0]
-    calculator = instantiate(config.calculator, model=model)
+    if config.deploy is not None:
+        model = deploy(
+            config.model_path, 
+            load_weights_only=config.deploy.load_weights_only,
+            return_model=True,
+        )
+    else:
+        model = load_models(config.model_path, config.device)
+        model = EnsembleModel(model) if len(model) > 1 else model[0]
 
     # Setup simulator
-    simulator = instantiate(config.simulator, calculator=calculator)
+    simulator = instantiate(config.simulator, model=model)
     simulator.run()
     
 @hydra.main(config_path="configs", config_name="select", version_base=None)   
@@ -366,16 +393,16 @@ def select(config: DictConfig):
 
     # Load the pool data set and training data set
     if config.dataset and config.split_file:
-        dataset = AseDataset(read_trajectory(config.dataset), cutoff=cutoff)
+        dataset = AseDataset(read_trajectory(config.dataset), cutoff=cutoff, transforms=instantiate(config.transforms))
         with open(config.split_file) as f:
             split = json.load(f)
         data_dict = {}
         for k in split:
             data_dict[k] = torch.utils.data.Subset(dataset, split[k])
     elif config.pool_set:
-        data_dict = {'pool': AseDataset(read_trajectory(config.pool_set), cutoff=cutoff)}
+        data_dict = {'pool': AseDataset(read_trajectory(config.pool_set), cutoff=cutoff, transforms=instantiate(config.transforms))}
         if config.train_set:
-            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff)
+            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff, transforms=instantiate(config.transforms))
     else:
         raise RuntimeError("Please give valid pool data set for selection!")
 

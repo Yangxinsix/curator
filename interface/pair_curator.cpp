@@ -19,6 +19,8 @@ References:
 #include "potential_file_reader.h"
 #include "tokenizer.h"
 
+#include <unordered_map>
+#include <string>
 #include <cmath>
 #include <cstring>
 #include <numeric>
@@ -33,9 +35,11 @@ References:
 
 using namespace LAMMPS_NS;
 
-PairCURATOR::PairCURATOR(LAMMPS *lmp) : Pair(lmp) {
+PairCurator::PairCurator(LAMMPS *lmp) : Pair(lmp) {
   restartinfo = 0;
   manybody_flag = 1;
+  compute_uncertainty = 0;
+  debug_mode = 0;
 
   if(torch::cuda::is_available()){
     device = torch::kCUDA;
@@ -43,15 +47,20 @@ PairCURATOR::PairCURATOR(LAMMPS *lmp) : Pair(lmp) {
   else {
     device = torch::kCPU;
   }
-  std::cout << "curator is using device " << device << "\n";
 
-  if(const char* env_p = std::getenv("curator_DEBUG")){
-    std::cout << "PairCURATOR is in DEBUG mode, since curator_DEBUG is in env\n";
+  if (comm->me == 0) {
+    std::cout << "CURATOR is using device: " << device << std::endl;
+  }
+
+  if(const char* env_p = std::getenv("CURATOR_DEBUG")){
+    if (comm->me == 0) {
+      std::cout << "PairCurator is in DEBUG mode, since CURATOR_DEBUG is set in the environment" << std::endl;
+    }
     debug_mode = 1;
   }
 }
 
-PairCURATOR::~PairCURATOR(){
+PairCurator::~PairCurator(){
   if (allocated) {
     memory->destroy(setflag);
     memory->destroy(cutsq);
@@ -59,12 +68,12 @@ PairCURATOR::~PairCURATOR(){
   }
 }
 
-void PairCURATOR::init_style(){
+void PairCurator::init_style(){
   if (atom->tag_enable == 0)
     error->all(FLERR,"Pair style curator requires atom IDs");
 
   // need a full neighbor list
-  neighbor->add_request(this, NeighConst::REQ_FULL);
+  neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
 
   // TODO: I think Newton should be off, enforce this.
   // The network should just directly compute the total forces
@@ -74,12 +83,12 @@ void PairCURATOR::init_style(){
     error->all(FLERR,"Pair style curator requires newton pair off");
 }
 
-double PairCURATOR::init_one(int i, int j)
+double PairCurator::init_one(int i, int j)
 {
   return cutoff;
 }
 
-void PairCURATOR::allocate()
+void PairCurator::allocate()
 {
   allocated = 1;
   int n = atom->ntypes;
@@ -90,17 +99,26 @@ void PairCURATOR::allocate()
 
 }
 
-void PairCURATOR::settings(int narg, char **arg) {
-  // "ensemble" should be the only word after "pair_style" in the input file.
-  if (narg > 1)
-    error->all(FLERR, "Illegal pair_style command");  
-  else if (narg == 1){
-    if (strcmp(arg[0], "ensemble") == 0) ensemble = 1;
-    else error->all(FLERR, "Only ensemble is supported!");
-  } 
+void PairCurator::settings(int narg, char **arg) {
+  // "uncertainty" should be after "pair_style" in the input file if you want to calculate uncertainty.
+  if (narg > 0) {
+    if (strcmp(arg[0], "uncertainty") == 0) {
+      compute_uncertainty = 1;
+      uncertainties.clear();
+      if (narg == 1) uncertainties["force_sd"] = 0.0;      // default is to extract force standard deviation
+      else {
+        for (int i = 1; i < narg; ++i) {
+          uncertainties[std::string(arg[i])] = 0.0;
+        }
+      }
+    }
+    else {
+      error->all(FLERR, "Illegal pair_style command: unknown keyword");
+    }
+  }
 }
 
-void PairCURATOR::coeff(int narg, char **arg) {
+void PairCurator::coeff(int narg, char **arg) {
 
   if (!allocated)
     allocate();
@@ -124,7 +142,9 @@ void PairCURATOR::coeff(int narg, char **arg) {
       type_mapper[i] = -1;
   }
 
-  std::cout << "Loading model from " << arg[2] << "\n";
+  if (comm->me == 0) {
+    std::cout << "Loading model from " << arg[2] << std::endl;
+  }
 
   
   std::unordered_map<std::string, std::string> metadata = {
@@ -142,7 +162,7 @@ void PairCURATOR::coeff(int narg, char **arg) {
       counter++;
   }
   
-  if(debug_mode){
+  if(debug_mode && comm->me == 0){
     std::cout << "cutoff" << cutoff << "\n";
     for (int i = 0; i <= ntypes+1; i++){
         std::cout << type_mapper[i] << "\n";
@@ -158,55 +178,34 @@ void PairCURATOR::coeff(int narg, char **arg) {
 }
 
 // Force and energy computation
-void PairCURATOR::compute(int eflag, int vflag){
+void PairCurator::compute(int eflag, int vflag){
   ev_init(eflag, vflag);
 
   // Get info from lammps:
-
   // Atom positions, including ghost atoms
   double **x = atom->x;
   // Atom forces
   double **f = atom->f;
-  // Atom IDs, unique, reproducible, the "real" indices
-  // Probably 1-based
-  tagint *tag = atom->tag;
-  // Atom types, 1-based
-  int *type = atom->type;
-  // Number of local/real atoms
-  int nlocal = atom->nlocal;
   // Whether Newton is on (i.e. reverse "communication" of forces on ghost atoms).
-  int newton_pair = force->newton_pair;
   // Should probably be off.
-  if (newton_pair==1)
+  if (force->newton_pair==1)
     error->all(FLERR, "Pair style curator requires 'newton off'");
 
-  // Number of local/real atoms
-  int inum = list->inum;
-  assert(inum==nlocal); // This should be true, if my understanding is correct
-  // Number of ghost atoms
-  int nghost = list->gnum;
-  // Total number of atoms
-  int ntotal = inum + nghost;
-  // Mapping from neigh list ordering to x/f ordering
-  int *ilist = list->ilist;
-  // Number of neighbors per atom
-  int *numneigh = list->numneigh;
-  // Neighbor list per atom
-  int **firstneigh = list->firstneigh;
+  assert(list->inum==atom->nlocal); // This should be true, if my understanding is correct
 
   // Total number of bonds (sum of number of neighbors)
-  int nedges = std::accumulate(numneigh, numneigh+ntotal, 0);
-  torch::Tensor tag2type_tensor = torch::zeros({nlocal}, torch::TensorOptions().dtype(torch::kInt64));
+  int nedges = std::accumulate(list->numneigh, list->numneigh+list->inum, 0);
+  torch::Tensor tag2type_tensor = torch::zeros({atom->nlocal}, torch::TensorOptions().dtype(torch::kInt64));
   auto tag2type = tag2type_tensor.accessor<long, 1>();
 
   // Inverse mapping from tag to "real" atom index
-  std::vector<int> tag2i(inum);
+  std::vector<int> tag2i(list->inum);
 
   // Loop over real atoms to store tags, types and positions
-  for(int ii = 0; ii < inum; ii++){
-    int i = ilist[ii];
-    int itag = tag[i];
-    int itype = type[i];
+  for(int ii = 0; ii < list->inum; ii++){
+    int i = list->ilist[ii];
+    int itag = atom->tag[i];
+    int itype = atom->type[i];  // type is 1-based
 
     // Inverse mapping from tag to x/f atom index
     tag2i[itag-1] = i; // tag is probably 1-based
@@ -221,28 +220,28 @@ void PairCURATOR::compute(int eflag, int vflag){
   double edge_diff[nedges][3];
   int edge_counter = 0;
   if (debug_mode) {
-    std::cout << "num_atoms = " << nlocal << std::endl;
+    std::cout << "num_atoms = " << atom->nlocal << std::endl;
     std::cout << "nedges = " << nedges << std::endl;
     std::cout << "elems = " << tag2type_tensor << std::endl;
   }
   if (debug_mode) printf("curator edges: i j xi[:] xj[:]\n");
-  for(int ii = 0; ii < nlocal; ii++){
-    int i = ilist[ii];
-    int itag = tag[i];
-    int itype = type[i];
+  for(int ii = 0; ii < list->inum; ii++){
+    int i = list->ilist[ii];
+    int itag = atom->tag[i];   // atom tag is 1-based
+    int itype = atom->type[i];
+    if (debug_mode) printf("i_index: %d type: %d num_neigh: %d\n", itag-1, itype, list->numneigh[ii]);
 
-    int jnum = numneigh[i];
-    int *jlist = firstneigh[i];
-    for(int jj = 0; jj < jnum; jj++){
-      int j = jlist[jj];
+    for(int jj = 0; jj < list->numneigh[i]; jj++){
+      int j = list->firstneigh[i][jj];
       j &= NEIGHMASK;
-      int jtag = tag[j];
-      int jtype = type[j];
+      int jtag = atom->tag[j];
+//      int jtype = atom->type[j];
 
       double dx = x[j][0] - x[i][0];
       double dy = x[j][1] - x[i][1];
       double dz = x[j][2] - x[i][2];
 
+      domain->minimum_image(dx, dy, dz);
       double rsq = dx*dx + dy*dy + dz*dz;
       if (rsq < cutoff*cutoff){
           // TODO: double check order
@@ -270,37 +269,38 @@ void PairCURATOR::compute(int eflag, int vflag){
  
   // define curator n_atoms input
   torch::Tensor n_atoms_tensor = torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64));
-  n_atoms_tensor[0] = nlocal;
+  n_atoms_tensor[0] = atom->nlocal;
   torch::Tensor n_pairs_tensor = torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64));
   n_pairs_tensor[0] = edge_counter;
 
   c10::Dict<std::string, torch::Tensor> input;
-  input.insert("num_atoms", n_atoms_tensor.to(device));
-  input.insert("num_pairs", n_pairs_tensor.to(device));
-  input.insert("pairs", edges_tensor.to(device));
-  input.insert("n_diff", edge_diff_tensor.to(device));
-  input.insert("elems", tag2type_tensor.to(device));
+  input.insert("n_atoms", n_atoms_tensor.to(device));
+  input.insert("_n_pairs", n_pairs_tensor.to(device));
+  input.insert("_edge_index" , edges_tensor.to(device));
+  input.insert("_edge_difference", edge_diff_tensor.to(device));
+  input.insert("atomic_numbers", tag2type_tensor.to(device));
 
   if(debug_mode){
     std::cout << "curator model input:\n";
     std::cout << "num_atoms:\n" << n_atoms_tensor << "\n";
     std::cout << "num_pairs:\n" << n_pairs_tensor << "\n";
-    std::cout << "pairs:\n" << edges_tensor << "\n";
-    std::cout << "n_diff:\n" << edge_diff_tensor<< "\n";
-    std::cout << "elems:\n" << tag2type_tensor << "\n";
+    std::cout << "edge_index:\n" << edges_tensor << "\n";
+    std::cout << "edge_difference:\n" << edge_diff_tensor<< "\n";
+    std::cout << "atomic_numbers:\n" << tag2type_tensor << "\n";
   }
 
-  input.insert("_atomic_numbers", tag2type_tensor.to(device));
   std::vector<torch::IValue> input_vector(1, input);
 
   auto output = model.forward(input_vector).toGenericDict();
   
   // get forces
   torch::Tensor forces_tensor = output.at("forces").toTensor().cpu();
-  auto forces = forces_tensor.accessor<double, 2>();
+  auto forces = forces_tensor.accessor<float, 2>();
 
   // get energy
   torch::Tensor total_energy_tensor = output.at("energy").toTensor().cpu();
+  // store the total energy where LAMMPS wants it
+  eng_vdwl = total_energy_tensor.data_ptr<float>()[0];
 
   // get virial
   auto it = output.find("virial");
@@ -316,35 +316,48 @@ void PairCURATOR::compute(int eflag, int vflag){
     virial[5] = pred_virials[3];
   }
 
-  // get uncertainty 
-  it = output.find("uncertainty");
-  if (it != output.end()) {
-    torch::Tensor uncertainty_tensor = output.at("uncertainty").toTensor().cpu();
-    uncertainty_scalar = uncertainty_tensor.data_ptr<double>();
+  // Get uncertainties
+  if (compute_uncertainty) {
+    for (auto& pair : uncertainties) {
+      const std::string &name = pair.first;
+      auto it = output.find(name);
+      if (it != output.end()) {
+        torch::Tensor uncertainty_tensor = output.at(name).toTensor().cpu();
+        pair.second = uncertainty_tensor.item<float>(); // Update the uncertainty value
+      } else {
+        std::string error_msg = "Uncertainty key '" + name + "' not found in model output.";
+        error->all(FLERR, error_msg.c_str());
+      }
+    }
   }
-  // store the total energy where LAMMPS wants it
-  eng_vdwl = total_energy_tensor.data_ptr<double>()[0];
 
   if(debug_mode){
     std::cout << "curator model output:\n";
     std::cout << "forces: " << forces_tensor << "\n";
     std::cout << "energy: " << total_energy_tensor << "\n";
+    if (compute_uncertainty) {
+      for (const auto& pair : uncertainties) {
+        std::cout << "Key: " << pair.first << ", Value: " << pair.second << std::endl;
+      }
+    }
   }
   
   // Write forces and per-atom energies (0-based tags here)
-  for(int itag = 0; itag < inum; itag++){
+  for(int itag = 0; itag < list->inum; itag++){
     int i = tag2i[itag];
     f[i][0] = forces[itag][0];
     f[i][1] = forces[itag][1];
     f[i][2] = forces[itag][2];
   }
+}
 
-  // Read uncertainties if use ensemble model
-  if(ensemble){
-    e_var = output.at("e_var").toTensor().cpu().data_ptr<double>()[0];
-    e_sd = output.at("e_sd").toTensor().cpu().data_ptr<double>()[0];
-    f_var = output.at("f_var").toTensor().cpu().data_ptr<double>()[0];
-    f_sd = output.at("f_sd").toTensor().cpu().data_ptr<double>()[0];
+double PairCurator::get_uncertainty(const std::string &name) const {
+  auto it = uncertainties.find(name);
+  if (it != uncertainties.end()) {
+    return it->second;
+  } else {
+    std::string error_msg = "Uncertainty '" + name + "' not found in PairCurator.";
+    error->all(FLERR, error_msg.c_str());
+    return 0.0; // This line will not be reached due to error->all()
   }
-
 }
