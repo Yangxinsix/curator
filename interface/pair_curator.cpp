@@ -307,12 +307,13 @@ void PairCURATOR::compute(int eflag, int vflag){
   if (it != output.end()) {
     torch::Tensor virial_tensor = output.at("virial").toTensor().cpu();
     auto pred_virials = virial_tensor.accessor<double, 1>();
+    // curator uses Voigt notation for virial tensors: xx,yy,zz,yz,xz,xy. lammps: xx,yy,zz,xy,xz,yz
     virial[0] = pred_virials[0];
     virial[1] = pred_virials[1];
     virial[2] = pred_virials[2];
-    virial[3] = pred_virials[3];
+    virial[3] = pred_virials[5];
     virial[4] = pred_virials[4];
-    virial[5] = pred_virials[5];
+    virial[5] = pred_virials[3];
   }
 
   // get uncertainty 
