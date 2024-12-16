@@ -3,6 +3,7 @@ from torch import nn
 import torch.nn.functional as F
 from typing import List, Optional, Dict, Type, Any, Union
 from curator.data import properties
+from curator.layer._cuequivariance_wrapper import set_use_cueq
 from curator.train.model_output import ModelOutput
 from pytorch_lightning.utilities.types import STEP_OUTPUT
 import warnings
@@ -23,6 +24,7 @@ class NeuralNetworkPotential(nn.Module):
         representation: nn.Module,
         input_modules: List[nn.Module] = None,
         output_modules: List[nn.Module] = None,
+        use_cueq: bool = False,
     ) -> None:
         """ Base class for neural network potentials.
         
@@ -32,6 +34,8 @@ class NeuralNetworkPotential(nn.Module):
             output_modules (List[nn.Module], optional): Output modules. Defaults to None.
         """
         super().__init__()
+
+        set_use_cueq(use_cueq)
         self.representation = representation
         self.input_modules = nn.ModuleList(input_modules)
         self.output_modules = CallbackModuleList(output_modules, on_register_callback=self.register_callbacks)

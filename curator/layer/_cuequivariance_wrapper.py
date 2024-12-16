@@ -51,12 +51,19 @@ if IS_CUET_AVAILABLE:
                 yield O3_e3nn(l=l, p=1 * (-1) ** l)
                 yield O3_e3nn(l=l, p=-1 * (-1) ** l)
 
-    LAYOUT = cue.mul_ir
-    GROUP = O3_e3nn
+    CUEQ_LAYOUT = cue.mul_ir
+    CUEQ_GROUP = O3_e3nn
 
 else:
     warnings.warn("cuequivariance is not available. Cuequivariance acceleration will be disabled.")
-    
+
+# set up a global flag to enable or disable cuequivariance
+USE_CUEQ_GLOBAL = IS_CUET_AVAILABLE
+def set_use_cueq(value: bool):
+    """Set global flag for using cueq."""
+    global USE_CUEQ_GLOBAL
+    USE_CUEQ_GLOBAL = value
+
 class Linear:
     """Returns an e3nn linear layer or cueq linear layer"""
     def __new__(
@@ -69,11 +76,11 @@ class Linear:
         *args,
         **kwargs,
     ):
-        if IS_CUET_AVAILABLE and use_cueq:
+        if IS_CUET_AVAILABLE and use_cueq and USE_CUEQ_GLOBAL:
             instance = cuet.Linear(
-                cue.Irreps(GROUP, irreps_in), 
-                cue.Irreps(GROUP, irreps_out),
-                layout=LAYOUT,
+                cue.Irreps(CUEQ_GROUP, irreps_in), 
+                cue.Irreps(CUEQ_GROUP, irreps_out),
+                layout=CUEQ_LAYOUT,
                 shared_weights=shared_weights,
                 optimize_fallback=True,
                 *args, 
@@ -110,12 +117,12 @@ class TensorProduct:
         *args,
         **kwargs,
     ):
-        if IS_CUET_AVAILABLE and use_cueq:
+        if IS_CUET_AVAILABLE and use_cueq and USE_CUEQ_GLOBAL:
             instance = cuet.ChannelWiseTensorProduct(
-                cue.Irreps(GROUP, irreps_in1),
-                cue.Irreps(GROUP, irreps_in2),
-                cue.Irreps(GROUP, irreps_out),
-                layout=LAYOUT,
+                cue.Irreps(CUEQ_GROUP, irreps_in1),
+                cue.Irreps(CUEQ_GROUP, irreps_in2),
+                cue.Irreps(CUEQ_GROUP, irreps_out),
+                layout=CUEQ_LAYOUT,
                 shared_weights=shared_weights,
                 internal_weights=internal_weights,
             )
@@ -154,12 +161,12 @@ class FullyConnectedTensorProduct:
         *args,
         **kwargs,
     ):
-        if IS_CUET_AVAILABLE and use_cueq:
+        if IS_CUET_AVAILABLE and use_cueq and USE_CUEQ_GLOBAL:
             instance = cuet.FullyConnectedTensorProduct(
-                cue.Irreps(GROUP, irreps_in1),
-                cue.Irreps(GROUP, irreps_in2),
-                cue.Irreps(GROUP, irreps_out),
-                layout=LAYOUT,
+                cue.Irreps(CUEQ_GROUP, irreps_in1),
+                cue.Irreps(CUEQ_GROUP, irreps_in2),
+                cue.Irreps(CUEQ_GROUP, irreps_out),
+                layout=CUEQ_LAYOUT,
                 shared_weights=shared_weights,
                 internal_weights=internal_weights,
                 optimize_fallback=True,
@@ -198,12 +205,12 @@ class SymmetricContractionWrapper:
         *args,
         **kwargs,
     ):
-        if IS_CUET_AVAILABLE and use_cueq:
+        if IS_CUET_AVAILABLE and use_cueq and USE_CUEQ_GLOBAL:
             instance = cuet.SymmetricContraction(
-                cue.Irreps(GROUP, irreps_in),
-                cue.Irreps(GROUP, irreps_out),
+                cue.Irreps(CUEQ_GROUP, irreps_in),
+                cue.Irreps(CUEQ_GROUP, irreps_out),
                 layout_in=cue.ir_mul,
-                layout_out=LAYOUT,
+                layout_out=CUEQ_LAYOUT,
                 contraction_degree=correlation,
                 num_elements=num_elements,
                 original_mace=True,
@@ -214,7 +221,7 @@ class SymmetricContractionWrapper:
             )
 
             instance.original_forward = instance.forward
-            instance.layout = LAYOUT
+            instance.layout = CUEQ_LAYOUT
             
             def cuet_forward(
                 self, x: torch.Tensor, attrs: torch.Tensor
