@@ -103,6 +103,9 @@ def train(config: DictConfig) -> None:
         # Initiate the model from scratch
         model = hydra.utils.instantiate(config.model)
 
+    if config.compile:
+        model = torch.compile(model)
+
     log.debug(f"Instantiating task <{config.task._target_}>")
     # load optimizers and schedulers or not
     if config.task.load_weights_only:
