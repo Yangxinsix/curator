@@ -64,6 +64,28 @@ def set_use_cueq(value: bool):
     global USE_CUEQ_GLOBAL
     USE_CUEQ_GLOBAL = value
 
+# monkey-patching EquivariantTensorProduct for torch.jit.script
+# Keep a reference to the original class
+OriginalETP = cuet.EquivariantTensorProduct
+
+class EquivariantTensorProductWrapper(torch.nn.Module):
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        # Instantiate the original EquivariantTensorProduct
+        self.etp = OriginalETP(*args, **kwargs)
+    
+    def forward(
+        self,
+        x: torch.Tensor,
+        # Adjust signature as needed based on what Linear actually calls
+        indices: Optional[torch.Tensor] = None,
+        use_fallback: Optional[bool] = None,
+    ) -> torch.Tensor:
+        # Call original forward with a fixed interface:
+        # If the original forward uses *inputs or keyword-only args,
+        # adapt them here to a stable signature.
+        return self.etp.forward(x, indices=indices, use_fallback=use_fallback)
+
 class Linear:
     """Returns an e3nn linear layer or cueq linear layer"""
     def __new__(
@@ -77,7 +99,7 @@ class Linear:
         **kwargs,
     ):
         if IS_CUET_AVAILABLE and use_cueq and USE_CUEQ_GLOBAL:
-            instance = cuet.Linear(
+            return cuet.Linear(
                 cue.Irreps(CUEQ_GROUP, irreps_in), 
                 cue.Irreps(CUEQ_GROUP, irreps_out),
                 layout=CUEQ_LAYOUT,
@@ -86,13 +108,6 @@ class Linear:
                 *args, 
                 **kwargs,
             )
-            instance.original_forward = instance.forward
-
-            def cuet_forward(self, x: torch.Tensor) -> torch.Tensor:
-                return self.original_forward(x, use_fallback=True)
-            
-            instance.forward = types.MethodType(cuet_forward, instance)
-            return instance
 
         return o3.Linear(
             irreps_in,
@@ -118,7 +133,7 @@ class TensorProduct:
         **kwargs,
     ):
         if IS_CUET_AVAILABLE and use_cueq and USE_CUEQ_GLOBAL:
-            instance = cuet.ChannelWiseTensorProduct(
+            return cuet.ChannelWiseTensorProduct(
                 cue.Irreps(CUEQ_GROUP, irreps_in1),
                 cue.Irreps(CUEQ_GROUP, irreps_in2),
                 cue.Irreps(CUEQ_GROUP, irreps_out),
@@ -126,15 +141,6 @@ class TensorProduct:
                 shared_weights=shared_weights,
                 internal_weights=internal_weights,
             )
-            instance.original_forward = instance.forward
-
-            def cuet_forward(
-                self, x: torch.Tensor, y: torch.Tensor, z: torch.Tensor
-            ) -> torch.Tensor:
-                return self.original_forward(x, y, z, use_fallback=None)
-
-            instance.forward = types.MethodType(cuet_forward, instance)
-            return instance
 
         return o3.TensorProduct(
             irreps_in1,
@@ -162,7 +168,7 @@ class FullyConnectedTensorProduct:
         **kwargs,
     ):
         if IS_CUET_AVAILABLE and use_cueq and USE_CUEQ_GLOBAL:
-            instance = cuet.FullyConnectedTensorProduct(
+            return cuet.FullyConnectedTensorProduct(
                 cue.Irreps(CUEQ_GROUP, irreps_in1),
                 cue.Irreps(CUEQ_GROUP, irreps_in2),
                 cue.Irreps(CUEQ_GROUP, irreps_out),
@@ -173,15 +179,6 @@ class FullyConnectedTensorProduct:
                 *args,
                 **kwargs,
             )
-            instance.original_forward = instance.forward
-
-            def cuet_forward(
-                self, x: torch.Tensor, attrs: torch.Tensor
-            ) -> torch.Tensor:
-                return self.original_forward(x, attrs, use_fallback=True)
-
-            instance.forward = types.MethodType(cuet_forward, instance)
-            return instance
 
         return o3.FullyConnectedTensorProduct(
             irreps_in1,
@@ -209,6 +206,7 @@ class SymmetricContractionWrapper:
             instance = cuet.SymmetricContraction(
                 cue.Irreps(CUEQ_GROUP, irreps_in),
                 cue.Irreps(CUEQ_GROUP, irreps_out),
+                layout=CUEQ_LAYOUT,
                 layout_in=cue.ir_mul,
                 layout_out=CUEQ_LAYOUT,
                 contraction_degree=correlation,
@@ -232,9 +230,8 @@ class SymmetricContractionWrapper:
                 return self.original_forward(
                     x.flatten(1),
                     index_attrs,
-                    use_fallback=None,
                 )
-
+            
             instance.forward = types.MethodType(cuet_forward, instance)
             return instance
         
