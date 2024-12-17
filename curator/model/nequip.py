@@ -42,6 +42,7 @@ class NequipModel(torch.nn.Module):
         nonlinearity_scalars: Dict[int, Callable] = {"e": "ssp", "o": "tanh"},
         nonlinearity_gates: Dict[int, Callable] = {"e": "ssp", "o": "abs"},
         convolution_kwargs: dict = {},
+        use_cueq: bool = False,
         **kwargs,
     ) -> None:
         """Nequip model.
@@ -71,6 +72,9 @@ class NequipModel(torch.nn.Module):
         self.num_features = num_features
         self.lmax = lmax
         self.parity = parity
+        if use_cueq:
+            from curator.layer._cuequivariance_wrapper import set_use_cueq
+            set_use_cueq(use_cueq)
         
         if num_elements is None:
             num_elements = len(species) if species is not None else 119

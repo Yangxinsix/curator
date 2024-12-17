@@ -58,33 +58,11 @@ else:
     warnings.warn("cuequivariance is not available. Cuequivariance acceleration will be disabled.")
 
 # set up a global flag to enable or disable cuequivariance
-USE_CUEQ_GLOBAL = IS_CUET_AVAILABLE
+USE_CUEQ_GLOBAL = False
 def set_use_cueq(value: bool):
     """Set global flag for using cueq."""
     global USE_CUEQ_GLOBAL
     USE_CUEQ_GLOBAL = value
-
-# monkey-patching EquivariantTensorProduct for torch.jit.script
-# Keep a reference to the original class
-OriginalETP = cuet.EquivariantTensorProduct
-
-class EquivariantTensorProductWrapper(torch.nn.Module):
-    def __init__(self, *args, **kwargs):
-        super().__init__()
-        # Instantiate the original EquivariantTensorProduct
-        self.etp = OriginalETP(*args, **kwargs)
-    
-    def forward(
-        self,
-        x: torch.Tensor,
-        # Adjust signature as needed based on what Linear actually calls
-        indices: Optional[torch.Tensor] = None,
-        use_fallback: Optional[bool] = None,
-    ) -> torch.Tensor:
-        # Call original forward with a fixed interface:
-        # If the original forward uses *inputs or keyword-only args,
-        # adapt them here to a stable signature.
-        return self.etp.forward(x, indices=indices, use_fallback=use_fallback)
 
 class Linear:
     """Returns an e3nn linear layer or cueq linear layer"""

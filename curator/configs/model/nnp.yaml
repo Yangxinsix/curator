@@ -2,7 +2,6 @@ defaults:
   - representation: painn
 _convert_: all
 _target_: curator.model.NeuralNetworkPotential
-use_cueq: False
 input_modules:
   - _target_: curator.layer.PairwiseDistance
     compute_neighbor_list: True

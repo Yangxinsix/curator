@@ -104,6 +104,7 @@ def train(config: DictConfig) -> None:
         model = hydra.utils.instantiate(config.model)
 
     if config.compile:
+        log.debug("Compiling model with torch.compile")
         model = torch.compile(model)
 
     log.debug(f"Instantiating task <{config.task._target_}>")
