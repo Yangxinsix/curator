@@ -99,24 +99,21 @@ def train(config: DictConfig) -> None:
             model = instantiate(config.model)
             model.load_state_dict(new_state_dict, strict=False)      # in case frequent model structure revision
             outputs = instantiate(config.task.outputs)
-            
-        log.debug(f"Instantiating task <{config.task._target_}>")
-        # load optimizers and schedulers or not
-        if config.task.load_weights_only:
-            task = instantiate(config.task, model=model)
-        else:
-            task = LitNNP.load_from_checkpoint(
-                checkpoint_path=config.model_path, 
-                model=model, 
-                outputs=outputs,
-                strict=False,
-            )
     else:
-        # Initiate the model
+        # Initiate the model from scratch
         model = hydra.utils.instantiate(config.model)
-        # Initiate the task and load old model, if any
-        log.debug(f"Instantiating task <{config.task._target_}>")
-        task: LitNNP = hydra.utils.instantiate(config.task, model=model)
+
+    log.debug(f"Instantiating task <{config.task._target_}>")
+    # load optimizers and schedulers or not
+    if config.task.load_weights_only:
+        task: LitNNP = instantiate(config.task, model=model)
+    else:
+        task = LitNNP.load_from_checkpoint(
+            checkpoint_path=config.model_path, 
+            model=model, 
+            outputs=outputs,
+            strict=False,
+        )
 
     log.debug(f"Instantiating model {type(model)} with GNN representation {type(model.representation)}")
 
