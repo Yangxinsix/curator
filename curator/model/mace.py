@@ -51,6 +51,7 @@ class MACE(nn.Module):
         num_basis: int = 8,
         power: int = 6,
         gate: Union[str, Callable] = 'silu',
+        use_cueq: bool = False,
         **kwargs,
     ) -> None:
         """MACE model.
@@ -77,6 +78,10 @@ class MACE(nn.Module):
         
         self.cutoff = cutoff
         self.parity = parity
+        if use_cueq:
+            from curator.layer._cuequivariance_wrapper import set_use_cueq
+            set_use_cueq(use_cueq)
+
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions
 
