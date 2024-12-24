@@ -73,7 +73,7 @@ void PairCurator::init_style(){
     error->all(FLERR,"Pair style curator requires atom IDs");
 
   // need a full neighbor list
-  neighbor->add_request(this, NeighConst::REQ_FULL | NeighConst::REQ_GHOST);
+  neighbor->add_request(this, NeighConst::REQ_FULL);
 
   // TODO: I think Newton should be off, enforce this.
   // The network should just directly compute the total forces
@@ -305,8 +305,8 @@ void PairCurator::compute(int eflag, int vflag){
   // get virial
   auto it = output.find("virial");
   if (it != output.end()) {
-    torch::Tensor virial_tensor = output.at("virial").toTensor().cpu();
-    auto pred_virials = virial_tensor.accessor<double, 1>();
+    torch::Tensor virial_tensor = output.at("virial").toTensor().squeeze().cpu();
+    auto pred_virials = virial_tensor.accessor<float, 1>();
     // curator uses Voigt notation for virial tensors: xx,yy,zz,yz,xz,xy. lammps: xx,yy,zz,xy,xz,yz
     virial[0] = pred_virials[0];
     virial[1] = pred_virials[1];
