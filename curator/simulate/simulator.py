@@ -27,94 +27,6 @@ class BaseSimulator(ABC):
     def run(self):
         pass
 
-class LammpsSimulator(BaseSimulator):
-    def __init__(
-        self,
-        init_traj: str,
-        start_index: int = -1,
-        out_traj: str = 'MD.traj',
-        uncertain_traj: Optional[str] = 'warning_struct.traj',
-        lammps_input: str = 'in.lammps',
-        masses: bool=True,
-        units: str='metal',
-        atom_style: str='atomic',
-        lammps_output: Union[str, List[str]] = 'dump.lammps',
-        uncertain_output: Union[str, List[str], None] = None, 
-        specorder: Optional[List[int]] = None,       # type to species mapping
-        shell_commands: str = 'lmp -in in.lammps',
-        *args,
-        **kwargs,
-    ):
-        super().__init__()
-        self.init_traj = init_traj
-        self.start_index = start_index
-        self.out_traj = out_traj
-        self.uncertain_traj = uncertain_traj
-        self.masses = masses
-        self.units = units
-        self.atom_style = atom_style
-        self.lammps_input = lammps_input
-        self.lammps_output = lammps_output
-        self.shell_commands = shell_commands
-        self.uncertain_output = uncertain_output
-        self.specorder = list(specorder) if specorder is not None else None
-        
-        self.logger = logging.getLogger(__name__)
-
-    def setup_atoms(self):
-        if not os.path.isfile(self.init_traj):
-            raise RuntimeError("Please provide valid initial data path!")
-        
-        images = read_trajectory(self.init_traj)
-        start_index = np.random.choice(len(images)) if self.start_index is None else self.start_index
-        self.logger.info(f'Simulation starts from No.{start_index} configuration in {self.init_traj}')
-        self.atoms = images[start_index]
-
-    def configure_atoms(self):
-        from ase.io import write
-        if not os.path.isfile(self.lammps_input):
-            raise RuntimeError(f"Please provide {self.lammps_input} for running Lammps!")
-        else:
-            shutil.copy(self.lammps_input, './in.lammps')
-        write('in.data', self.atoms, format='lammps-data', masses=self.masses, units=self.units, atom_style=self.atom_style)
-
-    def run(self):
-        from ase.io import write
-        from lammps import lammps
-
-        self.setup_atoms()
-        self.configure_atoms()
-
-        try:
-            lmp = lammps()
-            lmp.file('in.lammps')
-        except:
-            self.logger.info('Running LAMMPS from python failed! Try to run from CMD.')
-
-            try:
-                import subprocess
-                # TODO: redirect output to stdout and log file
-                # for handler in self.logger.handlers:
-                #     if isinstance(logging.FileHandler, handler):
-                #         log_path = handler.baseFilename
-
-                # proc = subprocess.Popen(self.shell_commands, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-                # with open(log_path, 'a') as f:
-                #     for line in proc.stdout:
-                #         sys.stdout.write(line)
-                #         f.write(line)
-                subprocess.run(self.shell_commands, shell=True)
-            except:
-                self.logger.info('Running LAMMPS from CMD failed! Check your simulation!')
-        finally:
-            images = read_trajectory(self.lammps_output, specorder=self.specorder)
-            write(self.out_traj, images)
-            self.logger.info('Saving LAMMPS simulation trajectory to {}'.format(self.out_traj))
-            if self.uncertain_output is not None:
-                uncertain_images = read_trajectory(self.uncertain_output, specorder=self.specorder)
-                write(self.uncertain_traj, uncertain_images)
-                self.logger.info('Saving uncertain simulation trajectory to {}'.format(self.uncertain_traj))
-
 class MDSimulator(BaseSimulator):
     def __init__(
             self, 
@@ -206,3 +118,109 @@ class MDSimulator(BaseSimulator):
 
         # run MD
         self.dynamics.run(self.max_steps)
+
+
+class LammpsSimulator(BaseSimulator):
+    def __init__(
+        self,
+        init_traj: str,
+        start_index: int = -1,
+        out_traj: str = 'MD.traj',
+        uncertain_traj: Optional[str] = 'warning_struct.traj',
+        lammps_input: str = 'in.lammps',
+        masses: bool=True,
+        units: str='metal',
+        atom_style: str='atomic',
+        lammps_output: Union[str, List[str]] = 'dump.lammps',
+        uncertain_output: Union[str, List[str], None] = None, 
+        specorder: Optional[List[int]] = None,       # type to species mapping
+        shell_commands: str = 'lmp -in in.lammps',
+        *args,
+        **kwargs,
+    ):
+        super().__init__()
+        self.init_traj = init_traj
+        self.start_index = start_index
+        self.out_traj = out_traj
+        self.uncertain_traj = uncertain_traj
+        self.masses = masses
+        self.units = units
+        self.atom_style = atom_style
+        self.lammps_input = lammps_input
+        self.lammps_output = lammps_output
+        self.shell_commands = shell_commands
+        self.uncertain_output = uncertain_output
+        self.specorder = list(specorder) if specorder is not None else None
+        
+        self.logger = logging.getLogger(__name__)
+
+    def setup_atoms(self):
+        if not os.path.isfile(self.init_traj):
+            raise RuntimeError("Please provide valid initial data path!")
+        
+        images = read_trajectory(self.init_traj)
+        start_index = np.random.choice(len(images)) if self.start_index is None else self.start_index
+        self.logger.info(f'Simulation starts from No.{start_index} configuration in {self.init_traj}')
+        self.atoms = images[start_index]
+
+    def configure_atoms(self):
+        from ase.io import write
+        if not os.path.isfile(self.lammps_input):
+            raise RuntimeError(f"Please provide {self.lammps_input} for running Lammps!")
+        else:
+            shutil.copy(self.lammps_input, './in.lammps')
+        write('in.data', self.atoms, format='lammps-data', masses=self.masses, units=self.units, atom_style=self.atom_style)
+        
+        # guess atom types and mapping them into lammps input.
+        if self.masses:
+            species = sorted(set(self.atoms.get_chemical_symbols()))
+            from ase.data import atomic_numbers
+            self.specorder = [atomic_numbers[s] for s in species]
+            with open('in.data', 'r') as f:
+                lines = f.readlines()
+            
+            for i, line in enumerate(lines):
+                l_striped = line.rstrip('\n')
+                if 'pair_coeff' in l_striped:
+                    l_striped = l_striped.rstrip("0123456789 ")
+                    lines[i] = l_striped + ' ' + ' '.join([str(s) for s in self.specorder]) + '\n'
+
+            with open('in.data', 'w') as f:
+                f.writelines(lines)
+
+    def run(self):
+        from ase.io import write
+        from lammps import lammps
+
+        self.setup_atoms()
+        self.configure_atoms()
+
+        try:
+            lmp = lammps()
+            lmp.file('in.lammps')
+        except:
+            self.logger.info('Running LAMMPS from python failed! Try to run from CMD.')
+
+            try:
+                import subprocess
+                # TODO: redirect output to stdout and log file
+                # for handler in self.logger.handlers:
+                #     if isinstance(logging.FileHandler, handler):
+                #         log_path = handler.baseFilename
+
+                # proc = subprocess.Popen(self.shell_commands, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+                # with open(log_path, 'a') as f:
+                #     for line in proc.stdout:
+                #         sys.stdout.write(line)
+                #         f.write(line)
+                subprocess.run(self.shell_commands, shell=True)
+            except:
+                self.logger.info('Running LAMMPS from CMD failed! Check your simulation!')
+        finally:
+            images = read_trajectory(self.lammps_output, specorder=self.specorder)
+            write(self.out_traj, images)
+            self.logger.info('Saving LAMMPS simulation trajectory to {}'.format(self.out_traj))
+            if self.uncertain_output is not None:
+                uncertain_images = read_trajectory(self.uncertain_output, specorder=self.specorder)
+                write(self.uncertain_traj, uncertain_images)
+                self.logger.info('Saving uncertain simulation trajectory to {}'.format(self.uncertain_traj))
