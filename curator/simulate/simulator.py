@@ -133,7 +133,7 @@ class LammpsSimulator(BaseSimulator):
         atom_style: str='atomic',
         lammps_output: Union[str, List[str]] = 'dump.lammps',
         uncertain_output: Union[str, List[str], None] = None, 
-        specorder: Optional[List[int]] = None,       # type to species mapping
+        specorder: Union[List[int], List[str], None] = None,       # type to species mapping
         shell_commands: str = 'lmp -in in.lammps',
         *args,
         **kwargs,
@@ -165,17 +165,26 @@ class LammpsSimulator(BaseSimulator):
 
     def configure_atoms(self):
         from ase.io import write
+        from ase.data import atomic_numbers, chemical_symbols
         if not os.path.isfile(self.lammps_input):
             raise RuntimeError(f"Please provide {self.lammps_input} for running Lammps!")
         else:
             shutil.copy(self.lammps_input, './in.lammps')
-        write('in.data', self.atoms, format='lammps-data', masses=self.masses, units=self.units, atom_style=self.atom_style)
-        
+
+        # specorder must be str when writing lammps-data, while being int when read lammps dump files
+        if self.specorder is not None:
+            specorder = [chemical_symbols[s] if isinstance(s, int) else s for s in self.specorder]
+            self.specorder = [atomic_numbers[s] if isinstance(s, str) else s for s in self.specorder]
+        else:
+            specorder = None
+        specorder = [chemical_symbols[s] if isinstance(s, int) else s for s in self.specorder] if self.specorder is not None else self.specorder
+        write('in.data', self.atoms, format='lammps-data', specorder=specorder, masses=self.masses, units=self.units, atom_style=self.atom_style)
+
         # guess atom types and mapping them into lammps input.
-        if self.masses:
-            species = sorted(set(self.atoms.get_chemical_symbols()))
-            from ase.data import atomic_numbers
-            self.specorder = [atomic_numbers[s] for s in species]
+        if self.masses or self.specorder is not None:
+            if self.specorder is None:
+                species = sorted(set(self.atoms.get_chemical_symbols()))
+                self.specorder = [atomic_numbers[s] for s in species]
             with open('in.data', 'r') as f:
                 lines = f.readlines()
             
