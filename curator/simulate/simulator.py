@@ -181,21 +181,20 @@ class LammpsSimulator(BaseSimulator):
         write('in.data', self.atoms, format='lammps-data', specorder=specorder, masses=self.masses, units=self.units, atom_style=self.atom_style)
 
         # guess atom types and mapping them into lammps input.
-        if self.masses or self.specorder is not None:
-            if self.specorder is None:
-                species = sorted(set(self.atoms.get_chemical_symbols()))
-                self.specorder = [atomic_numbers[s] for s in species]
-            with open('in.data', 'r') as f:
-                lines = f.readlines()
-            
-            for i, line in enumerate(lines):
-                l_striped = line.rstrip('\n')
-                if 'pair_coeff' in l_striped:
-                    l_striped = l_striped.rstrip("0123456789 ")
-                    lines[i] = l_striped + ' ' + ' '.join([str(s) for s in self.specorder]) + '\n'
+        if self.specorder is None:
+            species = sorted(set(self.atoms.get_chemical_symbols()))
+            self.specorder = [atomic_numbers[s] for s in species]
+        with open('in.lammps', 'r') as f:
+            lines = f.readlines()
+        
+        for i, line in enumerate(lines):
+            l_striped = line.rstrip('\n')
+            if 'pair_coeff' in l_striped:
+                l_striped = l_striped.rstrip("0123456789 ")
+                lines[i] = l_striped + ' ' + ' '.join([str(s) for s in self.specorder]) + '\n'
 
-            with open('in.data', 'w') as f:
-                f.writelines(lines)
+        with open('in.lammps', 'w') as f:
+            f.writelines(lines)
 
     def run(self):
         from ase.io import write
