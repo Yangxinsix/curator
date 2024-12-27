@@ -39,7 +39,7 @@ class EnsembleModel(nn.Module):
 
         if self.compute_uncertainty:
             if properties.image_idx not in data:
-                data[properties.image_idx] = torch.zeros(data[properties.n_atoms].size(0), dtype=data[properties.edge_idx].dtype, device=data[properties.edge_idx].device)
+                data[properties.image_idx] = torch.zeros(data[properties.n_atoms].item(), dtype=data[properties.edge_idx].dtype, device=data[properties.edge_idx].device)
             result_dict[properties.e_max] = torch.max(model_outputs[properties.energy]).unsqueeze(-1)
             result_dict[properties.e_min] = torch.min(model_outputs[properties.energy]).unsqueeze(-1)
             result_dict[properties.e_var] = torch.var(model_outputs[properties.energy], dim=0)
@@ -50,7 +50,7 @@ class EnsembleModel(nn.Module):
         if properties.energy in data:
             # calculate errors
             if properties.image_idx not in data:
-                data[properties.image_idx] = torch.zeros(data[properties.n_atoms].size(0), dtype=data[properties.edge_idx].dtype, device=data[properties.edge_idx].device)
+                data[properties.image_idx] = torch.zeros(data[properties.n_atoms].item(), dtype=data[properties.edge_idx].dtype, device=data[properties.edge_idx].device)
             e_diff = result_dict[properties.energy] - data[properties.energy]
             f_diff = result_dict[properties.forces] - data[properties.forces]
             result_dict[properties.e_ae] = torch.abs(e_diff)
