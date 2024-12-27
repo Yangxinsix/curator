@@ -2,7 +2,7 @@ from abc import abstractmethod
 import torch
 from torch import nn
 import numpy as np
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Union
 from . import properties
 from ._transform import Transform
 import sys, warnings
@@ -16,56 +16,6 @@ try:
     from matscipy.neighbours import neighbour_list
 except ModuleNotFoundError:
     warnings.warn("Failed to import matscipy module for fast neighborlist")
-
-
-def wrap_positions(positions: torch.Tensor, cell: torch.Tensor, eps: float=1e-7) -> torch.Tensor:
-    """Wrap positions into the unit cell"""
-    # wrap atoms outside of the box
-    scaled_pos = positions @ torch.linalg.inv(cell) + eps
-    scaled_pos %= 1.0
-    scaled_pos -= eps
-    return scaled_pos @ cell
-
-class BatchNeighborList(nn.Module):
-    """Batch neighbor list"""
-    def __init__(self, cutoff: float, requires_grad: bool =True, wrap_atoms: bool =True, return_distance: bool=True) -> None:
-        """Batch neighbor list
-        
-        Args:
-            cutoff (float): Cutoff radius
-            requires_grad (bool, optional): Whether to calculate gradients. Defaults to True.
-            wrap_atoms (bool, optional): Whether to wrap atoms into the unit cell. Defaults to True.
-        """
-        super().__init__()
-        self.requires_grad = requires_grad
-        self.return_distance = return_distance
-        self.torch_nl = TorchNeighborList(cutoff, requires_grad=requires_grad, wrap_atoms=wrap_atoms, return_distance=return_distance)
-    
-    def forward(self, data: properties.Type) -> properties.Type:
-        if self.requires_grad:
-            data[properties.positions].requires_grad_()
-        num_offset = torch.zeros_like(data[properties.n_atoms])
-        num_offset[1:] = data[properties.n_atoms][:-1]
-        num_offset = torch.cumsum(num_offset, dim=0)
-        batch_pairs, batch_pair_diff, batch_pair_dist = [], [], []
-        for i, num_atoms in enumerate(data[properties.n_atoms]):
-            atoms_dict = {
-                properties.R: data[properties.positions][num_offset[i]:num_offset[i]+num_atoms],
-            }
-            if properties.cell in data:
-                atoms_dict[properties.cell] = data[properties.cell][i*3: (i+1)*3]
-            atoms_dict = self.torch_nl(atoms_dict)
-            batch_pairs.append(atoms_dict[properties.edge_idx] + num_offset[i])
-            batch_pair_diff.append(atoms_dict[properties.edge_diff])
-            if self.return_distance:
-                batch_pair_dist.append(atoms_dict[properties.edge_dist])
-
-        data[properties.edge_idx] = torch.cat(batch_pairs)
-        data[properties.edge_diff] = torch.cat(batch_pair_diff)
-        if self.return_distance:
-            data[properties.edge_dist] = torch.cat(batch_pair_dist)
-        
-        return data
 
 class NeighborListTransform(Transform):
     """
@@ -115,6 +65,14 @@ class NeighborListTransform(Transform):
         }
         return outputs
 
+
+def wrap_positions(positions: torch.Tensor, cell: torch.Tensor, eps: float=1e-7) -> torch.Tensor:
+    """Wrap positions into the unit cell"""
+    # wrap atoms outside of the box
+    scaled_pos = positions @ torch.linalg.inv(cell) + eps
+    scaled_pos %= 1.0
+    scaled_pos -= eps
+    return scaled_pos @ cell
 
 class TorchNeighborList(NeighborListTransform):
     """Neighbor list implemented via PyTorch. The correctness is verified by comparing results to ASE and asap3.
@@ -319,3 +277,61 @@ class MatScipyNeighborList(NeighborListTransform):
     
     def __repr__(self):
         return f"{self.__class__.__name__}(cutoff={self.cutoff}, return_distance={self.return_distance}, return_cell_displacements={self.return_cell_displacements})"
+    
+
+class BatchNeighborList(nn.Module):
+    """Batch neighbor list"""
+    def __init__(
+        self, 
+        cutoff: float, 
+        requires_grad: bool=False, 
+        return_distance: bool=False,
+        neighbor_list: Union[NeighborListTransform, str] = 'MatScipy',
+    ) -> None:
+        """Batch neighbor list
+        
+        Args:
+            cutoff (float): Cutoff radius
+            requires_grad (bool, optional): Whether to calculate gradients. Defaults to True.
+            wrap_atoms (bool, optional): Whether to wrap atoms into the unit cell. Defaults to True.
+        """
+        super().__init__()
+        self.requires_grad = requires_grad
+        self.return_distance = return_distance
+        if isinstance(neighbor_list, str):
+            if neighbor_list == 'MatScipy':
+                self.neighbor_list = MatScipyNeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance)
+            if neighbor_list == 'Torch':
+                self.neighbor_list = TorchNeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance, wrap_atoms=True)
+            if neighbor_list == 'Asap3':
+                self.neighbor_list = Asap3NeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance)
+            else:
+                raise ValueError(f"Unknown neighbor list method: {neighbor_list}")
+        else:
+            self.neighbor_list = neighbor_list
+    
+    def forward(self, data: properties.Type) -> properties.Type:
+        if self.requires_grad:
+            data[properties.positions].requires_grad_()
+        num_offset = torch.zeros_like(data[properties.n_atoms])
+        num_offset[1:] = data[properties.n_atoms][:-1]
+        num_offset = torch.cumsum(num_offset, dim=0)
+        batch_pairs, batch_pair_diff, batch_pair_dist = [], [], []
+        for i, num_atoms in enumerate(data[properties.n_atoms]):
+            atoms_dict = {
+                properties.R: data[properties.positions][num_offset[i]:num_offset[i]+num_atoms],
+            }
+            if properties.cell in data:
+                atoms_dict[properties.cell] = data[properties.cell][i*3: (i+1)*3]
+            atoms_dict = self.neighbor_list(atoms_dict)
+            batch_pairs.append(atoms_dict[properties.edge_idx] + num_offset[i])
+            batch_pair_diff.append(atoms_dict[properties.edge_diff])
+            if self.return_distance:
+                batch_pair_dist.append(atoms_dict[properties.edge_dist])
+
+        data[properties.edge_idx] = torch.cat(batch_pairs)
+        data[properties.edge_diff] = torch.cat(batch_pair_diff)
+        if self.return_distance:
+            data[properties.edge_dist] = torch.cat(batch_pair_dist)
+        
+        return data
