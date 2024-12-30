@@ -303,7 +303,7 @@ def evaluate(config: DictConfig):
 
     # Load the arguments
     if config.cfg is not None:
-        config = read_user_config(config.cfg, config_path="configs", config_name="simulate")
+        config = read_user_config(config.cfg, config_path="configs", config_name="evaluate")
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
