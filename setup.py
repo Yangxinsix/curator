@@ -17,6 +17,7 @@ setup(
         "scripts/curator-train",
         "scripts/curator-tmptrain",
         "scripts/curator-simulate",
+        "scripts/curator-evaluate",
         "scripts/curator-select",
         "scripts/curator-label",
         "scripts/curator-deploy",
