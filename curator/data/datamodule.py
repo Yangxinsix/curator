@@ -243,8 +243,8 @@ class AtomsDataModule(pl.LightningDataModule):
         self._val_dataset = self._val_dataset or torch.utils.data.Subset(self.dataset, self.val_idx)
         self._test_dataset = self._test_dataset or torch.utils.data.Subset(self.dataset, self.test_idx) if self.num_test != 0 else None
 
-    def _get_species(self) -> Optional[List[str]]:
-        if self.species == "auto":
+    def _get_species(self, force_process=False) -> Optional[List[str]]:
+        if self.species == "auto" or force_process:
             numbers = []
             for sample in self.train_dataset:
                 numbers.append(torch.unique(sample[properties.Z]))
@@ -274,7 +274,7 @@ class AtomsDataModule(pl.LightningDataModule):
         returns dictionary of E0s
         """
         if self.atomic_energies == "auto":
-            numbers = [atomic_numbers[s] for s in self._get_species()]
+            numbers = [atomic_numbers[s] for s in self._get_species(force_process=True)]
             num_elements = len(numbers)
             len_train = len(self.train_dataset)
             A = torch.zeros((len_train, num_elements))

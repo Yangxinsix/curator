@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 
+- Now cuequivariance is supported in CURATOR!
 - Add new license as the code is transferred from original repository.
 - Add feature extractor things to extract features from model and calculate mahalanobis distance with provided dataset.
 

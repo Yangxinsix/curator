@@ -99,24 +99,25 @@ def train(config: DictConfig) -> None:
             model = instantiate(config.model)
             model.load_state_dict(new_state_dict, strict=False)      # in case frequent model structure revision
             outputs = instantiate(config.task.outputs)
-            
-        log.debug(f"Instantiating task <{config.task._target_}>")
-        # load optimizers and schedulers or not
-        if config.task.load_weights_only:
-            task = instantiate(config.task, model=model)
-        else:
-            task = LitNNP.load_from_checkpoint(
-                checkpoint_path=config.model_path, 
-                model=model, 
-                outputs=outputs,
-                strict=False,
-            )
     else:
-        # Initiate the model
+        # Initiate the model from scratch
         model = hydra.utils.instantiate(config.model)
-        # Initiate the task and load old model, if any
-        log.debug(f"Instantiating task <{config.task._target_}>")
-        task: LitNNP = hydra.utils.instantiate(config.task, model=model)
+
+    if config.compile:
+        log.debug("Compiling model with torch.compile")
+        model = torch.compile(model)
+
+    log.debug(f"Instantiating task <{config.task._target_}>")
+    # load optimizers and schedulers or not
+    if config.task.load_weights_only:
+        task: LitNNP = instantiate(config.task, model=model)
+    else:
+        task = LitNNP.load_from_checkpoint(
+            checkpoint_path=config.model_path, 
+            model=model, 
+            outputs=outputs,
+            strict=False,
+        )
 
     log.debug(f"Instantiating model {type(model)} with GNN representation {type(model.representation)}")
 
@@ -293,6 +294,41 @@ def deploy(
     log.info(f"Deploying compiled model at <{target_path}> from <{model_path}>")
     if return_model:
         return model_compiled
+
+@hydra.main(config_path="configs", config_name="evaluate", version_base=None)
+def evaluate(config: DictConfig):
+    from .utils import load_models
+    from curator.model import EnsembleModel
+    from curator.simulate import MLCalculator
+
+    # Load the arguments
+    if config.cfg is not None:
+        config = read_user_config(config.cfg, config_path="configs", config_name="evaluate")
+
+    # Save yaml file in run_path
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
+
+    # set logger
+    fh = logging.FileHandler(os.path.join(config.run_path, "predict.log"), mode="w")
+    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
+    fh.setLevel(logging.DEBUG)
+    log.addHandler(fh)
+    log.info("Running on host: " + str(socket.gethostname()))
+
+    # Load model. Uses a compiled model, if any, otherwise a uncompiled model
+    log.info("Using model from <{}>".format(config.model_path))
+    if config.deploy is not None:
+        model = deploy(
+            config.model_path, 
+            load_weights_only=config.deploy.load_weights_only,
+            return_model=True,
+        )
+    else:
+        model = load_models(config.model_path, config.device)
+        model = EnsembleModel(model) if len(model) > 1 else model[0]
+    
+    evaluator = instantiate(config.evaluator, model=model)
+    evaluator.evaluate(config.datapath)
 
 # Simulate with the model
 @hydra.main(config_path="configs", config_name="simulate", version_base=None)

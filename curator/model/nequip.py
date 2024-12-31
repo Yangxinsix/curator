@@ -15,6 +15,7 @@ from curator.layer import (
     SphericalHarmonicEdgeAttrs,
     InteractionLayer,
 )
+from curator.layer._cuequivariance_wrapper import Linear
 
 from typing import OrderedDict, Dict, List, Optional, Union, Callable, Type
 from functools import partial
@@ -143,7 +144,7 @@ class NequipModel(torch.nn.Module):
         if isinstance(readout, AtomwiseNN):
             self.readout = readout
         else:
-            self.readout = readout(self.irreps_in[properties.node_feat], use_e3nn=True)
+            self.readout = readout(self.irreps_in[properties.node_feat])
         
     def forward(self, data: properties.Type) -> properties.Type:        
         for m in self.embeddings.values():
