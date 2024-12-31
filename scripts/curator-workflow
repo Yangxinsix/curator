@@ -82,10 +82,22 @@ def train(
             job_resources = cfg.pop('resources')
 
             # TODO: load old model
-            if iteration > 0:
-                model_path = cfg.pop('load_model', None)           # load_specific model
-                old_model_path = Path(train_path) / f'iter_{iteration-1}' / name / 'model_path'
-                cfg.model_path = model_path or str(old_model_path.resolve())
+            if iteration > start_iteration:
+                load_model = cfg.pop('load_model', True)           # load_specific model
+                if isinstance(load_model, bool):
+                    if load_model:
+                        model_path = Path(train_path) / f'iter_{iteration-1}' / name / 'model_path'
+                        model_path = str(model_path.resolve())
+                    else:
+                        model_path = None
+                elif load_model is None:
+                    model_path = None
+                elif isinstance(load_model, str):
+                    model_path = load_model
+                else:
+                    raise ValueError("Invalid value for load_model!")
+                
+                cfg.model_path = model_path
 
             # save config file
             OmegaConf.save(cfg, run_path / 'train.yaml', resolve=False)
@@ -140,7 +152,7 @@ def simulate(
             # TODO: load old model, init_traj, load compiled model
             cfg.model_path = model_path
             # load user specified arguments: read_traj, image_index
-            if iteration > 0:
+            if iteration > start_iteration:
                 init_traj = cfg.simulator.pop('read_traj', cfg.simulator.out_traj.replace(f'iter_{iteration}', f'iter_{iteration-1}'))   #use traj from last iteration if no new traj is specified
                 start_index = cfg.simulator.pop('image_index', -1)  # use last image if not specified
                 cfg.simulator.init_traj = init_traj

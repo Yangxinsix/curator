@@ -3,6 +3,12 @@ from torch import nn
 from curator.data import properties
 from e3nn.util.jit import compile_mode
 from e3nn import o3
+from ._cuequivariance_wrapper import (
+    Linear,
+    TensorProduct,
+    FullyConnectedTensorProduct,
+    SymmetricContractionWrapper,
+)
 from e3nn.nn import FullyConnectedNet
 from .utils import (
     tp_out_irreps_with_instructions,
@@ -14,7 +20,6 @@ try:
 except ImportError:
     from curator.utils import scatter_add
 from typing import Optional, Callable, Tuple
-from ._symmetric_contraction import SymmetricContraction
 
 @compile_mode("script")
 class EquivariantProductBasisBlock(torch.nn.Module):
@@ -29,14 +34,14 @@ class EquivariantProductBasisBlock(torch.nn.Module):
         super().__init__()
 
         self.use_sc = use_sc
-        self.symmetric_contractions = SymmetricContraction(
+        self.symmetric_contractions = SymmetricContractionWrapper(
             irreps_in=node_feats_irreps,
             irreps_out=target_irreps,
             correlation=correlation,
             num_elements=num_elements,
         )
         # Update linear
-        self.linear = o3.Linear(
+        self.linear = Linear(
             target_irreps,
             target_irreps,
             internal_weights=True,
@@ -75,7 +80,7 @@ class RealAgnosticInteractionBlock(torch.nn.Module):
         self.register_buffer("avg_num_neighbors", avg_num_neighbors)
         
         # First linear
-        self.linear_up = o3.Linear(
+        self.linear_up = Linear(
             self.irreps_in[properties.node_feat],
             self.irreps_in[properties.node_feat],
             internal_weights=True,
@@ -88,7 +93,7 @@ class RealAgnosticInteractionBlock(torch.nn.Module):
             self.target_irreps,
         )
         
-        self.conv_tp = o3.TensorProduct(
+        self.conv_tp = TensorProduct(
             self.irreps_in[properties.node_feat],
             self.irreps_in[properties.edge_diff_embedding],
             irreps_mid,
@@ -107,12 +112,12 @@ class RealAgnosticInteractionBlock(torch.nn.Module):
         # Linear
         irreps_mid = irreps_mid.simplify()
         self.irreps_out = self.target_irreps
-        self.linear = o3.Linear(
+        self.linear = Linear(
             irreps_mid, self.irreps_out, internal_weights=True, shared_weights=True
         )
         
         # Selector TensorProduct
-        self.skip_tp = o3.FullyConnectedTensorProduct(
+        self.skip_tp = FullyConnectedTensorProduct(
             self.irreps_out,
             self.irreps_in[properties.node_attr], 
             self.irreps_out,
@@ -169,7 +174,7 @@ class RealAgnosticResidualInteractionBlock(torch.nn.Module):
         self.register_buffer("avg_num_neighbors", avg_num_neighbors) 
 
         # First linear
-        self.linear_up = o3.Linear(
+        self.linear_up = Linear(
             self.irreps_in[properties.node_feat],
             self.irreps_in[properties.node_feat],
             internal_weights=True,
@@ -182,7 +187,7 @@ class RealAgnosticResidualInteractionBlock(torch.nn.Module):
             self.target_irreps,
         )
         
-        self.conv_tp = o3.TensorProduct(
+        self.conv_tp = TensorProduct(
             self.irreps_in[properties.node_feat],
             self.irreps_in[properties.edge_diff_embedding],
             irreps_mid,
@@ -201,12 +206,12 @@ class RealAgnosticResidualInteractionBlock(torch.nn.Module):
         # Linear
         irreps_mid = irreps_mid.simplify()
         self.irreps_out = self.target_irreps
-        self.linear = o3.Linear(
+        self.linear = Linear(
             irreps_mid, self.irreps_out, internal_weights=True, shared_weights=True
         )
 
         # Selector TensorProduct
-        self.skip_tp = o3.FullyConnectedTensorProduct(
+        self.skip_tp = FullyConnectedTensorProduct(
             self.irreps_in[properties.node_feat], 
             self.irreps_in[properties.node_attr],
             self.hidden_irreps,

@@ -19,6 +19,7 @@ from curator.layer import (
     RealAgnosticInteractionBlock,
     EquivariantProductBasisBlock,
 )
+from curator.layer._cuequivariance_wrapper import Linear
 from curator.data import properties
 from typing import List, Optional, Dict, Union, Callable, Type
 
@@ -79,6 +80,7 @@ class MACE(nn.Module):
         
         self.cutoff = cutoff
         self.parity = parity
+
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions
 

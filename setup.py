@@ -5,7 +5,7 @@ with open("README.md", "r") as f:
 
 setup(
     name="curator-torch",
-    version="1.1.1",
+    version="1.1.2",
     short_description="Library for implementation of message passing neural networks in Pytorch",
     long_description=long_description,
     author="xinyang",
@@ -17,6 +17,7 @@ setup(
         "scripts/curator-train",
         "scripts/curator-tmptrain",
         "scripts/curator-simulate",
+        "scripts/curator-evaluate",
         "scripts/curator-select",
         "scripts/curator-label",
         "scripts/curator-deploy",

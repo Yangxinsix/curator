@@ -139,7 +139,7 @@ def cat_tensors(tensors: List[torch.Tensor]) -> torch.Tensor:
 
 def collate_atomsdata(atoms_data: List[dict], pin_memory=True) -> Dict:
     # convert from list of dicts to dict of lists
-    dict_of_lists = {k: [dic[k] for dic in atoms_data] for k in atoms_data[0]}
+    dict_of_lists = {k: [dic[k] if k in dic else torch.tensor([]) for dic in atoms_data] for k in atoms_data[0]}
     if pin_memory:
         pin = lambda x: x.pin_memory()
     else:

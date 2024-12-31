@@ -1,0 +1,16 @@
+run_path: .
+cfg: null
+model_path: null
+datapath: null
+deploy: null
+device: cuda
+
+evaluator:
+  _target_: curator.simulate.evaluator.Evaluator
+  data_reader:
+    _target_: curator.data.AseDataReader
+    _partial_: True
+    compute_neighbor_list: True
+    transforms: []
+  save_data: False
+  plot_figure: True

@@ -16,6 +16,7 @@ try:
 except ImportError:
     from curator.utils import scatter_add, scatter_mean
 
+logger = logging.getLogger(__name__)    # console output
 class NeuralNetworkPotential(nn.Module):
     """ Base class for neural network potentials."""
     def __init__(
@@ -23,6 +24,7 @@ class NeuralNetworkPotential(nn.Module):
         representation: nn.Module,
         input_modules: List[nn.Module] = None,
         output_modules: List[nn.Module] = None,
+        use_cueq: bool = False,
     ) -> None:
         """ Base class for neural network potentials.
         
@@ -32,6 +34,7 @@ class NeuralNetworkPotential(nn.Module):
             output_modules (List[nn.Module], optional): Output modules. Defaults to None.
         """
         super().__init__()
+
         self.representation = representation
         self.input_modules = nn.ModuleList(input_modules)
         self.output_modules = CallbackModuleList(output_modules, on_register_callback=self.register_callbacks)
@@ -122,7 +125,6 @@ class CallbackModuleList(nn.ModuleList):
             self.on_register_callback(module)
         super().__setitem__(idx, module)
 
-logger = logging.getLogger(__name__)    # console output
 # ligtning model
 class LitNNP(pl.LightningModule):
     """ Base class for neural network potentials using PyTorch Lightning."""

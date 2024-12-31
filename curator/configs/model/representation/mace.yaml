@@ -13,3 +13,4 @@ num_features: 32             # will be inferred from hidden_irreps
 num_basis: 8
 power: 6
 gate: silu
+use_cueq: False

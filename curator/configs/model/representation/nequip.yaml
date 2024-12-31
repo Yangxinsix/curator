@@ -8,3 +8,4 @@ num_basis: 8
 power: 6
 lmax: 2
 parity: True
+use_cueq: False
