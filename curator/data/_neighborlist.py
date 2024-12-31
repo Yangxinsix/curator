@@ -298,12 +298,13 @@ class BatchNeighborList(nn.Module):
         super().__init__()
         self.requires_grad = requires_grad
         self.return_distance = return_distance
+        self.neighbor_list = neighbor_list
         if isinstance(neighbor_list, str):
             if neighbor_list == 'MatScipy':
                 self.neighbor_list = MatScipyNeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance)
-            if neighbor_list == 'Torch':
+            elif neighbor_list == 'Torch':
                 self.neighbor_list = TorchNeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance, wrap_atoms=True)
-            if neighbor_list == 'Asap3':
+            elif neighbor_list == 'Asap3':
                 self.neighbor_list = Asap3NeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance)
             else:
                 raise ValueError(f"Unknown neighbor list method: {neighbor_list}")
