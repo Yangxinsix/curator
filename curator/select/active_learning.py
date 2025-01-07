@@ -407,7 +407,7 @@ class GeneralActiveLearning:
         elif self.selection == 'max_det_greedy_local':
             idxs = max_det_greedy_local(matrix=matrix, batch_size=al_batch_size, num_atoms=num_atoms)
         elif self.selection == False:
-            pass
+            idxs = torch.tensor([0])
         else:
             raise NotImplementedError(f"Unknown selection method '{self.selection}' for active learning!")
         
