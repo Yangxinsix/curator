@@ -406,6 +406,8 @@ class GeneralActiveLearning:
             idxs = lcmd_greedy(matrix=matrix, batch_size=al_batch_size, n_train=n_train)
         elif self.selection == 'max_det_greedy_local':
             idxs = max_det_greedy_local(matrix=matrix, batch_size=al_batch_size, num_atoms=num_atoms)
+        elif self.selection == False:
+            pass
         else:
             raise NotImplementedError(f"Unknown selection method '{self.selection}' for active learning!")
         
