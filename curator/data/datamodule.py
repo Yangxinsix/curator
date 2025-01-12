@@ -42,6 +42,8 @@ class AtomsDataModule(pl.LightningDataModule):
         atomic_energies: Union[Dict[int, float], Dict[str, float], None, str] = "auto",
         normalization: bool = True,
         atomwise_normalization: bool = True,
+        scale_by: Union[float, List[float], None] = None,
+        shift_by: Union[float, List[float], None] = None,
         scale_forces: bool = False,             # scale forces by forces_rms
         default_dtype: torch.dtype = torch.get_default_dtype(),
     ) -> None:
@@ -95,8 +97,8 @@ class AtomsDataModule(pl.LightningDataModule):
         self.species = species
         self.avg_num_neighbors = avg_num_neighbors
         self.atomic_energies = atomic_energies
-        self.mean = None
-        self.std = None
+        self.mean = shift_by
+        self.std = scale_by
         
     def setup(self, stage: Optional[str] = None) -> None:
         if self._train_dataset is None:

@@ -71,7 +71,7 @@ class Evaluator:
     def plot(self):
         for k in self.labels:
             labels, predicts = np.concatenate(self.labels[k]).flatten(), np.concatenate(self.predicts[k]).flatten()
-            plt.plot(labels, predicts)
+            plt.scatter(labels, predicts)
             ax = plt.gca()
             ax.plot([0, 1], [0, 1], transform=ax.transAxes, linestyle='--', color='k')
             plt.xlabel('DFT')

@@ -135,7 +135,7 @@ class GlobalRescaleShift(torch.nn.Module):
     def __repr__(self):
         atomic_energies_dict = {chemical_symbols[i]: self.atomic_energies[i] for i in self.atomic_energies.nonzero().squeeze().cpu().numpy()}
         return (f"{self.__class__.__name__}(scale_by={self.scale_by}, shift_by={self.shift_by}"
-            f", shift_by_E0={self.shift_by_E0}, atomic_energies={atomic_energies_dict}" if self.shift_by_E0 else ""
+            f", shift_by_E0={self.shift_by_E0}, atomic_energies={atomic_energies_dict}"
             f", scale_keys={self.scale_keys}, shift_keys={self.shift_keys}, atomwise_normalization={self.atomwise_normalization})"
         )
             

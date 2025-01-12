@@ -278,7 +278,7 @@ class MatScipyNeighborList(NeighborListTransform):
     def __repr__(self):
         return f"{self.__class__.__name__}(cutoff={self.cutoff}, return_distance={self.return_distance}, return_cell_displacements={self.return_cell_displacements})"
     
-
+# TODO: optimize batch neighbor list
 class BatchNeighborList(nn.Module):
     """Batch neighbor list"""
     def __init__(
@@ -312,8 +312,8 @@ class BatchNeighborList(nn.Module):
             self.neighbor_list = neighbor_list
     
     def forward(self, data: properties.Type) -> properties.Type:
-        if self.requires_grad:
-            data[properties.positions].requires_grad_()
+        # if self.requires_grad:
+        #     data[properties.positions].requires_grad_()
         num_offset = torch.zeros_like(data[properties.n_atoms])
         num_offset[1:] = data[properties.n_atoms][:-1]
         num_offset = torch.cumsum(num_offset, dim=0)
