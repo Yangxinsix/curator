@@ -1,9 +1,14 @@
 from ._atomwise_nn import AtomwiseNN
 from ._ewald import EwaldSummation
+from curator.data import properties
 from typing import Union, Type, Optional
 from functools import partial
 import torch
 from torch import nn
+try:
+    from torch_scatter import scatter_add
+except ImportError:
+    from curator.utils import scatter_add
 
 class ChargeEquilibration(nn.Module):
     """This class implements charge equilibration scheme by calculating Ewald summation and residual energy.
