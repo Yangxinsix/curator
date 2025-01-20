@@ -146,12 +146,23 @@ class NequipModel(torch.nn.Module):
         else:
             self.readout = readout(self.irreps_in[properties.node_feat])
         
-    def forward(self, data: properties.Type) -> properties.Type:        
+    def forward(self, data: properties.Type) -> properties.Type:
+        # add mask for local interaction part
+        edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
+        mask = edge_dist < self.cutoff
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
+
         for m in self.embeddings.values():
             data = m(data)
+        
+        data[properties.node_embedding] = data[properties.node_feat]        # store node embedding for some modules (charge equilibration)
             
         for m in self.interactions:
             data = m(data)
         
         data = self.readout(data)
+
+        # restore neighbor list
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx, edge_diff, edge_dist
+        
         return data

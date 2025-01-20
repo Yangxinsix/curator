@@ -22,7 +22,7 @@ class AtomsDataModule(pl.LightningDataModule):
         train_path: Union[List[str], str, None] = None,
         val_path: Union[List[str], str, None] = None,
         test_path: Union[List[str], str, None] = None,
-        cutoff: Optional[float] = None,
+        cutoff: Optional[float] = None,        # cutoff must be larger than the largest cutoff that needed in the model (i.e., different modules may need different cutoff)
         compute_neighbor_list: bool = True,
         val_batch_size: Optional[int] = None,
         test_batch_size: Optional[int] = None,
@@ -164,7 +164,14 @@ class AtomsDataModule(pl.LightningDataModule):
         elif data_type == 'BambooDataset':
             from .dataset import BambooDataset
             dataset = BambooDataset(datapath)
-        
+        elif data_type == 'Sqlite3Dataset':
+            from .sql_database import Sqlite3Dataset
+            dataset = Sqlite3Dataset(
+                datapath,
+                cutoff=self.cutoff,
+                compute_neighbor_list=self.compute_neighbor_list,
+                transforms=self.transforms,
+            )
         return dataset
 
     @property

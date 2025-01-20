@@ -132,7 +132,7 @@ class AtomwiseNN(nn.Module):
                 self.output_specs.append(OutputSpec(
                     key=spec,
                     per_atom=False,
-                    aggregation_mode='mean',
+                    aggregation_mode='sum',
                     per_atom_key=spec + '_pa',
                     split_size=1, 
                 ))
@@ -142,16 +142,20 @@ class AtomwiseNN(nn.Module):
                 self.output_specs.append(OutputSpec(
                     key=spec['key'],
                     per_atom=spec.get('per_atom', False),
-                    aggregation_mode=spec.get('aggregation_mode', 'mean'),
+                    aggregation_mode=spec.get('aggregation_mode', 'sum'),
                     per_atom_key=spec.get('per_atom_key', spec['key'] + '_pa'),
                     split_size=spec.get('split_size', 1),
                 ))
+
+        self.model_outputs = [spec.key for spec in self.output_specs]
         self.split_size: List[int] = [spec.split_size for spec in self.output_specs]
         assert sum(self.split_size) == n_out, "The dimensionality of output features does not match number of output keys!"
 
     def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
         out = self.readout_mlp(input)
-        
+        return out
+
+    def _parse_outputs(self, out: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
         out = out.split(self.split_size, dim=1)
         output_dict: Dict[str, torch.Tensor] = {}
         for i, spec in enumerate(self.output_specs):
@@ -170,6 +174,8 @@ class AtomwiseNN(nn.Module):
                     output_dict[key] = scatter_add(prop, index, dim=0) if index is not None else torch.sum(prop, dim=0)
                 if aggregation_mode == 'mean':
                     output_dict[key] = scatter_mean(prop, index, dim=0) if index is not None else torch.mean(prop, dim=0)
+                if aggregation_mode == 'None':
+                    output_dict[key] = prop
             else:
                 output_dict[key] = prop       # output as is
 
@@ -182,7 +188,9 @@ class AtomwiseNN(nn.Module):
         input = data[properties.node_feat]
         index = data[properties.image_idx]
         
-        data.update(self._compute(input, index))
+        out = self._compute(input)
+        output_dict = self._parse_outputs(out, index)
+        data.update(output_dict)
 
         return data
 
@@ -249,26 +257,4 @@ class MACEAtomwiseNN(AtomwiseNN):
             out_list.append(readout(node_feat))
     
         out = torch.sum(torch.stack(out_list, dim=0), dim=0)
-
-        out = out.split(self.split_size, dim=1)
-        output_dict: Dict[str, torch.Tensor] = {}
-        for i, spec in enumerate(self.output_specs):
-            prop = out[i].squeeze()
-            key = spec[0]
-            per_atom = spec[1]
-            aggregation_mode = spec[2]
-            per_atom_key = spec[3]
-
-            # per-atom property
-            if per_atom:
-                output_dict[per_atom_key] = prop
-            
-            if aggregation_mode is not None:
-                if aggregation_mode == 'sum':
-                    output_dict[key] = scatter_add(prop, index, dim=0) if index is not None else torch.sum(prop, dim=0)
-                if aggregation_mode == 'mean':
-                    output_dict[key] = scatter_mean(prop, index, dim=0) if index is not None else torch.mean(prop, dim=0)
-            else:
-                output_dict[key] = prop       # output as is
-
-        return output_dict
+        return out

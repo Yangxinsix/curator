@@ -36,6 +36,8 @@ atomic_charge: Final[str] = "atomic_charge"
 dipole: Final[str] = "dipole"
 total_magmom: Final[str] = "total_magmom"
 atomic_energy: Final[str] = "atomic_energy"
+fermi_level: Final[str] = "fermi_level"
+residual_forces: Final[str] = "_residual_forces"     # residual forces from chi and hardness, this is meaningless
 
 # uncertainties
 e_var: Final[str] = "energy_var"      # energy variance
@@ -60,9 +62,10 @@ energy_uncertainty: Final[str] = "energy_uncertainty"
 forces_uncertainty: Final[str] = "forces_uncertainty"
 
 # node and edge feature keys (for nequip and mace)
-edge_diff_embedding: Final[str] = "_edge_diff_embedding"
-edge_dist_embedding: Final[str] = "_edge_dist_embedding"
-node_attr: Final[str] = "_node_attribute"
+edge_diff_embedding: Final[str] = "_edge_diff_embedding"        # this will not change during forward once generated
+edge_dist_embedding: Final[str] = "_edge_dist_embedding"        # this will not change during forward once generated
+node_embedding: Final[str] = "_node_embedding"                  # this is typically generated from node embedding block in the model, and will not change once generated
+node_attr: Final[str] = "_node_attribute"                       # this will not change during forward once generated
 node_feat: Final[str] = "_node_feature"
 node_vect: Final[str] = "_node_vector"
 sc: Final[str] = "_skip_connection"

@@ -196,12 +196,17 @@ class MACE(nn.Module):
                 self.readout = readout(num_interactions=num_interactions, hidden_irreps=self.hidden_irreps)
             
     def forward(self, data: properties.Type) -> properties.Type:
-        # node_e0 = self.reference_energies[data[properties.Z]]
-        # e0 = scatter_add(node_e0, data[properties.image_idx])
+        # add mask for local interaction part
+        edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
+        mask = edge_dist < self.cutoff
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
+
+        
         for m in self.embeddings.values():
             data = m(data)
         
-        node_es_list = []
+        data[properties.node_embedding] = data[properties.node_feat]        # store node embedding for some modules (charge equilibration)
+        
         node_feat = data[properties.node_feat]
         node_feat_list = []
         
@@ -227,5 +232,8 @@ class MACE(nn.Module):
 
         # get properties
         data = self.readout(data)
+
+        # restore neighbor list
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx, edge_diff, edge_dist
         
         return data

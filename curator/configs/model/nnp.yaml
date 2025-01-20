@@ -6,8 +6,7 @@ input_modules:
   - _target_: curator.layer.PairwiseDistance
     compute_neighbor_list: True
     compute_distance_from_R: False
-    cutoff: ${data.cutoff}
+    cutoff: ${...representation.cutoff}            # cutoff is not always the same to cutoff in data now
 output_modules:
-  - _target_: curator.layer.AtomwiseReduce
   - _target_: curator.layer.GradientOutput
   - _target_: curator.layer.GlobalRescaleShift
