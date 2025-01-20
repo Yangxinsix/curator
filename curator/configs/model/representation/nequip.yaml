@@ -1,5 +1,5 @@
 _target_ : curator.model.NequipModel
-cutoff: ${data.cutoff}
+cutoff: 5.0
 num_interactions: 3
 num_features: 32
 num_elements: null

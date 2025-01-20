@@ -71,8 +71,14 @@ class PainnModel(nn.Module):
         self, 
         data: properties.Type,
     ) -> properties.Type:
+        # add mask for local interaction part
+        edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
+        mask = edge_dist < self.cutoff
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
+
         total_atoms = int(torch.sum(data[properties.n_atoms]))
         data[properties.node_feat] = self.atom_embedding(data[properties.Z])
+        data[properties.node_embedding] = data[properties.node_feat]        # store node embedding for some modules (charge equilibration)
         data[properties.node_vect] = torch.zeros(
             (total_atoms, 3, self.num_features),
             device=data[properties.edge_diff].device,
@@ -84,5 +90,8 @@ class PainnModel(nn.Module):
             data = update_layer(data)
         
         data = self.readout(data)
-        
+
+        # restore neighbor list
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx, edge_diff, edge_dist
+
         return data

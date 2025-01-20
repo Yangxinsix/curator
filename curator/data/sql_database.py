@@ -240,7 +240,7 @@ class QMDatabase:
     #         for atomic_number, atomic_ch, pos, force in zip(atomic_numbers, atomic_charge, positions, forces):
     #             file.write('{0} {1: 11.6f} {2: 11.6f} {3: 11.6f} {4: 11.6f} {5: 11.6f} {6: 11.6f} {7: 11.6f}\n'.format(chemical_symbols[atomic_number], atomic_ch, *pos, *force))
 
-class AseDatabase(QMDatabase, torch.utils.data.Dataset):
+class Sqlite3Dataset(QMDatabase, torch.utils.data.Dataset):
     def __init__(
             self,
             filename, 
