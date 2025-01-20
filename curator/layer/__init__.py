@@ -2,6 +2,8 @@ from ._atomic_linear import AtomwiseLinear, AtomwiseNonLinear
 from ._atomwise_reduce import AtomwiseReduce
 from ._atomwise_nn import AtomwiseNN, MACEAtomwiseNN
 from ._convnet import ConvNetLayer
+from ._charge_equilibration import ChargeEquilibration
+from ._ewald import EwaldSummation
 from ._grad_output import GradientOutput
 from ._nequip_interaction import InteractionLayer
 from ._mace_interaction import (
@@ -40,6 +42,8 @@ __all__ = [
     AtomwiseNN,
     MACEAtomwiseNN,
     ConvNetLayer,
+    ChargeEquilibration,
+    EwaldSummation,
     InteractionLayer,
     EquivariantProductBasisBlock,
     RealAgnosticInteractionBlock,
