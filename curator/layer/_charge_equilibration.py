@@ -1,7 +1,7 @@
 from ._atomwise_nn import AtomwiseNN
 from ._ewald import EwaldSummation
 from curator.data import properties
-from typing import Union, Type, Optional
+from typing import Union, Type, Optional, List
 from functools import partial
 import torch
 from torch import nn
@@ -29,6 +29,7 @@ class ChargeEquilibration(nn.Module):
         ewald: Union[EwaldSummation, Type[EwaldSummation], partial] = EwaldSummation,
         compute_forces: bool = True,
         constant_potential: bool = False,
+        model_outputs: List[str] = ['residual_forces', 'atomic_charge'],
         *args,
         **kwargs,
     ):
@@ -62,6 +63,7 @@ class ChargeEquilibration(nn.Module):
         
         self.compute_forces = compute_forces
         self.constant_potential = constant_potential
+        self.model_outputs = model_outputs
 
     def forward(self, data: properties.Type, training: bool=True) -> properties.Type:
         chi = self.electronegativity_mlp._compute(data[properties.node_embedding]).squeeze()
@@ -81,22 +83,33 @@ class ChargeEquilibration(nn.Module):
         # calculate ewald energy, total energy = local + ewald + residual
         ewald_energy = self.ewald(data)
         data[properties.energy] += ewald_energy + residual_energy
+        data[properties.ewald_energy] = ewald_energy
 
         # calculate residual forces, total force = local + residual, residual forces should be zero under strict charge equilibration scheme
         if self.compute_forces:
+            grad_outputs : List[Optional[torch.Tensor]] = [torch.ones_like(ewald_energy)]
             ewald_forces = torch.autograd.grad(
                 ewald_energy,
                 data[properties.positions],
+                grad_outputs=grad_outputs,
                 retain_graph=training,
                 create_graph=training,
             )
+            ewald_forces = torch.zeros_like(data[properties.positions]) if ewald_forces is None else ewald_forces[0]   # for torch.jit.script
+            assert ewald_forces is not None
+
             residual_forces = torch.autograd.grad(
                 residual_energy,
                 data[properties.positions],
+                grad_outputs=grad_outputs,
                 retain_graph=training,
                 create_graph=training,
             )
-            data[properties.forces] += ewald_forces[0]
-            data[properties.residual_forces] = residual_forces[0]
+            residual_forces = torch.zeros_like(data[properties.positions]) if residual_forces is None else residual_forces[0]   # for torch.jit.script
+            assert residual_forces is not None
+
+            data[properties.ewald_forces] = ewald_forces
+            data[properties.forces] += ewald_forces
+            data[properties.residual_forces] = residual_forces
         
         return data

@@ -37,7 +37,9 @@ dipole: Final[str] = "dipole"
 total_magmom: Final[str] = "total_magmom"
 atomic_energy: Final[str] = "atomic_energy"
 fermi_level: Final[str] = "fermi_level"
-residual_forces: Final[str] = "_residual_forces"     # residual forces from chi and hardness, this is meaningless
+ewald_energy: Final[str] = "ewald_energy"
+ewald_forces: Final[str] = "ewald_forces"
+residual_forces: Final[str] = "residual_forces"     # residual forces from chi and hardness, this is meaningless
 
 # uncertainties
 e_var: Final[str] = "energy_var"      # energy variance
