@@ -15,7 +15,8 @@ class ModelOutput(nn.Module):
         loss_fn: Optional[nn.Module] = None,
         loss_weight: float = 1.0,
         metrics: Optional[Dict[str, Metric]] = None,
-        target_property: Optional[str]=None,
+        target_property: Optional[str] = None,
+        is_penalty: bool = False,
         # per_species_loss: bool=False,
         # per_species_metrics: bool=False,
     ) -> None:
@@ -31,30 +32,40 @@ class ModelOutput(nn.Module):
         super().__init__()
         self.name = name
         self.target_property = target_property or name
+        self.is_penalty = is_penalty
         self.loss_fn = loss_fn
         self.loss_weight = loss_weight
-        self.train_metrics = nn.ModuleDict(metrics)
-        self.val_metrics = nn.ModuleDict({k: copy.copy(v) for k, v in metrics.items()})
-        self.test_metrics = nn.ModuleDict({k: copy.copy(v) for k, v in metrics.items()})
-        
-        # here we found a serious bug that deepcopy is not working in hydra instantiate!!!
-        self.metrics = {
-            "train": self.train_metrics,
-            "val": self.val_metrics,
-            "test": self.test_metrics,
-        }
+        if metrics is not None:
+            self.train_metrics = nn.ModuleDict(metrics)
+            self.val_metrics = nn.ModuleDict({k: copy.copy(v) for k, v in metrics.items()})
+            self.test_metrics = nn.ModuleDict({k: copy.copy(v) for k, v in metrics.items()})
+            
+            # here we found a serious bug that deepcopy is not working in hydra instantiate!!!
+            self.metrics = {
+                "train": self.train_metrics,
+                "val": self.val_metrics,
+                "test": self.test_metrics,
+            }
+        else:
+            self.metrics = None
 
         self.loss = 0.0
         self.num_obs = 0
 
-    def calculate_loss(self, pred: Dict, target: Dict, return_num_obs=True) -> torch.Tensor:
-        if self.loss_weight == 0 or self.loss_fn is None:
+    def calculate_loss(self, pred: Dict, target: Optional[Dict] = None, return_num_obs=True) -> torch.Tensor:
+        if self.loss_weight == 0:
             return 0.0
 
-        loss = self.loss_weight * self.loss_fn(
-            pred[self.name], target[self.target_property]
-        )
-        num_obs = target[self.target_property].view(-1).shape[0]
+        if self.is_penalty:
+            loss = self.loss_weight * pred[self.name].square().mean()
+            num_obs = 1
+        elif self.loss_fn is not None:
+            loss = self.loss_weight * self.loss_fn(
+                pred[self.name], target[self.target_property]
+            )
+            num_obs = target[self.target_property].view(-1).shape[0]
+        else:
+            return 0.0
 
         self.loss += loss.item() * num_obs
         self.num_obs += num_obs
@@ -64,10 +75,21 @@ class ModelOutput(nn.Module):
         return loss
 
     def update_metrics(self, pred: Dict, target: Dict, subset: str) -> None:
+        # If metrics is None, do nothing
+        if self.metrics is None:
+            return
+        
+        # If the subset does not exist (e.g. "train", "val", "test"), skip
+        if subset not in self.metrics:
+            return
+        
         for metric in self.metrics[subset].values():
             metric(pred[self.name], target[self.target_property])
 
     def calculate_metrics(self, pred: Dict, target: Dict, subset: str) -> None:
+        if self.metrics is None:
+            return {}
+        
         batch_val = OrderedDict()
         for k in self.metrics[subset]:
             if isinstance(self.metrics[subset][k], AtomsMetric):
@@ -85,6 +107,9 @@ class ModelOutput(nn.Module):
         return loss
     
     def accumulate_metrics(self, subset):
+        if self.metrics is None or subset not in self.metrics:
+            return {}
+        
         all_metrics = {}
         for k, v in self.metrics[subset].items():
             all_metrics[k] = v.compute()
@@ -95,6 +120,9 @@ class ModelOutput(nn.Module):
         self.num_obs = 0
 
     def reset_metrics(self, subset: Optional[str]=None) -> None:
+        if self.metrics is None:
+            return
+        
         if subset is None:
             for k1 in self.metrics:
                 for k2 in self.metrics[k1]:

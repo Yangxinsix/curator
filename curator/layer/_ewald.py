@@ -92,7 +92,7 @@ class EwaldSummation(nn.Module):
 
         offset = 0
         E_recip_list = []
-        for c, n in zip(cell, num_atoms):
+        for c, n, p in zip(cell, num_atoms, prefactor):
             # get positions and volumes
             n = n.item()
             pos = positions[offset:offset+n]      # (N,3)
@@ -108,9 +108,9 @@ class EwaldSummation(nn.Module):
 
             # Damping factor exp(-k^2/(4 alpha^2))
             damping  = torch.exp(- k_sq / (4.0 * self.alpha ** 2))          # (M,)
-            E_recip_list.append(torch.sum(damping * rho_sq / k_sq, dim=-1))  # (N,)
+            E_recip_list.append(torch.sum(damping * rho_sq / k_sq, dim=-1) * p)  # (N,)
 
-        E_recip = prefactor * torch.concat(E_recip_list)
+        E_recip = torch.concat(E_recip_list)
         return E_recip * EwaldSummation.CONV_FACT
     
     def self_energy(self, atomic_charges) -> torch.Tensor: 

@@ -24,6 +24,7 @@ class NeuralNetworkPotential(nn.Module):
         representation: nn.Module,
         input_modules: List[nn.Module] = None,
         output_modules: List[nn.Module] = None,
+        model_outputs: List[str] = [],
         use_cueq: bool = False,
     ) -> None:
         """ Base class for neural network potentials.
@@ -38,7 +39,7 @@ class NeuralNetworkPotential(nn.Module):
         self.representation = representation
         self.input_modules = nn.ModuleList(input_modules)
         self.output_modules = CallbackModuleList(output_modules, on_register_callback=self.register_callbacks)
-        self.model_outputs: Optional[List[str]] = None
+        self.model_outputs = model_outputs
         self._initialized: bool = False
         self.collect_outputs()
         self.register_callbacks()
@@ -62,13 +63,12 @@ class NeuralNetworkPotential(nn.Module):
         self._initialized = True
     
     def collect_outputs(self) -> None:
-        self.model_outputs = None
         model_outputs = set()
         for m in self.modules():
             if hasattr(m, "model_outputs") and m.model_outputs is not None:
                 model_outputs.update(m.model_outputs)
         model_outputs: List[str] = list(model_outputs)
-        self.model_outputs = model_outputs
+        self.model_outputs = list(set(self.model_outputs + model_outputs))
     
     def extract_outputs(self, data: properties.Type) -> properties.Type:
         if 'all' in self.model_outputs:

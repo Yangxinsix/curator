@@ -261,7 +261,7 @@ class Sqlite3Dataset(QMDatabase, torch.utils.data.Dataset):
         
     def __getitem__(self, idx):
         cursor = self._get_connection(flags=apsw.SQLITE_OPEN_READONLY).cursor()
-        data = cursor.execute('''SELECT * FROM data WHERE id='''+str(idx)).fetchone()
+        data = cursor.execute('''SELECT * FROM data WHERE id='''+str(int(idx))).fetchone()
         atoms_data = self._unpack_data_tuple(data)
         atoms_data = self.dict_to_torch_tensors(atoms_data)
         # transform
