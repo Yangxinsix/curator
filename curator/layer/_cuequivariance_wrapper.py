@@ -82,7 +82,7 @@ class Linear:
                 cue.Irreps(CUEQ_GROUP, irreps_out),
                 layout=CUEQ_LAYOUT,
                 shared_weights=shared_weights,
-                optimize_fallback=True,
+                internal_weights=internal_weights,
                 *args, 
                 **kwargs,
             )
@@ -153,7 +153,6 @@ class FullyConnectedTensorProduct:
                 layout=CUEQ_LAYOUT,
                 shared_weights=shared_weights,
                 internal_weights=internal_weights,
-                optimize_fallback=True,
                 *args,
                 **kwargs,
             )
@@ -167,7 +166,42 @@ class FullyConnectedTensorProduct:
             *args,
             **kwargs,
         )
-    
+
+class CuetSymmetricContractionWrapper(torch.nn.Module):
+    def __init__(
+        self,
+        irreps_in,
+        irreps_out,
+        correlation,
+        num_elements=None,
+        *args,
+        **kwargs
+    ):
+        super().__init__()
+        self.sc = cuet.SymmetricContraction(
+            cue.Irreps(CUEQ_GROUP, irreps_in),
+            cue.Irreps(CUEQ_GROUP, irreps_out),
+            layout=CUEQ_LAYOUT,
+            layout_in=cue.ir_mul,
+            layout_out=CUEQ_LAYOUT,
+            contraction_degree=correlation,
+            num_elements=num_elements,
+            original_mace=True,
+            dtype=torch.get_default_dtype(),
+            math_dtype=torch.get_default_dtype(),
+            *args,
+            **kwargs,
+        )
+        self.layout = CUEQ_LAYOUT
+
+    def forward(self, x: torch.Tensor, attrs: torch.Tensor) -> torch.Tensor:
+        if self.layout == cue.mul_ir:
+            x = x.transpose(1, 2)
+        index_attrs = torch.nonzero(attrs)[:, 1].int()
+
+        # Because self.sc is the original instance, we call self.sc.forward.
+        return self.sc.forward(x.flatten(1), index_attrs)
+
 class SymmetricContractionWrapper:
     """Wrapper around SymmetricContraction/cuet.SymmetricContraction"""
     def __new__(
@@ -181,37 +215,9 @@ class SymmetricContractionWrapper:
         **kwargs,
     ):
         if IS_CUET_AVAILABLE and use_cueq and USE_CUEQ_GLOBAL:
-            instance = cuet.SymmetricContraction(
-                cue.Irreps(CUEQ_GROUP, irreps_in),
-                cue.Irreps(CUEQ_GROUP, irreps_out),
-                layout=CUEQ_LAYOUT,
-                layout_in=cue.ir_mul,
-                layout_out=CUEQ_LAYOUT,
-                contraction_degree=correlation,
-                num_elements=num_elements,
-                original_mace=True,
-                dtype=torch.get_default_dtype(),
-                math_dtype=torch.get_default_dtype(),
-                *args,
-                **kwargs,
+            return CuetSymmetricContractionWrapper(
+                irreps_in, irreps_out, correlation, num_elements, *args, **kwargs
             )
-
-            instance.original_forward = instance.forward
-            instance.layout = CUEQ_LAYOUT
-            
-            def cuet_forward(
-                self, x: torch.Tensor, attrs: torch.Tensor
-            ) -> torch.Tensor:
-                if self.layout == cue.mul_ir:
-                    x = torch.transpose(x, 1, 2)
-                index_attrs = torch.nonzero(attrs)[:, 1].int()
-                return self.original_forward(
-                    x.flatten(1),
-                    index_attrs,
-                )
-            
-            instance.forward = types.MethodType(cuet_forward, instance)
-            return instance
         
         return SymmetricContraction(
             irreps_in=irreps_in,

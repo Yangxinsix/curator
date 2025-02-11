@@ -16,7 +16,7 @@ from curator.layer import (
     RealAgnosticInteractionBlock,
     EquivariantProductBasisBlock,
 )
-from curator.layer._cuequivariance_wrapper import Linear
+from curator.layer._cuequivariance_wrapper import Linear, set_use_cueq
 from curator.data import properties
 from typing import List, Optional, Dict, Union, Callable, Type
 
@@ -79,8 +79,9 @@ class MACE(nn.Module):
         self.cutoff = cutoff
         self.parity = parity
         if use_cueq:
-            from curator.layer._cuequivariance_wrapper import set_use_cueq
-            set_use_cueq(use_cueq)
+            set_use_cueq(True)
+        else:
+            set_use_cueq(False)
 
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions
