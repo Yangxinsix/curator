@@ -6,6 +6,7 @@ import multiprocessing
 import torch
 from curator.data import properties, NeighborListTransform, Asap3NeighborList
 from ase.data import chemical_symbols, atomic_numbers
+from ase import units
 
 '''
 This is a class to store large amounts of ab initio reference data
@@ -333,13 +334,13 @@ def write_runner_to_db(path_to_input, db_path):
             atoms_data = {
                 properties.atomic_numbers: Z,
                 properties.pbc: PBC,
-                properties.positions: R,
-                properties.cell: C,
-                properties.energy: E,
-                properties.forces: F,
+                properties.positions: R * units.Bohr / units.Angstrom,
+                properties.cell: C * units.Bohr / units.Angstrom,
+                properties.energy: E * units.Hartree / units.eV,
+                properties.forces: F * (units.Hartree / units.Bohr) / (units.eV / units.Angstrom),
                 properties.total_charge: Q,
                 properties.atomic_charge: Q_a,
-                properties.dipole: D,
+                properties.dipole: D * units.Bohr / units.Angstrom,
             }
 
             db.add_data(atoms_data)
