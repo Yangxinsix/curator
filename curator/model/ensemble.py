@@ -13,10 +13,11 @@ class EnsembleModel(nn.Module):
     """
     Ensemble model for evaluating uncertainties
     """
-    def __init__(self, models: List[NeuralNetworkPotential]) -> None:
+    def __init__(self, models: List[NeuralNetworkPotential], per_atom_uncertainty: bool=False) -> None:
         super().__init__()
         self.models = nn.ModuleList([model for model in models])
         self.compute_uncertainty = True if len(models) > 1 else False
+        self.per_atom_uncertainty = per_atom_uncertainty
         self.model_outputs = []
         for model in self.models:
             for key in model.model_outputs:
@@ -49,7 +50,11 @@ class EnsembleModel(nn.Module):
             result_dict[properties.e_min] = torch.min(model_outputs_dict[properties.energy]).unsqueeze(-1)
             result_dict[properties.e_var] = torch.var(model_outputs_dict[properties.energy], dim=0)
             result_dict[properties.e_sd] = torch.std(model_outputs_dict[properties.energy], dim=0)
-            result_dict[properties.f_var] = scatter_mean(torch.var(model_outputs_dict[properties.forces], dim=0).mean(dim=1), data[properties.image_idx], dim=0)
+            if self.per_atom_uncertainty:
+                result_dict[properties.f_var] = torch.var(model_outputs_dict[properties.forces], dim=0).mean(dim=1)
+            else:
+                result_dict[properties.f_var] = scatter_mean(torch.var(model_outputs_dict[properties.forces], dim=0).mean(dim=1), data[properties.image_idx], dim=0)
+
             result_dict[properties.f_sd] = result_dict[properties.f_var].sqrt()
         
         if properties.energy in data:
