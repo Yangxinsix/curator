@@ -143,8 +143,8 @@ class GlobalRescaleShift(torch.nn.Module):
 class PerSpeciesRescaleShift(torch.nn.Module):
     def __init__(
         self,
-        scales: Dict[str, float] | Dict[int, float] | None = None,                            # standard deviation used to rescale output
-        shifts: Dict[str, float] | Dict[int, float] | None = None,                            # mean value used to shift output
+        scales: Union[Dict[str, float], Dict[int, float], None] = None,                            # standard deviation used to rescale output
+        shifts: Union[Dict[str, float], Dict[int, float], None] = None,                            # mean value used to shift output
         scales_trainable: bool=False,
         shifts_trainable: bool=False,
         scales_keys: List[str] = ["atomic_energy"],
