@@ -77,18 +77,25 @@ class PainnModel(nn.Module):
         data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
 
         total_atoms = int(torch.sum(data[properties.n_atoms]))
-        data[properties.node_feat] = self.atom_embedding(data[properties.Z])
-        data[properties.node_embedding] = data[properties.node_feat]        # store node embedding for some modules (charge equilibration)
-        data[properties.node_vect] = torch.zeros(
-            (total_atoms, 3, self.num_features),
-            device=data[properties.edge_diff].device,
-            dtype=data[properties.edge_diff].dtype,
+        node_scalar = self.atom_embedding(data[properties.Z])
+        node_vector = torch.zeros(
+            (total_atoms, self.num_features * 3),
+            device=edge_diff.device,
+            dtype=edge_diff.dtype,
         )
+        node_feat = torch.cat([node_scalar, node_vector], dim=-1)
+        data[properties.node_embedding] = node_scalar        # store node embedding for some modules (charge equilibration)
         
         for message_layer, update_layer in zip(self.message_layers, self.update_layers):
-            data = message_layer(data)
-            data = update_layer(data)
+            node_feat = message_layer(
+                node_feat,
+                edge_idx,
+                edge_dist,
+                edge_diff,
+            )
+            node_feat = update_layer(node_feat)
         
+        data[properties.node_feat] = node_feat
         data = self.readout(data)
 
         # restore neighbor list

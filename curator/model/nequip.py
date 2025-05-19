@@ -156,10 +156,18 @@ class NequipModel(torch.nn.Module):
             data = m(data)
         
         data[properties.node_embedding] = data[properties.node_feat]        # store node embedding for some modules (charge equilibration)
-            
-        for m in self.interactions:
-            data = m(data)
         
+        node_feat = data[properties.node_feat]
+        for interaction in self.interactions:
+            node_feat = interaction(
+                node_feat,
+                data[properties.node_attr],
+                data[properties.edge_idx], 
+                data[properties.edge_dist_embedding],
+                data[properties.edge_diff_embedding],
+            )
+        
+        data[properties.node_feat] = node_feat
         data = self.readout(data)
 
         # restore neighbor list
