@@ -1,5 +1,5 @@
 import torch
-from typing import Dict, Callable
+from typing import Dict, Callable, Optional, Any
 from curator.data import properties
 
 from e3nn.nn import Gate, NormActivation
@@ -136,13 +136,32 @@ class InteractionLayer(torch.nn.Module):
         # output node feature irreps
         self.irreps_out[properties.node_feat] = self.equivariant_nonlin.irreps_out
 
-    def forward(self, data: properties.Type) -> properties.Type:
+    def forward(
+        self,
+        node_feat,
+        node_attr,
+        edge_idx,
+        edge_dist_embedding,
+        edge_diff_embedding,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
+    ) -> torch.Tensor:
         # save old features for resnet
-        old_node_feat = data[properties.node_feat]
+        old_node_feat = node_feat
         # run convolution
-        data = self.conv(data)
+        node_feat = self.conv(
+            node_feat,
+            node_attr,
+            edge_idx,
+            edge_dist_embedding,
+            edge_diff_embedding,
+            lammps_data,
+            n_local,
+            n_ghost,
+        )
         # do nonlinearity
-        data[properties.node_feat] = self.equivariant_nonlin(data[properties.node_feat])
+        node_feat = self.equivariant_nonlin(node_feat)
         if self.resnet:
-            data[properties.node_feat] += old_node_feat
-        return data
+            node_feat += old_node_feat
+        return node_feat
