@@ -28,6 +28,7 @@ cell_displacements: Final[str] = "_cell_displacements"     # cell displacements 
 # chemical properties
 energy: Final[str] = "energy"
 forces: Final[str] = "forces"
+edge_forces: Final[str] = "edge_forces"
 strain: Final[str] = "strain"
 stress: Final[str] = "stress"
 virial: Final[str] = "virial"

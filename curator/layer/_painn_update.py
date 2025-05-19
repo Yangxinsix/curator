@@ -6,7 +6,8 @@ class PainnUpdate(nn.Module):
     """Update function"""
     def __init__(self, num_features: int):
         super().__init__()
-        
+        self.num_features = num_features
+
         self.update_U = nn.Linear(num_features, num_features)
         self.update_V = nn.Linear(num_features, num_features)
         
@@ -16,10 +17,13 @@ class PainnUpdate(nn.Module):
             nn.Linear(num_features, num_features * 3),
         )
         
-    def forward(self, data: properties.Type) -> properties.Type:
-        node_scalar = data[properties.node_feat]
-        node_vector = data[properties.node_vect]
-        
+    def forward(
+        self, 
+        node_feat: torch.Tensor,
+    ) -> torch.Tensor:
+        node_scalar, node_vector = torch.split(node_feat, [self.num_features * 1, self.num_features * 3], dim=1)
+        node_vector = node_vector.reshape([-1, 3, self.num_features])
+
         Uv = self.update_U(node_vector)
         Vv = self.update_V(node_vector)
         
@@ -29,7 +33,7 @@ class PainnUpdate(nn.Module):
         
         a_vv, a_sv, a_ss = torch.split(
             mlp_output,                                        
-            node_vector.shape[-1],                                       
+            self.num_features,                                       
             dim = 1,
         )
         
@@ -37,7 +41,7 @@ class PainnUpdate(nn.Module):
         inner_prod = torch.sum(Uv * Vv, dim=1)
         delta_s = a_sv * inner_prod + a_ss
         
-        data[properties.node_feat] = node_scalar + delta_s
-        data[properties.node_vect] = node_vector + delta_v
+        residual_node_feat = torch.cat([delta_s, delta_v.reshape(-1, self.num_features * 3)], dim=1)
+        node_feat += residual_node_feat
         
-        return data
+        return node_feat
