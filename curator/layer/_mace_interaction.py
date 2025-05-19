@@ -9,6 +9,7 @@ from ._cuequivariance_wrapper import (
     FullyConnectedTensorProduct,
     SymmetricContractionWrapper,
 )
+from ._interaction import Interaction
 from e3nn.nn import FullyConnectedNet
 from .utils import (
     tp_out_irreps_with_instructions,
@@ -19,7 +20,7 @@ try:
     from torch_scatter import scatter_add
 except ImportError:
     from curator.utils import scatter_add
-from typing import Optional, Callable, Tuple
+from typing import Optional, Callable, Tuple, Any
 
 @compile_mode("script")
 class EquivariantProductBasisBlock(torch.nn.Module):
@@ -62,7 +63,7 @@ class EquivariantProductBasisBlock(torch.nn.Module):
 
 
 @compile_mode("script")
-class RealAgnosticInteractionBlock(torch.nn.Module):
+class RealAgnosticInteractionBlock(Interaction):
     def __init__(
         self,
         irreps_in,
@@ -124,22 +125,32 @@ class RealAgnosticInteractionBlock(torch.nn.Module):
         )
         self.reshape = reshape_irreps(self.irreps_out)
 
-    def forward(self,       
+    def forward(
+        self,       
         node_feat, 
         node_attr,
         edge_idx, 
         edge_dist_embedding,
         edge_diff_embedding,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
+        is_first_layer: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         node_feat = self.linear_up(node_feat)
         
         tp_weights = self.conv_tp_weights(edge_dist_embedding)
+        node_feat = self.exchange_info(node_feat, lammps_data, n_ghost, is_first_layer=is_first_layer)
         edge_feat = self.conv_tp(
             node_feat[edge_idx[:, 0]],
             edge_diff_embedding,
             tp_weights,
-        )
-        node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0)
+        ) # [n_edges, irreps]
+
+        node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0) # [n_nodes, irreps]， message
+        node_feat = self.truncate_ghost(node_feat, n_local)
+        node_attr = self.truncate_ghost(node_attr, n_local)
+
         node_feat = self.linear(node_feat)
         node_feat = node_feat / self.avg_num_neighbors
         node_feat = self.skip_tp(node_feat, node_attr)
@@ -154,7 +165,7 @@ class RealAgnosticInteractionBlock(torch.nn.Module):
 
 
 @compile_mode("script")
-class RealAgnosticResidualInteractionBlock(torch.nn.Module):
+class RealAgnosticResidualInteractionBlock(Interaction):
     def __init__(
         self,
         irreps_in, 
@@ -225,16 +236,25 @@ class RealAgnosticResidualInteractionBlock(torch.nn.Module):
         edge_idx, 
         edge_dist_embedding,
         edge_diff_embedding,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
+        is_first_layer: bool = False,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:      
         sc = self.skip_tp(node_feat, node_attr)
         node_feat = self.linear_up(node_feat)
         tp_weights = self.conv_tp_weights(edge_dist_embedding)
+
+        node_feat = self.exchange_info(node_feat, lammps_data, n_ghost, is_first_layer=is_first_layer)
         edge_feat = self.conv_tp(
             node_feat[edge_idx[:, 0]],
             edge_diff_embedding,
             tp_weights,
         )
         node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0)
+        node_feat = self.truncate_ghost(node_feat, n_local)
+        node_attr = self.truncate_ghost(node_attr, n_local)
+        sc = self.truncate_ghost(sc, n_local)
         node_feat = self.linear(node_feat) / self.avg_num_neighbors
         
         return (self.reshape(node_feat), sc)

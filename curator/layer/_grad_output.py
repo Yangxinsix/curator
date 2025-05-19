@@ -8,12 +8,14 @@ class GradientOutput(torch.nn.Module):
         self,
         grad_on_edge_diff: bool = True,
         grad_on_positions: bool = False,
+        compute_edge_forces: bool = True,
         model_outputs: List[str] = ['forces'],       # properties that need to be calculated, can be forces, stress, virial, etc.
         update_callback: Optional[Callable] = None,  # Add a callback parameter
     ) -> None:
         # TODO: define a set for allowed model outputs
         super().__init__()
         self.grad_on_edge_diff = grad_on_edge_diff
+        self.compute_edge_forces = compute_edge_forces
         self.grad_on_positions = grad_on_positions
         self.update_callback = update_callback
         self.model_outputs = model_outputs
@@ -62,6 +64,9 @@ class GradientOutput(torch.nn.Module):
                 # Reference: https://en.wikipedia.org/wiki/Virial_stress
                 # This method calculates virials by giving pair-wise force components
                 
+                if self.compute_edge_forces:
+                    data[properties.edge_forces] = dE_ddiff  # Match LAMMPS sign convention
+
                 if 'stress' in self.model_outputs or 'virial' in self.model_outputs:
                     image_idx = data[properties.image_idx]
                     atomic_virial = torch.einsum("ij, ik -> ijk", edge_diff, -dE_ddiff)           # I'm quite not sure if a negative sign should be added before dE_ddiff, but I think it should be right

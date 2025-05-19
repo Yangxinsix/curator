@@ -1,7 +1,7 @@
 import torch
-from typing import Optional, Dict, Callable
+from typing import Optional, Dict, Callable, Any
 from curator.data import properties
-
+from ._interaction import Interaction
 from ._cuequivariance_wrapper import (
     Linear,
     TensorProduct,
@@ -17,7 +17,7 @@ except ImportError:
     from curator.utils import scatter_add
 from .nonlinearities import ShiftedSoftPlus
 
-class ConvNetLayer(torch.nn.Module):
+class ConvNetLayer(Interaction):
     use_sc: bool
 
     def __init__(
@@ -132,7 +132,17 @@ class ConvNetLayer(torch.nn.Module):
                 feature_irreps_out,
             )
 
-    def forward(self, data: properties.Type) -> properties.Type:
+    def forward(
+        self,
+        node_feat,
+        node_attr,
+        edge_idx,
+        edge_dist_embedding,
+        edge_diff_embedding,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
+    ) -> torch.Tensor:
         """
         Evaluate interaction Block with ResNet (self-connection).
 
@@ -145,32 +155,31 @@ class ConvNetLayer(torch.nn.Module):
 
         :return:
         """
-        weight = self.fc(data[properties.edge_dist_embedding])
-
-        x = data[properties.node_feat]
-        edge_idx = data[properties.edge_idx]  # i, j index
+        weight = self.fc(edge_dist_embedding)
 
         if self.sc is not None:
-            sc = self.sc(x, data[properties.node_attr])
+            sc = self.sc(node_feat, node_attr)
 
-        x = self.linear_1(x)
+        node_feat = self.linear_1(node_feat)
+        node_feat = self.exchange_info(node_feat, lammps_data, n_ghost)
         edge_features = self.tp(
-            x[edge_idx[:, 1]], data[properties.edge_diff_embedding], weight
+            node_feat[edge_idx[:, 1]], edge_diff_embedding, weight
         )
-        x = scatter_add(edge_features, edge_idx[:, 0], dim=0)
+        node_feat = scatter_add(edge_features, edge_idx[:, 0], dim=0)
 
+        node_feat = self.truncate_ghost(node_feat, n_local)
         # Necessary to get TorchScript to be able to type infer when its not None
         # avg_num_neigh: Optional[float] = self.avg_num_neighbors
         # if avg_num_neigh is not None:
-        x = x.div(self.avg_num_neighbors**0.5)
+        node_feat = node_feat.div(self.avg_num_neighbors**0.5)
 
-        x = self.linear_2(x)
+        node_feat = self.linear_2(node_feat)
 
         if self.sc is not None:
-            x = x + sc
+            sc = self.truncate_ghost(sc, n_local)
+            node_feat = node_feat + sc
 
-        data[properties.node_feat] = x
-        return data
+        return node_feat
     
     def datamodule(self, _datamodule):
         if not self._initialized:
