@@ -26,7 +26,7 @@ setup(
     install_requires=[
         'torch>=1.10',
         'ase',
-        'e3nn',
+        'e3nn==0.4.4',
         'torch-ema>=0.3.0',
         'toml',
         'numpy',
