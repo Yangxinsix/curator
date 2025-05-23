@@ -15,7 +15,7 @@ from curator.layer import (
     SphericalHarmonicEdgeAttrs,
     InteractionLayer,
 )
-from curator.layer._cuequivariance_wrapper import Linear
+from curator.layer._cuequivariance_wrapper import set_use_cueq
 
 from typing import OrderedDict, Dict, List, Optional, Union, Callable, Type
 from functools import partial
@@ -44,6 +44,7 @@ class NequipModel(torch.nn.Module):
         nonlinearity_gates: Dict[int, Callable] = {"e": "ssp", "o": "abs"},
         convolution_kwargs: dict = {},
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
+        use_cueq: bool = False,
         **kwargs,
     ) -> None:
         """Nequip model.
@@ -73,6 +74,8 @@ class NequipModel(torch.nn.Module):
         self.num_features = num_features
         self.lmax = lmax
         self.parity = parity
+        
+        set_use_cueq(use_cueq)
         
         if num_elements is None:
             num_elements = len(species) if species is not None else 119
@@ -144,7 +147,7 @@ class NequipModel(torch.nn.Module):
         if isinstance(readout, AtomwiseNN):
             self.readout = readout
         else:
-            self.readout = readout(self.irreps_in[properties.node_feat])
+            self.readout = readout(self.irreps_in[properties.node_feat], use_e3nn=True)
         
     def forward(self, data: properties.Type) -> properties.Type:
         # add mask for local interaction part

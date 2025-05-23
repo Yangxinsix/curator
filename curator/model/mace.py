@@ -19,7 +19,7 @@ from curator.layer import (
     RealAgnosticInteractionBlock,
     EquivariantProductBasisBlock,
 )
-from curator.layer._cuequivariance_wrapper import Linear
+from curator.layer._cuequivariance_wrapper import set_use_cueq
 from curator.data import properties
 from typing import List, Optional, Dict, Union, Callable, Type
 
@@ -54,6 +54,7 @@ class MACE(nn.Module):
         num_basis: int = 8,
         power: int = 6,
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
+        use_cueq: bool = False,
         **kwargs,
     ) -> None:
         """MACE model.
@@ -80,6 +81,9 @@ class MACE(nn.Module):
         
         self.cutoff = cutoff
         self.parity = parity
+
+        # use cuequivariance globallys
+        set_use_cueq(use_cueq)
 
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions

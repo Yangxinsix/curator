@@ -10,6 +10,7 @@ from ase import units
 from pathlib import Path, PosixPath
 from typing import Optional, Union
 import numpy as np
+import re
 
 def register_resolvers():
     OmegaConf.register_new_resolver("multiply", lambda x, y: x * y, replace=True)
@@ -24,6 +25,10 @@ def dummy_load(*args, **kwargs):
             kwargs['map_location'] = torch.device('cpu')
         return original_torch_jit_load(*args, **kwargs)
     torch.jit.load = torch_jit_load_cpu
+
+def camel_to_snake(name: str) -> str:
+    s1 = re.sub('([a-z0-9])([A-Z])', r'\1_\2', name)
+    return s1.lower()
 
 def split_list(lst, chunk_or_num, by_chunk_size=False):
     if by_chunk_size:

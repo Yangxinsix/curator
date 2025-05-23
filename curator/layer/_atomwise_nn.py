@@ -6,6 +6,7 @@ from e3nn import o3
 from e3nn.nn import Activation
 from curator.data.properties import activation_fn
 from curator.data import properties
+from ._cuequivariance_wrapper import Linear
 import warnings
 try:
     from torch_scatter import scatter_add, scatter_mean
@@ -48,7 +49,7 @@ class Dense(nn.Module):
             assert isinstance(in_features, o3.Irreps), "in_features must be e3nn.o3.Irreps when using e3nn Linear layer!"
             if isinstance(out_features, int):
                 out_features = o3.Irreps(f'{out_features}x0e')
-            self.linear = o3.Linear(in_features, out_features, *args, **kwargs)
+            self.linear = Linear(in_features, out_features, *args, **kwargs)
             self.activation = Activation(irreps_in=out_features, acts=[activation])
         else:
             assert isinstance(in_features, int), 'in_features must be interger for torch.nn.Linear layer!'
