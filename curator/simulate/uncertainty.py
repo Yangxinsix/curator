@@ -133,10 +133,8 @@ class MahalanobisUncertainty(BaseUncertainty):
         from curator.layer import FeatureCalculator
         if calculator is not None:
             initialized = False
-            for module in calculator.model.output_modules:
-                if isinstance(module, FeatureCalculator):
-                    initialized = True
-                    break
+            if 'feature_calculator' in calculator.model.output_modules:
+                initialized = True
             if not initialized:
                 feat_calc = FeatureCalculator(dataset=dataset, compute_maha_dist=True)
                 calculator.model.output_modules.append(feat_calc)

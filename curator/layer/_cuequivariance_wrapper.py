@@ -82,7 +82,7 @@ class Linear:
                 cue.Irreps(CUEQ_GROUP, irreps_out),
                 layout=CUEQ_LAYOUT,
                 shared_weights=shared_weights,
-                optimize_fallback=True,
+                use_fallback=True,
                 *args, 
                 **kwargs,
             )
@@ -153,7 +153,7 @@ class FullyConnectedTensorProduct:
                 layout=CUEQ_LAYOUT,
                 shared_weights=shared_weights,
                 internal_weights=internal_weights,
-                optimize_fallback=True,
+                use_fallback=True,
                 *args,
                 **kwargs,
             )
