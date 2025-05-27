@@ -90,7 +90,7 @@ class GradientOutput(torch.nn.Module):
             grad_outputs : List[Optional[torch.Tensor]] = [torch.ones_like(energy)]
             if 'forces' in self.model_outputs:
                 grad_inputs = [data[properties.positions]]
-                if 'stress' in self.model_outputs:
+                if 'stress' in self.model_outputs or 'virial' in self.model_outputs:
                     grad_inputs.append(data[properties.strain])
                 grads = torch.autograd.grad(
                     [energy,],
