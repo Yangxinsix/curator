@@ -13,8 +13,8 @@ from curator.layer import (
 )
 
 
-class PainnModel(nn.Module):
-    """PainnModel without edge updating"""
+class Painn(nn.Module):
+    """Painn without edge updating"""
     def __init__(
         self, 
         num_interactions: int, 
@@ -26,7 +26,7 @@ class PainnModel(nn.Module):
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
         **kwargs,
     ):
-        """PainnModel without edge updating
+        """Painn without edge updating
 
         Args:
             num_interactions (int): Number of interaction blocks

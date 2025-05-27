@@ -25,4 +25,4 @@ output_modules:
     grad_on_edge_diff: False
   - _target_: curator.layer.ChargeEquilibration
     num_features: ${...representation.num_features}
-  - _target_: curator.layer.GlobalRescaleShift
+  - _target_: curator.layer.GlobalScaleShift
