@@ -53,6 +53,7 @@ class MACE(nn.Module):
         num_features: Optional[int] = None,
         num_basis: int = 8,
         power: int = 6,
+        gate: Union[str, Callable] = 'silu',
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
         **kwargs,
@@ -82,7 +83,7 @@ class MACE(nn.Module):
         self.cutoff = cutoff
         self.parity = parity
 
-        # use cuequivariance globallys
+        # use cuequivariance globally
         set_use_cueq(use_cueq)
 
         if isinstance(correlation, int):
@@ -163,14 +164,14 @@ class MACE(nn.Module):
         # for last layer: only select scalar 0e
         # for first layer: 
         for i in range(num_interactions):
-            # hidden_irreps_out = str(self.hidden_irreps[0]) if i == num_interactions - 1 else self.hidden_irreps
+            hidden_irreps_out = str(self.hidden_irreps[0]) if i == num_interactions - 1 else self.hidden_irreps
             if i > 0:
                 self.irreps_in[properties.node_feat] = self.hidden_irreps
             if i == 0:
                 inter = interaction_cls_first(
                     irreps_in=self.irreps_in,
                     target_irreps=interaction_irreps,
-                    hidden_irreps=self.hidden_irreps,
+                    hidden_irreps=hidden_irreps_out,
                     radial_MLP=radial_MLP,
                     avg_num_neighbors=avg_num_neighbors,
                 )
@@ -178,7 +179,7 @@ class MACE(nn.Module):
                 inter = interaction_cls(
                     irreps_in=self.irreps_in,
                     target_irreps=interaction_irreps,
-                    hidden_irreps=self.hidden_irreps,
+                    hidden_irreps=hidden_irreps_out,
                     radial_MLP=radial_MLP,
                     avg_num_neighbors=avg_num_neighbors,
                 )
@@ -186,7 +187,7 @@ class MACE(nn.Module):
             
             prod = EquivariantProductBasisBlock(
                 node_feats_irreps=inter.target_irreps if i == 0 else interaction_irreps,
-                target_irreps=self.hidden_irreps,
+                target_irreps=hidden_irreps_out,
                 correlation=correlation[i],
                 num_elements=num_elements,
                 use_sc="Residual" in str(interaction_cls_first) if i == 0 else True,

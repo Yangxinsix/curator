@@ -114,7 +114,6 @@ class AtomwiseNN(nn.Module):
         acts = []
         if isinstance(activation, list):
             acts = [activation_fn[act] if isinstance(act, str) else act for act in activation] + [None]
-            acts = [activation_fn[activation] for _ in range(n_hidden_layers)] + [None]
         else:
             acts = [activation_fn[activation] if isinstance(activation, str) else activation for _ in range(n_hidden_layers)] + [None]
 
@@ -150,7 +149,7 @@ class AtomwiseNN(nn.Module):
 
         self.model_outputs = [spec.key for spec in self.output_specs]
         self.split_size: List[int] = [spec.split_size for spec in self.output_specs]
-        assert sum(self.split_size) == n_out, "The dimensionality of output features does not match number of output keys!"
+        assert sum(self.split_size) == n_out, "The dimensionality of output features does not match the number of output keys!"
 
     def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
         out = self.readout_mlp(input)
@@ -248,7 +247,7 @@ class MACEAtomwiseNN(AtomwiseNN):
             self.readouts.append(Dense(self.hidden_irreps, self.out_features, activation=None, use_e3nn=True))
 
         self.readouts.append(self.readout_mlp)
-        self.in_features_list.append(o3.Irreps(str(self.hidden_irreps[0])))
+        self.in_features_list.append(self.hidden_irreps[0].dim)
 
     def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
         # split node features to list then calculate contributions from different parts

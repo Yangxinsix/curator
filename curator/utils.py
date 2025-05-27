@@ -8,7 +8,7 @@ from collections import abc
 import logging
 from ase import units
 from pathlib import Path, PosixPath
-from typing import Optional, Union
+from typing import Optional, Union, List, Tuple, Dict
 import numpy as np
 import re
 
@@ -431,3 +431,179 @@ def upper_triangular_cell(atoms, verbose=False):
         if verbose:
             print("Transformed to upper triangular unit cell.", flush=True)
     return atoms
+
+def get_representation_config(model):
+    """Extract configurations of a model, which can then be used to instantiate a new one."""
+    rep = model.representation
+    if model.representation.__class__.__name__ == 'MACE':
+        species = list(rep.embeddings.onehot_embedding.type_mapper.symbol_to_type.keys())
+        try:
+            correlation = (
+                len(rep.products[0].symmetric_contractions.contractions[0].weights) + 1
+            )
+        except AttributeError:
+            correlation = rep.products[0].symmetric_contractions.contraction_degree
+
+        rep_config = {
+            "cutoff": rep.cutoff,
+            "num_interactions": len(rep.interactions),
+            "correlation": correlation,
+            "interaction_cls": rep.interactions[-1].__class__,
+            "interaction_cls_first": rep.interactions[0].__class__,
+            "radial_MLP": rep.interactions[0].conv_tp_weights.hs[1:-1],
+            "species": list(rep.embeddings.onehot_embedding.type_mapper.symbol_to_type.keys()),
+            "num_elements": len(species),
+            "hidden_irreps": rep.hidden_irreps,
+            "edge_sh_irreps": rep.edge_sh_irreps,
+            "node_irreps": rep.node_irreps,
+            "MLP_irreps": rep.MLP_irreps,
+            "avg_num_neighbors": float(rep.interactions[0].avg_num_neighbors),
+            "num_basis": rep.embeddings.radial_basis.basis.num_basis,
+            "power": rep.embeddings.radial_basis.cutoff_fn.p,
+            "gate": rep.readout.readout_mlp[0].activation.acts[0].f,
+        }
+    elif model.representation.__class__.__name__ == 'Nequip':
+        species = list(rep.embeddings.onehot_embedding.type_mapper.symbol_to_type.keys())
+
+        rep_config = {
+            "cutoff": rep.cutoff,
+            "num_interactions": len(rep.interactions),
+            "species": list(rep.embeddings.onehot_embedding.type_mapper.symbol_to_type.keys()),
+            "num_elements": len(species),
+            "hidden_irreps": rep.hidden_irreps,
+            "edge_sh_irreps": rep.edge_sh_irreps,
+            "node_irreps": rep.node_irreps,
+            "num_basis": rep.embeddings.radial_basis.basis.num_basis,
+            "power": rep.embeddings.radial_basis.cutoff_fn.p,
+            "resnet": rep.interactions[0].resnet,
+            "nonlinearity_type": rep.nonlinearity_type,
+            "nonlinearity_scalars": rep.nonlinearity_scalars,
+            "nonlinearity_gates": rep.nonlinearity_gates,
+            "convolution_kwargs": rep.convolution_kwargs,
+        }
+    elif model.representation.__class__.__name__ == 'Painn':
+        rep_config = {
+            "cutoff": rep.cutoff,
+            "num_interactions": rep.num_interactions,
+            "num_features": rep.num_features,
+            "num_basis": rep.num_basis,
+        }
+    return rep_config
+
+def get_kmax_pairs(
+    max_L: int, correlation: int, num_layers: int
+) -> List[Tuple[int, int]]:
+    """Determine kmax pairs based on max_L and correlation"""
+    if correlation == 2:
+        raise NotImplementedError("Correlation 2 not supported yet")
+    if correlation == 3:
+        kmax_pairs = [[i, max_L] for i in range(num_layers - 1)]
+        kmax_pairs = kmax_pairs + [[num_layers - 1, 0]]
+        return kmax_pairs
+    raise NotImplementedError(f"Correlation {correlation} not supported")
+
+
+def transfer_symmetric_contractions(
+    source_dict: Dict[str, torch.Tensor],
+    target_dict: Dict[str, torch.Tensor],
+    max_L: int,
+    correlation: int,
+    num_layers: int,
+):
+    """Transfer symmetric contraction weights"""
+    kmax_pairs = get_kmax_pairs(max_L, correlation, num_layers)
+
+    for i, kmax in kmax_pairs:
+        wm = torch.concatenate(
+            [
+                source_dict[
+                    f"products.{i}.symmetric_contractions.contractions.{k}.weights{j}"
+                ]
+                for k in range(kmax + 1)
+                for j in ["_max", ".0", ".1"]
+            ],
+            dim=1,
+        )
+        target_dict[f"products.{i}.symmetric_contractions.weight"] = wm
+
+def get_transfer_keys(num_layers: int) -> List[str]:
+    """Get list of keys that need to be transferred"""
+    return [
+        "embeddings.chemical_embedding.linear.weight",
+        *[f"readout.readouts.{j}.linear.weight" for j in range(num_layers - 1)],
+        *[f"readout.readout_mlp.{i}.linear.weight" for i in range(2)],
+        *[f"readout.readouts.{num_layers - 1}.{i}.linear.weight" for i in range(2)],
+    ] + [
+        s
+        for j in range(num_layers)
+        for s in [
+            f"interactions.{j}.linear_up.weight",
+            *[f"interactions.{j}.conv_tp_weights.layer{i}.weight" for i in range(4)],
+            f"interactions.{j}.linear.weight",
+            f"interactions.{j}.skip_tp.weight",
+            f"products.{j}.linear.weight",
+        ]
+    ]
+
+def load_e3nn_weights(source_model, target_model):
+    """Load weights from an e3nn model to cuequivariance model"""
+    source_dict = source_model.representation.state_dict()
+    target_dict = target_model.representation.state_dict()
+
+    # Transfer main weights
+    num_layers = len(source_model.representation.interactions)
+    transfer_keys = get_transfer_keys(num_layers)
+    for key in transfer_keys:
+        if key in source_dict:  # Check if key exists
+            target_dict[key] = source_dict[key]
+        else:
+            logging.warning(f"Key {key} not found in source model")
+
+    # unsqueeze linear and skip_tp weights
+    for key in source_dict.keys():
+        if any(x in key for x in ["linear", "skip_tp"]) and "weight" in key:
+            target_dict[key] = target_dict[key].unsqueeze(0)
+    
+    # transfer symmetric contractions
+    lmax = source_model.representation.lmax
+    try:
+        correlation = (
+            len(source_model.representation.products[0].symmetric_contractions.contractions[0].weights) + 1
+        )
+    except AttributeError:
+        correlation = source_model.representation.products[0].symmetric_contractions.contraction_degree
+    transfer_symmetric_contractions(source_dict, target_dict, lmax, correlation, num_layers)
+
+    transferred_keys = set(transfer_keys)
+    remaining_keys = (
+        set(source_dict.keys()) & set(target_dict.keys()) - transferred_keys
+    )
+    remaining_keys = {k for k in remaining_keys if "symmetric_contraction" not in k}
+    if remaining_keys:
+        for key in remaining_keys:
+            if source_dict[key].shape == target_dict[key].shape:
+                logging.debug(f"Transferring additional key: {key}")
+                target_dict[key] = source_dict[key]
+            else:
+                logging.warning(
+                    f"Shape mismatch for key {key}: "
+                    f"source {source_dict[key].shape} vs target {target_dict[key].shape}"
+                )
+
+    target_model.representation.load_state_dict(target_dict)
+
+def convert_e3nn_to_cueq(model):
+    rep_config = get_representation_config(model)
+    rep_config["use_cueq"] = True
+    cueq_rep = model.representation.__class__(**rep_config)
+
+    cueq_model = model.__class__(
+        input_modules=list(model.input_modules.values()),
+        output_modules=list(model.output_modules.values()),
+        representation=cueq_rep,
+        model_outputs=model.model_outputs,
+    )
+
+    load_e3nn_weights(model, cueq_model)
+
+    return cueq_model

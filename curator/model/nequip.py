@@ -21,7 +21,7 @@ from typing import OrderedDict, Dict, List, Optional, Union, Callable, Type
 from functools import partial
 
 from e3nn.util.jit import compile_mode
-class NequipModel(torch.nn.Module):
+class Nequip(torch.nn.Module):
     """Nequip model."""
     def __init__(
         self,
@@ -129,6 +129,12 @@ class NequipModel(torch.nn.Module):
         )
         self.irreps_in[properties.node_feat] = self.embeddings.chemical_embedding.irreps_out
         
+        # only for extracting configs
+        self.nonlinearity_type = nonlinearity_type
+        self.nonlinearity_scalars = nonlinearity_scalars
+        self.nonlinearity_gates = nonlinearity_gates
+        self.convolution_kwargs=convolution_kwargs
+
         self.interactions = nn.ModuleList()
         for _ in range(num_interactions):
             interaction = InteractionLayer(

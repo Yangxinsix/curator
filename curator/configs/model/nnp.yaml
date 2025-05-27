@@ -9,4 +9,4 @@ input_modules:
     cutoff: ${...representation.cutoff}            # cutoff is not always the same to cutoff in data now
 output_modules:
   - _target_: curator.layer.GradientOutput
-  - _target_: curator.layer.GlobalRescaleShift
+  - _target_: curator.layer.GlobalScaleShift
