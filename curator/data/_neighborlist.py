@@ -286,7 +286,7 @@ class BatchNeighborList(nn.Module):
         cutoff: float, 
         requires_grad: bool=False, 
         return_distance: bool=False,
-        neighbor_list: Union[NeighborListTransform, str] = 'MatScipy',
+        neighbor_list: Union[NeighborListTransform, str] = 'Torch',
     ) -> None:
         """Batch neighbor list
         
