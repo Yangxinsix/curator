@@ -482,8 +482,8 @@ class LitNNP(pl.LightningModule):
                     "weight_decay": self.optimizer.keywords['weight_decay'],
                 },
                 {
-                    "name": "readout_mlp",
-                    "params": self.model.representation.readout_mlp.parameters(),
+                    "name": "readout",
+                    "params": self.model.representation.readout.parameters(),
                     "weight_decay": 0.0,
                 },
                 {
