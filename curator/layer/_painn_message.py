@@ -51,20 +51,21 @@ class PainnMessage(Interaction):
         edge_dist,
         edge_diff,
         lammps_data: Optional[Any] = None,
-        n_local: int = 0,
-        n_ghost: int = 0,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
     ) -> properties.Type:
         # edge distance embedding
         filter_weight = self.filter_layer(self.radial_basis(edge_dist))
         filter_weight = filter_weight * self.cutoff_fn(edge_dist).unsqueeze(-1)
 
         node_scalar, node_vector = torch.split(node_feat, [self.num_features * 1, self.num_features * 3], dim=-1)
+        node_scalar = node_scalar.clone()
         node_scalar = self.scalar_message_mlp(node_scalar)
 
         # exchange node features between processors
         new_node_feat = torch.cat([node_scalar, node_vector], dim=-1)
         new_node_feat = self.exchange_info(new_node_feat, lammps_data, n_ghost)
-        node_scalar, node_vector = new_node_feat.split([self.num_features * 1, self.num_features * 3], dim=-1)
+        node_scalar, node_vector = new_node_feat.split([self.num_features * 3, self.num_features * 3], dim=-1)
 
         filter_out = filter_weight * node_scalar[edge_idx[:, 1]]
         gate_state_vector, gate_edge_vector, message_scalar = torch.split(
@@ -74,9 +75,9 @@ class PainnMessage(Interaction):
         )
         
         # num_pairs * 3 * num_features, num_pairs * num_features
-        message_vector = node_vector[edge_idx[:, 1]] * gate_state_vector.unsqueeze(1) 
+        message_vector = node_vector[edge_idx[:, 1]].reshape(-1, 3, self.num_features) * gate_state_vector.unsqueeze(1) 
         edge_vector = gate_edge_vector.unsqueeze(1) * (edge_diff / edge_dist.unsqueeze(-1)).unsqueeze(-1)
-        message_vector = message_vector + edge_vector
+        message_vector = (message_vector + edge_vector).reshape(-1, self.num_features * 3)
         
         # sum message
         residual_scalar = scatter_add(message_scalar, edge_idx[:, 0], dim=0)
@@ -84,7 +85,7 @@ class PainnMessage(Interaction):
         
         # new node state
         residual_node_feat = torch.cat([residual_scalar, residual_vector], dim=-1)
-        residual_node_feat = self.truncate_ghost(residual_node_feat, n_ghost)
+        residual_node_feat = self.truncate_ghost(residual_node_feat, n_local)
         if not self.resnet:
             return residual_node_feat
 
