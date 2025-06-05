@@ -95,7 +95,7 @@ class Painn(nn.Module):
             )
             node_feat = update_layer(node_feat)
         
-        data[properties.node_feat] = node_feat
+        data[properties.node_feat] = node_feat[:, :self.num_features]
         data = self.readout(data)
 
         # restore neighbor list
