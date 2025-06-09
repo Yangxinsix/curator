@@ -74,6 +74,7 @@ class Nequip(torch.nn.Module):
         self.num_features = num_features
         self.lmax = lmax
         self.parity = parity
+        self.species = species
         
         set_use_cueq(use_cueq)
         

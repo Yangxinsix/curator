@@ -5,7 +5,7 @@ import os
 import sys
 import time
 from contextlib import contextmanager
-from typing import Dict, Tuple
+from typing import Dict, Tuple, Optional, List
 from curator.model.base import NeuralNetworkPotential
 
 import torch
@@ -55,11 +55,15 @@ def timer(name: str, enabled: bool = True):
 
 class LAMMPS_MLIAP(MLIAPUnified):
     """CURATOR integration for LAMMPS using the MLIAP interface."""
-
-    def __init__(self, model: NeuralNetworkPotential, **kwargs):
+    def __init__(
+            self, 
+            model: NeuralNetworkPotential,
+            element_types: Optional[List[str]] = None,
+            **kwargs,
+        ):
         super().__init__()
         self.config = CURATORLammpsConfig()
-        self.element_types = [chemical_symbols[s] for s in model.atomic_numbers]
+        self.element_types = element_types or model.representation.species
         self.num_species = len(self.element_types)
         self.rcutfac = 0.5 * float(model.representation.cutoff)
         self.ndescriptors = 1
