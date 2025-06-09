@@ -82,6 +82,7 @@ class MACE(nn.Module):
         
         self.cutoff = cutoff
         self.parity = parity
+        self.species = species
 
         # use cuequivariance globally
         set_use_cueq(use_cueq)
