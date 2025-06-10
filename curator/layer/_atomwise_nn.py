@@ -1,7 +1,8 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from typing import List, Union, Optional, Callable, Dict, NamedTuple
+from typing import List, Union, Optional, Callable, Dict
+from dataclasses import dataclass
 from e3nn import o3
 from e3nn.nn import Activation
 from curator.data.properties import activation_fn
@@ -13,12 +14,13 @@ try:
 except ImportError:
     from curator.utils import scatter_add, scatter_mean
 
-class OutputSpec(NamedTuple):
-    key: str                         # name of this properties
-    per_atom: bool                   # if per_atom property should be output
-    aggregation_mode: Optional[str]  # sum, mean or None, when use None output as is, means this property is per atom
-    per_atom_key: str                # the key of per_atom property
-    split_size: int                  # dim size of this property
+@dataclass
+class OutputSpec:
+    key: str = 'energy'                         # name of this properties
+    per_atom: bool = False                  # if per_atom property should be output
+    aggregation_mode: Optional[str] = 'sum'  # sum, mean or None, when use None output as is, means this property is per atom
+    per_atom_key: str = 'energy_pa'               # the key of per_atom property
+    split_size: int = 1                 # dim size of this property
 
 class Dense(nn.Module):
     r"""

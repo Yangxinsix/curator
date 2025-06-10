@@ -19,13 +19,13 @@ class Interaction(torch.nn.Module):
             return node_feat
         
         pad = torch.zeros(
-            (n_ghost, node_feats.shape[1]),
-            dtype=node_feats.dtype,
-            device=node_feats.device,
+            (n_ghost, node_feat.shape[1]),
+            dtype=node_feat.dtype,
+            device=node_feat.device,
         )
-        node_feats = torch.cat((node_feats, pad), dim=0)
-        node_feats = LammpsMessagePassing.apply(node_feats, lammps_data)
-        return node_feats
+        node_feat = torch.cat((node_feat, pad), dim=0)
+        node_feat = LammpsMessagePassing.apply(node_feat, lammps_data)
+        return node_feat
     
     def truncate_ghost(
         self,
@@ -42,7 +42,7 @@ class LammpsMessagePassing(torch.autograd.Function):
         ctx.vec_len = node_feat.shape[-1]
         ctx.data = data
         out = torch.empty_like(node_feat)
-        data.forward_exchange(node_feat, out, node_feat)
+        data.forward_exchange(node_feat, out, ctx.vec_len)
         return out
 
     @staticmethod

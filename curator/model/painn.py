@@ -76,8 +76,8 @@ class Painn(nn.Module):
         mask = edge_dist < self.cutoff
         data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
 
-        total_atoms = int(torch.sum(data[properties.n_atoms]))
         node_scalar = self.atom_embedding(data[properties.Z])
+        total_atoms = node_scalar.shape[0]
         node_vector = torch.zeros(
             (total_atoms, self.num_features * 3),
             device=edge_diff.device,
@@ -92,6 +92,9 @@ class Painn(nn.Module):
                 edge_idx,
                 edge_dist,
                 edge_diff,
+                lammps_data=data.get('lammps_data'),
+                n_local=data.get('n_local'),
+                n_ghost=data.get('n_ghost'),
             )
             node_feat = update_layer(node_feat)
         
