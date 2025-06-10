@@ -76,6 +76,10 @@ class LAMMPS_MLIAP(MLIAPUnified):
         self.model = model
         self.model.model_outputs = ['atomic_energy', 'edge_forces']   # output atomic properties for parallelation
         
+    # @staticmethod
+    # def _convert_model(model):
+        
+
     def _initialize_device(self, data):
         using_kokkos = "kokkos" in data.__class__.__module__.lower()
 
@@ -132,9 +136,9 @@ class LAMMPS_MLIAP(MLIAPUnified):
                     torch.as_tensor(data.pair_i, dtype=torch.int64).to(self.device),
                 ],
                 dim=0,
-            ),
+            ).T,
             "_edge_difference": torch.as_tensor(data.rij).to(self.dtype).to(self.device),
-            "atomic_numbers": torch.as_tensor(data.elems, dtype=torch.int64),
+            "atomic_numbers": torch.as_tensor(data.elems, dtype=torch.int64).to(self.device),
             "lammps_data": data,
             "n_local": data.nlocal,
             "n_ghost": data.ntotal - data.nlocal,
