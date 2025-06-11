@@ -89,5 +89,6 @@ class PainnMessage(Interaction):
         if not self.resnet:
             return residual_node_feat
 
+        node_feat = self.truncate_ghost(node_feat, n_local)
         node_feat += residual_node_feat
         return node_feat

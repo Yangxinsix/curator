@@ -8,7 +8,8 @@ class GradientOutput(torch.nn.Module):
         self,
         grad_on_edge_diff: bool = True,
         grad_on_positions: bool = False,
-        compute_edge_forces: bool = True,
+        compute_edge_forces: bool = False,
+        compute_edge_forces_only: bool = False,
         model_outputs: List[str] = ['forces'],       # properties that need to be calculated, can be forces, stress, virial, etc.
         update_callback: Optional[Callable] = None,  # Add a callback parameter
     ) -> None:
@@ -16,6 +17,7 @@ class GradientOutput(torch.nn.Module):
         super().__init__()
         self.grad_on_edge_diff = grad_on_edge_diff
         self.compute_edge_forces = compute_edge_forces
+        self.compute_edge_forces_only = compute_edge_forces_only
         self.grad_on_positions = grad_on_positions
         self.update_callback = update_callback
         self.model_outputs = model_outputs
@@ -52,6 +54,10 @@ class GradientOutput(torch.nn.Module):
                 )
                 dE_ddiff = torch.zeros_like(data[properties.positions]) if dE_ddiff is None else dE_ddiff[0]   # for torch.jit.script
                 assert dE_ddiff is not None
+                if self.compute_edge_forces:
+                    data[properties.edge_forces] = dE_ddiff  # Match LAMMPS sign convention
+                    if self.compute_edge_forces_only == True:
+                        return data
                 
                 # diff = R_j - R_i, so -dE/dR_j = -dE/ddiff, -dE/R_i = dE/ddiff
                 i_forces = torch.zeros((forces_dim, 3), device=edge_diff.device, dtype=edge_diff.dtype)
@@ -63,9 +69,6 @@ class GradientOutput(torch.nn.Module):
 
                 # Reference: https://en.wikipedia.org/wiki/Virial_stress
                 # This method calculates virials by giving pair-wise force components
-                
-                if self.compute_edge_forces:
-                    data[properties.edge_forces] = dE_ddiff  # Match LAMMPS sign convention
 
                 if 'stress' in self.model_outputs or 'virial' in self.model_outputs:
                     image_idx = data[properties.image_idx]

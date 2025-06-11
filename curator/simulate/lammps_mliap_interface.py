@@ -74,11 +74,20 @@ class LAMMPS_MLIAP(MLIAPUnified):
         self.step = 0
 
         self.model = model
-        self.model.model_outputs = ['atomic_energy', 'edge_forces']   # output atomic properties for parallelation
+        self._convert_model(model)
         
-    # @staticmethod
-    # def _convert_model(model):
-        
+    @staticmethod
+    def _convert_model(model):
+        model.model_outputs = ['atomic_energy', 'edge_forces']
+
+        # output atomic energy
+        for spec in model.representation.readout.output_specs:
+            if spec.key == 'energy':
+                spec.per_atom = True
+                spec.per_atom_key = 'atomic_energy'
+        # output edge forces
+        model.output_modules.gradient_output.compute_edge_forces = True
+        model.output_modules.gradient_output.compute_edge_forces_only = True
 
     def _initialize_device(self, data):
         using_kokkos = "kokkos" in data.__class__.__module__.lower()

@@ -19,7 +19,7 @@ class OutputSpec:
     key: str = 'energy'                         # name of this properties
     per_atom: bool = False                  # if per_atom property should be output
     aggregation_mode: Optional[str] = 'sum'  # sum, mean or None, when use None output as is, means this property is per atom
-    per_atom_key: str = 'energy_pa'               # the key of per_atom property
+    per_atom_key: str = 'atomic_energy'               # the key of per_atom property
     split_size: int = 1                 # dim size of this property
 
 class Dense(nn.Module):
@@ -162,10 +162,10 @@ class AtomwiseNN(nn.Module):
         output_dict: Dict[str, torch.Tensor] = {}
         for i, spec in enumerate(self.output_specs):
             prop = out[i].squeeze()
-            key = spec[0]
-            per_atom = spec[1]
-            aggregation_mode = spec[2]
-            per_atom_key = spec[3]
+            key = spec.key
+            per_atom = spec.per_atom
+            aggregation_mode = spec.aggregation_mode
+            per_atom_key = spec.per_atom_key
 
             # per-atom property
             if per_atom:
