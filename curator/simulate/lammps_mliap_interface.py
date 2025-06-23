@@ -5,8 +5,8 @@ import os
 import sys
 import time
 from contextlib import contextmanager
-from typing import Dict, Tuple, Optional, List
-from curator.model.base import NeuralNetworkPotential
+from typing import Dict, Tuple, Optional, List, Union
+from curator.model.base import NeuralNetworkPotential, LitNNP
 
 import torch
 from ase.data import chemical_symbols
@@ -57,7 +57,7 @@ class LAMMPS_MLIAP(MLIAPUnified):
     """CURATOR integration for LAMMPS using the MLIAP interface."""
     def __init__(
             self, 
-            model: NeuralNetworkPotential,
+            model: Union[NeuralNetworkPotential, LitNNP],
             element_types: Optional[List[str]] = None,
             **kwargs,
         ):
@@ -73,7 +73,7 @@ class LAMMPS_MLIAP(MLIAPUnified):
         self.initialized = False
         self.step = 0
 
-        self.model = model
+        self.model = model['model'] if model.__class__.__name__ == 'LitNNP' else model
         self._convert_model(model)
         
     @staticmethod
