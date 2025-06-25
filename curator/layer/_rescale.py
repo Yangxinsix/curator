@@ -18,7 +18,8 @@ class GlobalScaleShift(torch.nn.Module):
         shift_trainable: bool=False,
         scale_keys: List[str] = ["energy"],
         shift_keys: List[str] = ["energy"],
-        atomwise_normalization: bool=True,
+        atomwise_shift: bool=False,                   # if the value to be shifted is atomwise or structure-based
+        atomwise_normalization: bool=True,            # if the value to be shifted is normalized to each atom. This is only useful for structure-based properties.
         output_keys: List[str] = ["energy", "forces"],
         atomic_energies: Optional[Dict[int, Union[float, torch.Tensor]]] = None,
     ):
@@ -26,7 +27,8 @@ class GlobalScaleShift(torch.nn.Module):
         self.scale_keys = scale_keys
         self.shift_keys = shift_keys
         self.output_keys = output_keys
-        self.register_buffer("atomwise_normalization", torch.tensor(atomwise_normalization))
+        self.register_buffer("atomwise_normalization", torch.tensor(atomwise_normalization))        # this should be in buffer because it cannot be changed when you are using the model
+        self.atomwise_shift = atomwise_shift
             
         if scale_by is None and shift_by is None:
             self._initialized = False
@@ -62,13 +64,19 @@ class GlobalScaleShift(torch.nn.Module):
             for key in self.scale_keys:
                 data[key] = data[key] * self.scale_by
             # add atomic energies
-            shift_by = data[properties.n_atoms] * self.shift_by if self.atomwise_normalization else self.shift_by    
+            if not self.atomwise_shift and self.atomwise_normalization:
+                shift_by = data[properties.n_atoms] * self.shift_by
+            else:
+                shift_by = self.shift_by
             if self.shift_by_E0:
                 node_e0 = self.atomic_energies[data[properties.Z]]
-                e0 = scatter_add(node_e0, data[properties.image_idx])
-                shift_by = shift_by + e0
+                if self.atomwise_shift:
+                    shift_by = shift_by + node_e0
+                else:
+                    e0 = scatter_add(node_e0, data[properties.image_idx])
+                    shift_by = shift_by + e0
             for key in self.shift_keys:
-                data[key] = data[key] + shift_by       
+                data[key] = data[key] + shift_by
         return data
     
     @torch.jit.export
