@@ -93,7 +93,7 @@ class LAMMPS_MLIAP(MLIAPUnified):
         using_kokkos = "kokkos" in data.__class__.__module__.lower()
 
         if using_kokkos and not self.config.force_cpu:
-            device = torch.as_tensor(data.elems).device
+            device = torch.device("cuda")
             if device.type == "cpu" and not self.config.allow_cpu:
                 raise ValueError(
                     "GPU requested but tensor is on CPU. Set CURATOR_ALLOW_CPU=true to allow CPU computation."
