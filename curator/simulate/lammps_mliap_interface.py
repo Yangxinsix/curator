@@ -85,9 +85,15 @@ class LAMMPS_MLIAP(MLIAPUnified):
             if spec.key == 'energy':
                 spec.per_atom = True
                 spec.per_atom_key = 'atomic_energy'
+
         # output edge forces
         model.output_modules.gradient_output.compute_edge_forces = True
         model.output_modules.gradient_output.compute_edge_forces_only = True
+
+        if 'global_scale_shift' in model.output_modules:
+            model.output_modules.global_scale_shift.atomwise_shift = True
+            model.output_modules.global_scale_shift.scale_keys = ['atomic_energy', 'edge_forces']
+            model.output_modules.global_scale_shift.shift_keys = ['atomic_energy']
 
     def _initialize_device(self, data):
         using_kokkos = "kokkos" in data.__class__.__module__.lower()

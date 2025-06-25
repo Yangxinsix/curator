@@ -607,3 +607,21 @@ def convert_e3nn_to_cueq(model):
     load_e3nn_weights(model, cueq_model)
 
     return cueq_model
+
+def update_model(model):
+    rep_config = get_representation_config(model)
+    new_rep = model.representation.__class__(**rep_config)
+
+    try:
+        new_rep.load_state_dict(model.representation.state_dict())
+    except:
+        print("Load weights from old model failed!")
+
+    new_model = model.__class__(
+        input_modules=list(model.input_modules.values()),
+        output_modules=list(model.output_modules.values()),
+        representation=new_rep,
+        model_outputs=model.model_outputs,
+    )
+
+    return new_model
