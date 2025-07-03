@@ -64,9 +64,6 @@ class Dense(nn.Module):
         return y
 
 class AtomwiseNN(nn.Module):
-    # 1. Output structure-based property: per_atom=False, aggregation_mode='mean' or 'sum'
-    # 2. Output structure-based property + per-atom property: per_atom=True, aggregation_mode='mean' or 'sum'
-    # 3. Output per-atom property: per_atom=False, aggregation_mode = None
     def __init__(
         self,
         in_features: Union[int, o3.Irreps, str],
@@ -80,106 +77,127 @@ class AtomwiseNN(nn.Module):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
-        self.in_features = in_features
-        self.out_features = out_features
-        self.n_hidden_layers = n_hidden_layers
-        self.activation = activation
-        self.use_e3nn = use_e3nn
 
         if isinstance(in_features, str):
             in_features = o3.Irreps(in_features)
         if isinstance(out_features, str):
             out_features = o3.Irreps(out_features)
 
-        # number of neurons
+        self.use_e3nn = use_e3nn
+        self.n_hidden_layers = n_hidden_layers
+
+        # Setup neuron sizes
         n_neurons = [in_features]
         if n_hidden is None:
             for _ in range(n_hidden_layers):
-                if use_e3nn:
-                    mul = in_features.sort()[0][0].mul // 2
-                    mid_neuron = o3.Irreps(f'{mul}x0e')
-                else:
-                    mid_neuron = in_features
+                mid_neuron = o3.Irreps(f'{in_features.sort()[0][0].mul // 2}x0e') if use_e3nn else in_features
                 n_neurons.append(mid_neuron)
         elif isinstance(n_hidden, list):
             if len(n_hidden) != n_hidden_layers:
-                self.n_hidden_layers = n_hidden
-                warnings.warn(f"n_hidden ({len(n_hidden)}) does not equal to n_hidden_layers ({n_hidden_layers}).")
-            for neuron in n_hidden:
-                n_neurons.append(neuron)
+                self.n_hidden_layers = len(n_hidden)
+            n_neurons.extend(n_hidden)
         else:
-            for _ in range(n_hidden_layers):
-                n_neurons.append(n_hidden)
+            n_neurons.extend([n_hidden] * n_hidden_layers)
         n_neurons.append(out_features)
 
-        # activations
-        acts = []
+        # Setup activations
         if isinstance(activation, list):
             acts = [activation_fn[act] if isinstance(act, str) else act for act in activation] + [None]
         else:
-            acts = [activation_fn[activation] if isinstance(activation, str) else activation for _ in range(n_hidden_layers)] + [None]
+            acts = [activation_fn[activation] if isinstance(activation, str) else activation for _ in range(self.n_hidden_layers)] + [None]
 
-        # layers
-        layers = [Dense(n_neurons[i], n_neurons[i+1], acts[i], use_e3nn=use_e3nn) for i in range(self.n_hidden_layers + 1)]
-        self.readout_mlp = nn.Sequential(*layers)
+        self.readout_mlp = nn.Sequential(*[
+            Dense(n_neurons[i], n_neurons[i + 1], acts[i], use_e3nn=use_e3nn)
+            for i in range(self.n_hidden_layers + 1)
+        ])
 
-        # output keys
         n_out = out_features if isinstance(out_features, int) else out_features.dim
-        self.output_specs: List[OutputSpec] = []
-        # 1. Output structure-based property: per_atom=False, aggregation_mode='mean' or 'sum'
-        # 2. Output structure-based property + per-atom property: per_atom=True, aggregation_mode='mean' or 'sum'
-        # 3. Output per-atom property: per_atom=False, aggregation_mode = None
+
+        # Prepare and store output specifications
+        self._output_specs: List[OutputSpec] = []
+        model_outputs = []
+        per_atom_flags = []
+        aggregation_modes = []
+        per_atom_keys = []
+        split_sizes = []
+
         for spec in output_keys:
             if isinstance(spec, str):
-                self.output_specs.append(OutputSpec(
+                spec = OutputSpec(
                     key=spec,
                     per_atom=False,
                     aggregation_mode='sum',
                     per_atom_key=spec + '_pa',
-                    split_size=1, 
-                ))
+                    split_size=1,
+                )
             else:
                 if 'key' not in spec:
                     raise ValueError("No output key is specified!")
-                self.output_specs.append(OutputSpec(
+                spec = OutputSpec(
                     key=spec['key'],
                     per_atom=spec.get('per_atom', False),
                     aggregation_mode=spec.get('aggregation_mode', 'sum'),
                     per_atom_key=spec.get('per_atom_key', spec['key'] + '_pa'),
                     split_size=spec.get('split_size', 1),
-                ))
+                )
 
-        self.model_outputs = [spec.key for spec in self.output_specs]
-        self.split_size: List[int] = [spec.split_size for spec in self.output_specs]
-        assert sum(self.split_size) == n_out, "The dimensionality of output features does not match the number of output keys!"
+            self._output_specs.append(spec)
+            model_outputs.append(spec.key)
+            per_atom_flags.append(spec.per_atom)
+            aggregation_modes.append(spec.aggregation_mode or "none")
+            per_atom_keys.append(spec.per_atom_key)
+            split_sizes.append(spec.split_size)
 
-    def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
-        out = self.readout_mlp(input)
-        return out
+        self.model_outputs = model_outputs
+        self.per_atom_flags = per_atom_flags
+        self.aggregation_modes = aggregation_modes
+        self.per_atom_keys = per_atom_keys
+        self.split_size = split_sizes
 
-    def _parse_outputs(self, out: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
+        assert sum(self.split_size) == n_out, "Output feature dimensions do not match split sizes!"
+
+    @property
+    def output_specs(self) -> List[OutputSpec]:
+        return [
+            OutputSpec(
+                key=k,
+                per_atom=pa,
+                aggregation_mode=(am if am != 'none' else None),
+                per_atom_key=pak,
+                split_size=ss,
+            )
+            for k, pa, am, pak, ss in zip(
+                self.model_outputs,
+                self.per_atom_flags,
+                self.aggregation_modes,
+                self.per_atom_keys,
+                self.split_size,
+            )
+        ]
+
+    def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> torch.Tensor:
+        return self.readout_mlp(input)
+
+    def _parse_outputs(self, out: torch.Tensor, index: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         out = out.split(self.split_size, dim=1)
         output_dict: Dict[str, torch.Tensor] = {}
-        for i, spec in enumerate(self.output_specs):
-            prop = out[i].squeeze()
-            key = spec.key
-            per_atom = spec.per_atom
-            aggregation_mode = spec.aggregation_mode
-            per_atom_key = spec.per_atom_key
 
-            # per-atom property
+        for i in range(len(self.model_outputs)):
+            prop = out[i].squeeze()
+            key = self.model_outputs[i]
+            per_atom = self.per_atom_flags[i]
+            aggregation_mode = self.aggregation_modes[i]
+            per_atom_key = self.per_atom_keys[i]
+
             if per_atom:
                 output_dict[per_atom_key] = prop
-            
-            if aggregation_mode is not None:
-                if aggregation_mode == 'sum':
-                    output_dict[key] = scatter_add(prop, index, dim=0) if index is not None else torch.sum(prop, dim=0)
-                if aggregation_mode == 'mean':
-                    output_dict[key] = scatter_mean(prop, index, dim=0) if index is not None else torch.mean(prop, dim=0)
-                if aggregation_mode == 'None':
-                    output_dict[key] = prop
-            else:
-                output_dict[key] = prop       # output as is
+
+            if aggregation_mode == 'sum':
+                output_dict[key] = scatter_add(prop, index, dim=0) if index is not None else torch.sum(prop, dim=0)
+            elif aggregation_mode == 'mean':
+                output_dict[key] = scatter_mean(prop, index, dim=0) if index is not None else torch.mean(prop, dim=0)
+            elif aggregation_mode == 'none':
+                output_dict[key] = prop
 
         return output_dict
 
