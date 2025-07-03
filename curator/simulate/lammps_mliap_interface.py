@@ -7,6 +7,7 @@ import time
 from contextlib import contextmanager
 from typing import Dict, Tuple, Optional, List, Union
 from curator.model.base import NeuralNetworkPotential, LitNNP
+from e3nn.util import jit
 
 import torch
 from ase.data import chemical_symbols
@@ -94,6 +95,11 @@ class LAMMPS_MLIAP(MLIAPUnified):
             model.output_modules.global_scale_shift.atomwise_shift = True
             model.output_modules.global_scale_shift.scale_keys = ['atomic_energy', 'edge_forces']
             model.output_modules.global_scale_shift.shift_keys = ['atomic_energy']
+        
+        try:
+            model = torch.jit.script(model)
+        except:
+            model = jit.script(model)
 
     def _initialize_device(self, data):
         using_kokkos = "kokkos" in data.__class__.__module__.lower()

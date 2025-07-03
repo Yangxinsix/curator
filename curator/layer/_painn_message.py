@@ -53,7 +53,7 @@ class PainnMessage(Interaction):
         lammps_data: Optional[Any] = None,
         n_local: Optional[int] = None,
         n_ghost: Optional[int] = None,
-    ) -> properties.Type:
+    ) -> torch.Tensor:
         # edge distance embedding
         filter_weight = self.filter_layer(self.radial_basis(edge_dist))
         filter_weight = filter_weight * self.cutoff_fn(edge_dist).unsqueeze(-1)
