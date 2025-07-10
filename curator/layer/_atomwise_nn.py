@@ -156,7 +156,6 @@ class AtomwiseNN(nn.Module):
 
         assert sum(self.split_size) == n_out, "Output feature dimensions do not match split sizes!"
 
-    @property
     def output_specs(self) -> List[OutputSpec]:
         return [
             OutputSpec(

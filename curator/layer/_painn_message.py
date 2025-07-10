@@ -3,7 +3,7 @@ from torch import nn
 from ._interaction import Interaction
 from .cutoff import CosineCutoff
 from .radial_basis import SineBasis
-from typing import Optional, Any
+from typing import Optional, Any, Union
 from curator.data import properties
 try:
     from torch_scatter import scatter_add

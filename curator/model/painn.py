@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from typing import List, Optional, Dict, Type, Union
+from typing import List, Optional, Dict, Type, Union, Any
 from functools import partial
 
 from curator.data import (
@@ -70,6 +70,9 @@ class Painn(nn.Module):
     def forward(
         self, 
         data: properties.Type,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
     ) -> properties.Type:
         # add mask for local interaction part
         edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
@@ -92,9 +95,9 @@ class Painn(nn.Module):
                 edge_idx,
                 edge_dist,
                 edge_diff,
-                lammps_data=data.get('lammps_data'),
-                n_local=data.get('n_local'),
-                n_ghost=data.get('n_ghost'),
+                lammps_data=lammps_data,
+                n_local=n_local,
+                n_ghost=n_ghost,
             )
             node_feat = update_layer(node_feat)
         
