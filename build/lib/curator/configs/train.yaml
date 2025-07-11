@@ -1,0 +1,18 @@
+
+defaults:
+  - trainer: default_trainer
+  - task: default_task
+  - model: nnp
+  - data: custom
+  - optional model/repr_params: ${model/representation}_params       # model specified hyperparameters. Training different models will need different params such as batch size, optimizer, learning rate, etc. 
+  - optional task/output_params: ${task/outputs}_params 
+  - _self_
+
+# Some parameters that are important for training
+seed: 3407
+cfg: null
+model_path: null               # Model checkpoint
+run_path: .
+deploy_model: True
+compile: False
+device: cuda

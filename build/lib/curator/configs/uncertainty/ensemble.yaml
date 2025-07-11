@@ -1,0 +1,4 @@
+method: ensemble
+threshold: forces_sd
+threshold_value: 0.05
+threshold_maxvalue: 0.5
