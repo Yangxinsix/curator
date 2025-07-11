@@ -1,4 +1,0 @@
-_target_: curator.simulate.logger.MDLogger
-logger: null
-uncertainty: null
-min_calls: 1000
