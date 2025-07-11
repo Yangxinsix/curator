@@ -81,10 +81,10 @@ class LAMMPS_MLIAP(MLIAPUnified):
         model.model_outputs = ['atomic_energy', 'edge_forces']
 
         # output atomic energy
-        for spec in model.representation.readout.output_specs:
-            if spec.key == 'energy':
-                spec.per_atom = True
-                spec.per_atom_key = 'atomic_energy'
+        for i, key in enumerate(model.representation.readout.model_outputs):
+            if key == 'energy':
+                model.representation.readout.per_atom_flags[i] = True
+                model.representation.readout.per_atom_keys[i] = 'atomic_energy'
 
         # output edge forces
         model.output_modules.gradient_output.compute_edge_forces = True
@@ -94,6 +94,8 @@ class LAMMPS_MLIAP(MLIAPUnified):
             model.output_modules.global_scale_shift.atomwise_shift = True
             model.output_modules.global_scale_shift.scale_keys = ['atomic_energy', 'edge_forces']
             model.output_modules.global_scale_shift.shift_keys = ['atomic_energy']
+        
+        model.eval()
 
     def _initialize_device(self, data):
         using_kokkos = "kokkos" in data.__class__.__module__.lower()
@@ -154,10 +156,7 @@ class LAMMPS_MLIAP(MLIAPUnified):
             ).T,
             "_edge_difference": torch.as_tensor(data.rij).to(self.dtype).to(self.device),
             "atomic_numbers": torch.as_tensor(data.elems, dtype=torch.int64).to(self.device),
-            "lammps_data": data,
-            "n_local": data.nlocal,
-            "n_ghost": data.ntotal - data.nlocal,
-        }
+        }, data, data.nlocal, data.ntotal - data.nlocal
 
     def _update_lammps_data(self, data, atom_energies, pair_forces, natoms):
         """Update LAMMPS data structures with computed energies and forces."""

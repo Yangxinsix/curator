@@ -236,6 +236,8 @@ def deploy(
         load_weights_only: bool=False,
         cfg_path: Optional[str] = None,
         return_model: bool = False,
+        lammps_mliap: bool = False,
+        element_types: Optional[List[str]] = None,
     ):
     """ Deploy the model and save a compiled model.
 
@@ -286,6 +288,14 @@ def deploy(
             model = load_model(model_path[0])
     else:
         model = load_model(model_path)
+
+    if lammps_mliap:
+        from curator.simulate.lammps_mliap_interface import LAMMPS_MLIAP
+        lmp_model = LAMMPS_MLIAP(model, element_types)
+        if target_path == 'compiled_model.pt':
+            target_path = 'lmp_model.pth'
+        torch.save(lmp_model, target_path)
+        return lmp_model
 
     # Compile the model
     model_compiled = script(model)
