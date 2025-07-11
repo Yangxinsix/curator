@@ -1,4 +1,10 @@
+include README.md
+
 recursive-include curator *.py
-recursive-include curator *.yaml
+recursive-include curator *.yaml *.yml *.toml *.json *.txt
+recursive-include scripts *
+
 global-exclude *.pyc
 global-exclude __pycache__
+
+include LICENSE

@@ -293,7 +293,7 @@ def deploy(
         from curator.simulate.lammps_mliap_interface import LAMMPS_MLIAP
         lmp_model = LAMMPS_MLIAP(model, element_types)
         if target_path == 'compiled_model.pt':
-            target_path = 'lmp_model.pth'
+            target_path = 'lmp_model.pt'
         torch.save(lmp_model, target_path)
         return lmp_model
 
