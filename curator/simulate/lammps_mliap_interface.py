@@ -81,10 +81,10 @@ class LAMMPS_MLIAP(MLIAPUnified):
         model.model_outputs = ['atomic_energy', 'edge_forces']
 
         # output atomic energy
-        for spec in model.representation.readout.output_specs:
-            if spec.key == 'energy':
-                spec.per_atom = True
-                spec.per_atom_key = 'atomic_energy'
+        for i, key in enumerate(model.representation.readout.model_outputs):
+            if key == 'energy':
+                model.representation.readout.per_atom_flags[i] = True
+                model.representation.readout.per_atom_keys[i] = 'atomic_energy'
 
         # output edge forces
         model.output_modules.gradient_output.compute_edge_forces = True
