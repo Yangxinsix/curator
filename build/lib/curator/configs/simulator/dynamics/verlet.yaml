@@ -1,0 +1,3 @@
+_target_: ase.md.VelocityVerlet
+_partial_: True
+timestep: ${multiply_fs: ${simulator.timestep}}                  # take care of the unit. fs -> ase.units.fs

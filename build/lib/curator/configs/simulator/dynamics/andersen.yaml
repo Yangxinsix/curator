@@ -1,0 +1,5 @@
+_target_: ase.md.Andersen
+_partial_: True
+timestep: ${multiply_fs: ${simulator.timestep}}                 # take care of the unit. fs -> ase.units.fs
+temperature_K: ${simulator.temperature}
+andersen_prob: 0.002

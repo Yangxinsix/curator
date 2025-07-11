@@ -1,0 +1,25 @@
+_target_: curator.data.AtomsDataModule
+_convert_: partial
+datapath: null
+train_path: null
+val_path: null
+test_path: null
+batch_size: 8
+compute_neighbor_list: False
+cutoff: 5.0
+num_train: 0.9
+num_val: 0.1
+num_test: null
+train_val_split: random
+shuffle: true
+num_workers: 0
+pin_memory: True
+species: null
+avg_num_neighbors: auto
+atomic_energies: null
+normalization: True
+atomwise_normalization: True
+scale_forces: True
+transforms: []
+  # - _target_: curator.data.TypeMapper
+  #   species: ${data.species}

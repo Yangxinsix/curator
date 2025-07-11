@@ -1,0 +1,20 @@
+defaults:
+  - calculator: default_calculator
+  - logger: md_logger
+  - dynamics: langevin
+  - uncertainty: ensemble
+
+_target_: curator.simulate.simulator.MDSimulator
+init_traj: null                        # must be specified
+out_traj: ${run_path}/MD.traj
+start_index: -1
+rattle: false
+fix_under: null
+print_step: 1
+dump_step: 100
+max_steps: 1000
+initialize_velocities: true
+
+# MD related parameters
+temperature: 298.15
+timestep: 0.5
