@@ -1,4 +1,0 @@
-_target_: pytorch_lightning.loggers.WandbLogger
-save_dir: ${run_path}/logs
-offline: true
-name: curator-train
