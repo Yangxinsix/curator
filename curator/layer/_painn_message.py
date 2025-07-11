@@ -3,7 +3,7 @@ from torch import nn
 from ._interaction import Interaction
 from .cutoff import CosineCutoff
 from .radial_basis import SineBasis
-from typing import Optional, Any
+from typing import Optional, Any, Union
 from curator.data import properties
 try:
     from torch_scatter import scatter_add
@@ -53,7 +53,7 @@ class PainnMessage(Interaction):
         lammps_data: Optional[Any] = None,
         n_local: Optional[int] = None,
         n_ghost: Optional[int] = None,
-    ) -> properties.Type:
+    ) -> torch.Tensor:
         # edge distance embedding
         filter_weight = self.filter_layer(self.radial_basis(edge_dist))
         filter_weight = filter_weight * self.cutoff_fn(edge_dist).unsqueeze(-1)
