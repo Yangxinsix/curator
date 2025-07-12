@@ -102,6 +102,7 @@ def train(config: DictConfig) -> None:
     else:
         # Initiate the model from scratch
         model = hydra.utils.instantiate(config.model)
+        outputs = instantiate(config.task.outputs)
 
     if config.compile:
         log.debug("Compiling model with torch.compile")
