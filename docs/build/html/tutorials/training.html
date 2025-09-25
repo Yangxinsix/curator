@@ -1,3 +1,5 @@
+
+
 <!DOCTYPE html>
 <html class="writer-html5" lang="en" data-content_root="../">
 <head>
@@ -5,19 +7,15 @@
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Training machine learning potentials &mdash; Tutorial for CURATOR 1.0.0 documentation</title>
-      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=92fd9be5" />
-      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=19f00094" />
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
 
   
-  <!--[if lt IE 9]>
-    <script src="../_static/js/html5shiv.min.js"></script>
-  <![endif]-->
-  
-        <script src="../_static/jquery.js?v=5d32c60e"></script>
-        <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
-        <script src="../_static/documentation_options.js?v=8d563738"></script>
-        <script src="../_static/doctools.js?v=9a2dae69"></script>
-        <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=8d563738"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
@@ -52,6 +50,10 @@
 <ul class="current">
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Training machine learning potentials</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="#preparing-data">Preparing data</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#using-hydra-s-defaults-list">Using hydra’s defaults list</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#initiating-objects">Initiating objects</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#preprocessing-dataset">Preprocessing dataset</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#multi-gpu-training">Multi-GPU training</a></li>
 </ul>
 </li>
 </ul>
@@ -103,8 +105,58 @@ If you want to specify hyperparameters by yourself, you can choose to use comman
 </pre></div>
 </div>
 <p>You can select any parameters you want to use inside this file. The meanings of different parameters can be found in <code class="docutils literal notranslate"><span class="pre">curator/configs</span></code> folder.
-And a <cite>config.yaml</cite> file containing all hyperparameters used in the task will also be generated once the user run any jobs. The users can refer to this file for setting up their own training tasks.
+And a <code class="docutils literal notranslate"><span class="pre">config.yaml</span></code> file containing all hyperparameters used in the task will also be generated once the user run any jobs. The users can refer to this file for setting up their own training tasks.
 Except for training, all other tasks can be initiated in both ways.</p>
+</section>
+<section id="using-hydra-s-defaults-list">
+<h2>Using hydra’s defaults list<a class="headerlink" href="#using-hydra-s-defaults-list" title="Link to this heading"></a></h2>
+<p>Now there are three equivariant graph neural network architechtures (<a class="reference external" href="https://arxiv.org/abs/2102.03150">PaiNN</a>, <a class="reference external" href="https://www.nature.com/articles/s41467-022-29939-5">NequIP</a>, <a class="reference external" href="https://arxiv.org/abs/2206.07697">MACE</a>) implemented in <code class="docutils literal notranslate"><span class="pre">curator</span></code>.
+Changing one from another may need one to modify a lot of model hyperparameters, and this could be a painful task for people who are not familiar with the models and <code class="docutils literal notranslate"><span class="pre">curator</span></code> codebase.</p>
+<p>Using hydra’s defaults list can make this process much easier. You can specify the default configs that defines the default parameters for different architechtures by changing <code class="docutils literal notranslate"><span class="pre">model/representation</span></code>:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">defaults</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">model/representation</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">mace</span>
+</pre></div>
+</div>
+<p>Likewise, you can specify other default config files in <code class="docutils literal notranslate"><span class="pre">curator/configs</span></code>. For example, we can change the default logger for trainer, use different loss functions, specify different types of error metrics by:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">defaults</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">task/outputs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">energy_force_virial</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">trainer/logger</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">wandb</span>
+</pre></div>
+</div>
+</section>
+<section id="initiating-objects">
+<h2>Initiating objects<a class="headerlink" href="#initiating-objects" title="Link to this heading"></a></h2>
+<p>Sometimes you may want to create the model or dataset in python with the config file. It can be done by using hydra’s instantiate function.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="linenos">1</span><span class="kn">from</span><span class="w"> </span><span class="nn">hydra.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">instantiate</span>
+<span class="linenos">2</span><span class="kn">from</span><span class="w"> </span><span class="nn">curator.utils</span><span class="w"> </span><span class="kn">import</span> <span class="n">read_user_config</span>
+<span class="linenos">3</span>
+<span class="linenos">4</span><span class="n">cfg</span> <span class="o">=</span> <span class="n">read_user_config</span><span class="p">(</span><span class="s1">&#39;user_cfg.yaml&#39;</span><span class="p">,</span> <span class="n">config_name</span><span class="o">=</span><span class="s1">&#39;train.yaml&#39;</span><span class="p">)</span>  <span class="c1"># for different tasks using different config_name. For example, select.yaml for selection.</span>
+<span class="linenos">5</span><span class="n">model</span> <span class="o">=</span> <span class="n">instantiate</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">model</span><span class="p">)</span>
+<span class="linenos">6</span><span class="n">data</span> <span class="o">=</span> <span class="n">instantiate</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">data</span><span class="p">)</span>
+<span class="linenos">7</span><span class="n">data</span><span class="o">.</span><span class="n">setup</span><span class="p">()</span>
+</pre></div>
+</div>
+<p>Hydra supports recursive instantiation and you can override parameters during instantiation:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="linenos">1</span><span class="n">data</span> <span class="o">=</span> <span class="n">instantiate</span><span class="p">(</span><span class="n">cfg</span><span class="o">.</span><span class="n">data</span><span class="p">,</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">32</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>More usage examples can be found in <a class="reference external" href="https://hydra.cc/docs/advanced/instantiate_objects/overview/">https://hydra.cc/docs/advanced/instantiate_objects/overview/</a></p>
+</section>
+<section id="preprocessing-dataset">
+<h2>Preprocessing dataset<a class="headerlink" href="#preprocessing-dataset" title="Link to this heading"></a></h2>
+<p>In <strong>CURATOR</strong>, preprocessing dataset includes but not restricts to: 1. Dataset normalization. 2. Unit transform. 3 Compute neighbor list. 4. Cast data type.</p>
+<p>In most cases, preprocessing dataset may significantly improve the model performance. Especially for the cases where the atomic energies are far away from 0 and the dataset containing multiple types of structures.</p>
+<p>We provided several normalization schemes for energies.</p>
+<ol class="arabic simple">
+<li><p><a href="#id1"><span class="problematic" id="id2">``</span></a>data.atomwise_``Atomwise normalization which calculates the atomic .</p></li>
+<li><p>Structure-based Normalization. This option is often not suggested because it may cause worse predictions for structures with different number of atoms.</p></li>
+<li><p>Per-species normalization.</p></li>
+<li><p>Reference energies.</p></li>
+<li><p>Scale forces</p></li>
+</ol>
+</section>
+<section id="multi-gpu-training">
+<h2>Multi-GPU training<a class="headerlink" href="#multi-gpu-training" title="Link to this heading"></a></h2>
 </section>
 </section>
 
