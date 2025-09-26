@@ -88,6 +88,7 @@ class TorchNeighborList(NeighborListTransform):
         self,
         *args,
         wrap_atoms: bool=True,
+        return_cell_displacements: bool=False,
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -97,6 +98,7 @@ class TorchNeighborList(NeighborListTransform):
             torch.arange(-1, 2),
         )
         self.wrap_atoms = wrap_atoms
+        self.return_cell_displacements = return_cell_displacements
         self.register_buffer('disp_mat', disp_mat, persistent=False)
     
     def _build_neighbor_list(self, positions: torch.Tensor, cell: torch.Tensor) -> properties.Type:
@@ -175,6 +177,13 @@ class TorchNeighborList(NeighborListTransform):
         }
         if self.return_distance:
             outputs[properties.edge_dist] = pair_dist[mask]
+
+        if self.return_cell_displacements:
+            # base positions for j consistent with how we built padded_pos
+            base_pos_j = wrapped_pos  # (if you choose not to wrap, use positions instead)
+            cell_displacements = padded_pos[pair_j_padded] - base_pos_j[pair_j]
+            outputs[properties.cell_displacements] = cell_displacements[mask]
+
         return outputs
         
 class Asap3NeighborList(NeighborListTransform):
