@@ -40,7 +40,7 @@ This employs CURATOR's default settings, using the PaiNN_ model architecture. If
 
       curator-train cfg=user_cfg.yaml
 
-You can define any parameters in the config file. For reference, the meanings of different parameters are documented under ``curator/configs/``. Once a job is run, a complete ``config.yaml`` file will be generated. This file reflects the effective configuration and can be reused or modified for future tasks.
+You can define any parameters in the config file. For reference, the meanings of different parameters are documented under ``curator/configs/``. Once a job is run, a complete ``config.yaml`` file will be generated. This file contains the effective configuration and can be reused or modified for future tasks.
 
 All other CURATOR tasks (e.g., selection, evaluation) can be initiated in the same way.
 
@@ -67,7 +67,7 @@ Similarly, you can configure other components such as loss functions, loggers, a
 Instantiating Objects in Python
 -------------------------------
 
-You may wish to create models or datasets programmatically from a config file. CURATOR supports this via Hydra’s ``instantiate`` function.
+You may wish to create models or datasets programmatically from a config file. CURATOR supports this via Hydra's ``instantiate`` function.
 
 .. code-block:: python
     :linenos:
@@ -102,7 +102,7 @@ Dataset preprocessing in CURATOR includes (but is not limited to):
 Proper preprocessing often significantly improves model performance, especially when:
 
 - Atomic energies are far from zero
-- The dataset contains diverse structural motifs
+- The dataset contains diverse structures
 
 CURATOR supports several normalization schemes for energies:
 
