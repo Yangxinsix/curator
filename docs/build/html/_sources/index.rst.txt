@@ -24,4 +24,5 @@ CURATOR is a toolbox for constructing machine learning interatomic potentials vi
    :caption: Interface
 
    interface/lammps.rst
+   interface/lammps_mliap.rst
    interface/openmm.rst
