@@ -91,3 +91,6 @@ We provided several normalization schemes for energies.
 
 Multi-GPU training
 ------------------
+
+GPU kernel acceleration with CuEquivariance
+-------------------------------------------
