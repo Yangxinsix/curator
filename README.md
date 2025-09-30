@@ -22,7 +22,7 @@ It currently supports three message-passing neural network (MPNN) architectures:
 
 ### Requirements
 - Python >= 3.8  
-- [PyTorch >= 1.13](https://pytorch.org/get-started/locally/)  
+- [PyTorch >= 1.9](https://pytorch.org/get-started/locally/)  
 
 > ⚠️ Please follow the official PyTorch installation guide to select the correct version for your operating system, CUDA, or CPU setup.
 

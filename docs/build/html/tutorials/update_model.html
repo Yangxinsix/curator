@@ -6,7 +6,7 @@
   <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>OpenMM interface &mdash; Tutorial for CURATOR 1.0.0 documentation</title>
+  <title>How to convert old model to new model &mdash; Tutorial for CURATOR 1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
       <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
 
@@ -18,8 +18,7 @@
       <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
     <script src="../_static/js/theme.js"></script>
     <link rel="index" title="Index" href="../genindex.html" />
-    <link rel="search" title="Search" href="../search.html" />
-    <link rel="prev" title="Using CURATOR with LAMMPS ML-IAP package" href="lammps_mliap.html" /> 
+    <link rel="search" title="Search" href="../search.html" /> 
 </head>
 
 <body class="wy-body-for-nav"> 
@@ -47,17 +46,13 @@
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Tutorials</span></p>
 <ul>
-<li class="toctree-l1"><a class="reference internal" href="../tutorials/training.html">Training Machine Learning Potentials</a></li>
+<li class="toctree-l1"><a class="reference internal" href="training.html">Training Machine Learning Potentials</a></li>
 </ul>
 <p class="caption" role="heading"><span class="caption-text">Interface</span></p>
-<ul class="current">
-<li class="toctree-l1"><a class="reference internal" href="lammps.html">LAMMPS interface</a></li>
-<li class="toctree-l1"><a class="reference internal" href="lammps_mliap.html">Using CURATOR with LAMMPS ML-IAP package</a></li>
-<li class="toctree-l1 current"><a class="current reference internal" href="#">OpenMM interface</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="#intallation">Intallation</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#deploy-trained-model">Deploy trained model</a></li>
-</ul>
-</li>
+<ul>
+<li class="toctree-l1"><a class="reference internal" href="../interface/lammps.html">LAMMPS interface</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../interface/lammps_mliap.html">Using CURATOR with LAMMPS ML-IAP package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../interface/openmm.html">OpenMM interface</a></li>
 </ul>
 
         </div>
@@ -74,9 +69,9 @@
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
       <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
-      <li class="breadcrumb-item active">OpenMM interface</li>
+      <li class="breadcrumb-item active">How to convert old model to new model</li>
       <li class="wy-breadcrumbs-aside">
-            <a href="../_sources/interface/openmm.rst.txt" rel="nofollow"> View page source</a>
+            <a href="../_sources/tutorials/update_model.rst.txt" rel="nofollow"> View page source</a>
       </li>
   </ul>
   <hr/>
@@ -84,27 +79,21 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="openmm-interface">
-<h1>OpenMM interface<a class="headerlink" href="#openmm-interface" title="Link to this heading"></a></h1>
-<p>OpenMM is a highly-optimized GPU MD code. By using OpenMM-Torch plugin, it enables full GPU MD simulation with machine learning potentials.</p>
-<section id="intallation">
-<h2>Intallation<a class="headerlink" href="#intallation" title="Link to this heading"></a></h2>
-<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>conda<span class="w"> </span>install<span class="w"> </span>pytorch-gpu<span class="o">=</span><span class="m">1</span>.13.1<span class="w"> </span>openmm-torch<span class="w"> </span>-c<span class="w"> </span>conda-forge
+  <section id="how-to-convert-old-model-to-new-model">
+<h1>How to convert old model to new model<a class="headerlink" href="#how-to-convert-old-model-to-new-model" title="Link to this heading"></a></h1>
+<p>If you are using old model and want to convert it to newer version for more funcionalities of CURATOR, you can refer to the following tutorial.</p>
+<section id="save-configs-and-weights-of-old-model">
+<h2>Save configs and weights of old model<a class="headerlink" href="#save-configs-and-weights-of-old-model" title="Link to this heading"></a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span>
 </pre></div>
 </div>
-</section>
-<section id="deploy-trained-model">
-<h2>Deploy trained model<a class="headerlink" href="#deploy-trained-model" title="Link to this heading"></a></h2>
-<p>No documentation yet.</p>
 </section>
 </section>
 
 
            </div>
           </div>
-          <footer><div class="rst-footer-buttons" role="navigation" aria-label="Footer">
-        <a href="lammps_mliap.html" class="btn btn-neutral float-left" title="Using CURATOR with LAMMPS ML-IAP package" accesskey="p" rel="prev"><span class="fa fa-arrow-circle-left" aria-hidden="true"></span> Previous</a>
-    </div>
+          <footer>
 
   <hr/>
 
