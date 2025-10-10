@@ -52,7 +52,7 @@
 <li class="toctree-l2"><a class="reference internal" href="#preparing-data">Preparing Data</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#using-hydra-s-defaults-list">Using Hydra’s Defaults List</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#instantiating-objects-in-python">Instantiating Objects in Python</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#preprocessing-datasets">Preprocessing Datasets</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#saving-model-and-restart-training">Saving model and restart training</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#multi-gpu-training">Multi-GPU Training</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#specify-number-of-gpus">1. Specify Number of GPUs</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#choose-the-distributed-strategy-recommended-ddp">2. Choose the Distributed Strategy (Recommended: <code class="docutils literal notranslate"><span class="pre">ddp</span></code>)</a></li>
@@ -60,6 +60,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#enable-mixed-precision-optional">4. Enable Mixed Precision (Optional)</a></li>
 </ul>
 </li>
+<li class="toctree-l2"><a class="reference internal" href="#cuequivariance-acceleration">cuEquivariance acceleration</a></li>
 </ul>
 </li>
 </ul>
@@ -155,32 +156,27 @@
 </div>
 <p>More examples can be found in the <a class="reference external" href="https://hydra.cc/docs/advanced/instantiate_objects/overview/">Hydra instantiate documentation</a>.</p>
 </section>
-<section id="preprocessing-datasets">
-<h2>Preprocessing Datasets<a class="headerlink" href="#preprocessing-datasets" title="Link to this heading"></a></h2>
-<p>Dataset preprocessing in CURATOR includes (but is not limited to):</p>
-<ol class="arabic simple">
-<li><p>Dataset normalization</p></li>
-<li><p>Unit conversion</p></li>
-<li><p>Neighbor list construction</p></li>
-<li><p>Data type casting</p></li>
-</ol>
-<p>Proper preprocessing often significantly improves model performance, especially when:</p>
-<ul class="simple">
-<li><p>Atomic energies are far from zero</p></li>
-<li><p>The dataset contains diverse structures</p></li>
-</ul>
-<p>CURATOR supports several normalization schemes for energies:</p>
-<ol class="arabic simple">
-<li><p><strong>Atomwise normalization</strong>: Normalizes energy per atom.</p></li>
-<li><p><strong>Structure-based normalization</strong>: Not recommended, as it can degrade performance on systems with varying atom counts.</p></li>
-<li><p><strong>Per-species normalization</strong>: Adjusts normalization by chemical species.</p></li>
-<li><p><strong>Reference energy subtraction</strong>: Subtracts fixed reference values.</p></li>
-<li><p><strong>Force scaling</strong>: Adjusts force magnitude for training stability.</p></li>
-</ol>
+<section id="saving-model-and-restart-training">
+<h2>Saving model and restart training<a class="headerlink" href="#saving-model-and-restart-training" title="Link to this heading"></a></h2>
+<p>CURATOR automatically saves model checkpoints during training using PyTorch Lightning’s built-in <code class="docutils literal notranslate"><span class="pre">ModelCheckpoint</span></code> callback. By default, it saves the latest and best-performing checkpoints according to validation loss.</p>
+<p>The checkpoints will be saved to <code class="docutils literal notranslate"><span class="pre">model_path/best_model_{epoch}_{step}_{val_total_loss:.2f}.ckpt</span></code>.</p>
+<p>You can also customize checkpointing behavior in the configuration file, for example to save checkpoints for every <code class="docutils literal notranslate"><span class="pre">N</span></code> epoch:</p>
+<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">trainer</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">callbacks</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">_target_</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">pytorch_lightning.callbacks.ModelCheckpoint</span>
+<span class="w">      </span><span class="nt">dirpath</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">model_path</span>
+<span class="w">      </span><span class="nt">save_top_k</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">-1</span>
+<span class="w">      </span><span class="nt">every_n_epochs</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span><span class="w">  </span><span class="c1"># can be any integers</span>
+</pre></div>
+</div>
+<p>To resume training from a specific checkpoint:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curator-train<span class="w"> </span><span class="nv">model_path</span><span class="o">=</span>model_path/best_model_epoch<span class="o">=</span><span class="m">10</span>.ckpt
+</pre></div>
+</div>
 </section>
 <section id="multi-gpu-training">
 <h2>Multi-GPU Training<a class="headerlink" href="#multi-gpu-training" title="Link to this heading"></a></h2>
-<p>PyTorch Lightning makes multi-GPU training easy and scalable. Compared to single-GPU training, you only need to modify a few configuration options in your YAML file.</p>
+<p>PyTorch Lightning makes multi-GPU training easy and scalable. To enable multi-GPU training, modify the following options in your YAML file:</p>
 <section id="specify-number-of-gpus">
 <h3>1. Specify Number of GPUs<a class="headerlink" href="#specify-number-of-gpus" title="Link to this heading"></a></h3>
 <p>Set the number of GPUs using the <code class="docutils literal notranslate"><span class="pre">trainer.devices</span></code> option.</p>
@@ -211,6 +207,11 @@
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">ddp</span></code> ensures each GPU handles a portion of the data in parallel and synchronizes gradients efficiently. Mixed precision further speeds up training while reducing GPU memory usage.</p>
 </section>
+</section>
+<section id="cuequivariance-acceleration">
+<h2>cuEquivariance acceleration<a class="headerlink" href="#cuequivariance-acceleration" title="Link to this heading"></a></h2>
+<p>cuEquivariance is an NVIDIA Python library to accelerate GPU kernel for graph neural networks. It can accelerate training and inference of MACE and nequip models for several times.
+It is easy to enable cuEquivariance acceleration in <strong>CURATOR</strong>.</p>
 </section>
 </section>
 
