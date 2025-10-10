@@ -1,4 +1,4 @@
 Using models for simulations
 ============================
 
-When the trained model is ready.
+When model training is finished, you can use the models for simulations.
