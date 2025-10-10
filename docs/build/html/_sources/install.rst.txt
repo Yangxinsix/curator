@@ -34,7 +34,7 @@ For better training and inference performance, install additional acceleration p
 Install from source
 -------------------
 
-To install the latest development version:
+To install the latest version:
 
 .. code-block:: bash
 

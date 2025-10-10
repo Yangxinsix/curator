@@ -89,33 +89,57 @@ Hydra supports recursive instantiation and parameter overrides:
 
 More examples can be found in the `Hydra instantiate documentation <https://hydra.cc/docs/advanced/instantiate_objects/overview/>`_.
 
-Preprocessing Datasets
-----------------------
+Saving model and restart training
+--------------------------------- 
+CURATOR automatically saves model checkpoints during training using PyTorch Lightning's built-in ``ModelCheckpoint`` callback. By default, it saves the latest and best-performing checkpoints according to validation loss.
 
-Dataset preprocessing in CURATOR includes (but is not limited to):
+The checkpoints will be saved to ``model_path/best_model_{epoch}_{step}_{val_total_loss:.2f}.ckpt``.
 
-1. Dataset normalization  
-2. Unit conversion  
-3. Neighbor list construction  
-4. Data type casting
+You can also customize checkpointing behavior in the configuration file, for example to save checkpoints for every ``N`` epoch:
 
-Proper preprocessing often significantly improves model performance, especially when:
+.. code-block:: yaml
 
-- Atomic energies are far from zero
-- The dataset contains diverse structures
+    trainer:
+      callbacks:
+        - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+          dirpath: model_path
+          save_top_k: -1
+          every_n_epochs: 10  # can be any integers
 
-CURATOR supports several normalization schemes for energies:
+To resume training from a specific checkpoint:
 
-1. **Atomwise normalization**: Normalizes energy per atom.  
-2. **Structure-based normalization**: Not recommended, as it can degrade performance on systems with varying atom counts.  
-3. **Per-species normalization**: Adjusts normalization by chemical species.  
-4. **Reference energy subtraction**: Subtracts fixed reference values.
-5. **Force scaling**: Adjusts force magnitude for training stability.
+.. code-block:: bash
+
+    curator-train model_path=model_path/best_model_epoch=10.ckpt
+
+.. Preprocessing Datasets
+.. ----------------------
+
+.. Dataset preprocessing in CURATOR includes (but is not limited to):
+
+.. 1. Dataset normalization  
+.. 2. Unit conversion  
+.. 3. Neighbor list construction  
+.. 4. Data type casting
+
+.. Proper preprocessing often significantly improves model performance, especially when:
+
+.. - Atomic energies are far from zero
+.. - The dataset contains diverse structures
+
+.. CURATOR supports several normalization schemes for energies:
+
+.. 1. **Atomwise normalization**: Normalizes energy per atom.  
+.. 2. **Structure-based normalization**: Not recommended, as it can degrade performance on systems with varying atom counts.  
+.. 3. **Per-species normalization**: Adjusts normalization by chemical species.  
+.. 4. **Reference energy subtraction**: Subtracts fixed reference values.
+.. 5. **Force scaling**: Adjusts force magnitude for training stability.
 
 Multi-GPU Training
 ------------------
 
-PyTorch Lightning makes multi-GPU training easy and scalable. Compared to single-GPU training, you only need to modify a few configuration options in your YAML file.
+PyTorch Lightning makes multi-GPU training easy and scalable. To enable multi-GPU training, modify the following options in your YAML file:
+
 
 1. Specify Number of GPUs
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -152,3 +176,10 @@ For faster training and lower memory usage, enable automatic mixed precision by 
     For example, if you previously used ``batch_size: 32`` on a single GPU, and now want to use 4 GPUs, set ``batch_size: 128``.
 
 ``ddp`` ensures each GPU handles a portion of the data in parallel and synchronizes gradients efficiently. Mixed precision further speeds up training while reducing GPU memory usage.
+
+cuEquivariance acceleration
+---------------------------
+
+cuEquivariance is an NVIDIA Python library to accelerate GPU kernel for graph neural networks. It can accelerate training and inference of MACE and nequip models for several times.
+It is easy to enable cuEquivariance acceleration in **CURATOR**.
+

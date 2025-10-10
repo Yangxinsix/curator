@@ -91,6 +91,26 @@ More examples can be found in the `Hydra instantiate documentation <https://hydr
 
 Saving model and restart training
 --------------------------------- 
+CURATOR automatically saves model checkpoints during training using PyTorch Lightning's built-in ``ModelCheckpoint`` callback. By default, it saves the latest and best-performing checkpoints according to validation loss.
+
+The checkpoints will be saved to ``model_path/best_model_{epoch}_{step}_{val_total_loss:.2f}.ckpt``.
+
+You can also customize checkpointing behavior in the configuration file, for example to save checkpoints for every ``N`` epoch:
+
+.. code-block:: yaml
+
+    trainer:
+      callbacks:
+        - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+          dirpath: model_path
+          save_top_k: -1
+          every_n_epochs: 10  # can be any integers
+
+To resume training from a specific checkpoint:
+
+.. code-block:: bash
+
+    curator-train model_path=model_path/best_model_epoch=10.ckpt
 
 .. Preprocessing Datasets
 .. ----------------------
@@ -118,7 +138,8 @@ Saving model and restart training
 Multi-GPU Training
 ------------------
 
-PyTorch Lightning makes multi-GPU training easy and scalable. Compared to single-GPU training, you only need to modify a few configuration options in your YAML file.
+PyTorch Lightning makes multi-GPU training easy and scalable. To enable multi-GPU training, modify the following options in your YAML file:
+
 
 1. Specify Number of GPUs
 ~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -159,6 +180,13 @@ For faster training and lower memory usage, enable automatic mixed precision by 
 cuEquivariance acceleration
 ---------------------------
 
-cuEquivariance is an NVIDIA Python library to accelerate GPU kernel for graph neural networks. It can accelerate training and inference of MACE and nequip models for several times.
-It is easy to enable cuEquivariance acceleration in **CURATOR**.
+cuEquivariance is an NVIDIA Python library to accelerate GPU kernel for graph neural networks. It can speed up training and inference of MACE and nequip models significantly.
+To enable cuEquivariance acceleration in CURATOR, simply set:
 
+.. code-block:: yaml
+
+    model:
+      representation:
+        use_cueq: true
+
+This will automatically apply cuEquivariance optimized layers where available.
