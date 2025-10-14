@@ -1,16 +1,18 @@
 from ase.calculators.calculator import Calculator, all_changes
 from curator.data import AseDataReader, Transform
+from curator.utils import load_models
+from curator.model import EnsembleModel
 import ase
 import numpy as np
 import torch
-from typing import Optional, List
+from typing import Optional, List, Union
 
 class MLCalculator(Calculator):
     """ ML model calulator used for ASE applications """
     implemented_properties = ["energy", "forces", "stress"]
     def __init__(
         self,
-        model: torch.nn.Module,
+        model: Union[torch.nn.Module, List[str], str, List[torch.nn.Module]],
         cutoff: Optional[float] = None,
         compute_neighbor_list: bool = True,
         transforms: List[Transform] = [],
@@ -28,11 +30,13 @@ class MLCalculator(Calculator):
             energy_scale (float, optional): energy scale. Defaults to 1.0.
             forces_scale (float, optional): forces scale. Defaults to 1.0.
         """
-        self.model = model
+        
+        model_like = load_models(model)
+        self.model = EnsembleModel(model_like) if len(model_like) > 1 else model_like[0]
         self.model.eval()
-        self.model_device = next(model.parameters()).device
+        self.model_device = next(self.model.parameters()).device
         if cutoff is None:
-            for name, module in model.named_modules():
+            for name, module in self.model.named_modules():
                 if "representation" in name:
                     cutoff = module.cutoff
                     break

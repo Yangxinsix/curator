@@ -64,7 +64,7 @@ def train(config: DictConfig) -> None:
         config = read_user_config(config.cfg, config_path="configs", config_name="train")
 
     # Save yaml file in run_path
-    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     log.debug("Running on host: " + str(socket.gethostname()))
     
     # Set up seed
@@ -171,7 +171,7 @@ def tmp_train(config: DictConfig):
         config = read_user_config(config.cfg, config_path="configs", config_name="train")
 
     # Save yaml file in run_path
-    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     log.info("Running on host: " + str(socket.gethostname()))
     
     # Set up the seed
@@ -348,7 +348,7 @@ def evaluate(config: DictConfig):
         config = read_user_config(config.cfg, config_path="configs", config_name="evaluate")
 
     # Save yaml file in run_path
-    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
 
     # set logger
     fh = logging.FileHandler(os.path.join(config.run_path, "predict.log"), mode="w")
@@ -391,7 +391,7 @@ def simulate(config: DictConfig):
         config = read_user_config(config.cfg, config_path="configs", config_name="simulate")
     
     # Save yaml file in run_path
-    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     
     # set logger
     fh = logging.FileHandler(os.path.join(config.run_path, "simulation.log"), mode="w")
@@ -453,7 +453,7 @@ def select(config: DictConfig):
     log.addHandler(fh)
 
     # Save yaml file in run_path
-    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     log.info("Running on host: " + str(socket.gethostname()))
 
     # Set up the seed
@@ -554,7 +554,7 @@ def label(config: DictConfig):
     log.addHandler(fh)
 
     # Save yaml file in run_path
-    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=True)
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     log.info("Running on host: " + str(socket.gethostname()))
 
     # get images and set parameters
