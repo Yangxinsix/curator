@@ -8,7 +8,7 @@ from collections import abc
 import logging
 from ase import units
 from pathlib import Path, PosixPath
-from typing import Optional, Union
+from typing import Optional, Union, List, Tuple
 import numpy as np
 
 def register_resolvers():
@@ -41,52 +41,107 @@ def split_list(lst, chunk_or_num, by_chunk_size=False):
             for i in range(chunk_or_num)
         ]
 
-def load_model(model_file, device, load_compiled: bool=True):
+def load_model(model_file: Union[str, Path], device = None, load_compiled: bool = True) -> torch.nn.Module:
+    model_file = Path(model_file)
+
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # TorchScript
     if model_file.suffix == '.pt' and load_compiled:
         model = torch.jit.load(model_file, map_location=torch.device(device))
-    else:
-        model_dict = torch.load(model_file, map_location=torch.device(device))
-        if 'model' in model_dict:
-            model = model_dict['model']
-        else:
-            datamodule = instantiate(model_dict['data_params'])
-            datamodule.setup()
-            model = instantiate(model_dict['model_params'])
-            model.initialize_modules(datamodule)
-            model.load_state_dict(model_dict['model'])
-    model.to(device)
-
-    return model
-
-def load_models(model_paths, device, load_compiled: bool=True):
-    if isinstance(model_paths, str):
-        model_paths = [model_paths]
+        try:
+            model.to(device)
+        except Exception:
+            pass
+        return model
     
-    models = []
-    for model_path in model_paths:
-        path = Path(model_path)
-        if path.is_file() and (path.suffix == '.pt' or path.suffix == '.pth' or path.suffix == '.ckpt'):
-            models.append(load_model(path, device, load_compiled))
+    # torch checkpoint
+    obj = torch.load(model_file, map_location=torch.device(device))
+    if isinstance(obj, torch.nn.Module):
+        model = obj
+        model.to(device)
+        return model
+    
+    # Dict-like checkpoints
+    if isinstance(obj, dict):
+        # if model is stored in the dict
+        if 'model' in obj and isinstance(obj['model'], torch.nn.Module):
+            model = obj['model']
+            model.to(device)
+            return model
+        # if model is not stored in the dict, instantiate it
+        if 'model' not in obj and 'state_dict' in obj:
+            datamodule = instantiate(obj['data_params'])
+            datamodule.setup()
+            model = instantiate(obj['model_params'])
+            model.initialize_modules(datamodule)
+            sd = obj['state_dict']
+            stripped = {k.replace("model.", "", 1): v for k, v in sd.items()}
+            model.load_state_dict(stripped, strict=False)
+            model.to(device)
+            return model
+
+def load_models(
+    model_like: Union[str, Path, torch.nn.Module, List[Union[str, Path, torch.nn.Module]]],
+    device = None,
+    load_compiled: bool = True
+) -> List[torch.nn.Module]:
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
+    # for single model passed with str
+    if not isinstance(model_like, (list, tuple)):
+            model_like = [model_like]
+    
+    # for list of models passed with nn.Module
+    if all(isinstance(m, torch.nn.Module) for m in model_like):
+        models = list(model_like)
+        for m in models:
+            try:
+                m.to(device)
+            except Exception:
+                pass
+        return models
+    
+    # paths or run dirs
+    models: List[torch.nn.Module] = []
+    for m in model_like:
+        if isinstance(m, (str, Path)):
+            p = Path(m)
+            if p.is_file() and p.suffix in {'.pt', '.pth', '.ckpt'}:
+                models.append(load_model(p, device, load_compiled))
+            else:
+                best, _ = find_best_model(p)
+                models.append(load_model(best, device, load_compiled))
         else:
-            model_path, _ = find_best_model(run_path=model_path)
-            models.append(load_model(model_path, device, load_compiled))
+            raise TypeError("List elements must be all nn.Module or all str/Path.")
     
     return models
 
-def find_best_model(run_path):
-    # return best model path if a path is provided, else checkpoint itself
-    if Path(run_path).suffix == '.ckpt':
+def find_best_model(run_path: Union[str, Path]) -> Tuple[Path, Optional[float]]:
+    """Return best ckpt path under a run directory or the path itself if it is a .ckpt."""
+    run_path = Path(run_path)
+    if run_path.suffix == '.ckpt':
         return run_path, None
-    else:
-        model_path = [f for f in Path(run_path).glob("best_model_*.ckpt")]
-        val_loss = float('inf')
-        index = 0
-        for i, p in enumerate(model_path):
-            loss = float(str(p).split('=')[-1].rstrip('.ckpt'))
-            if loss < val_loss:
-                val_loss = loss
-                index = i
-    return model_path[index], val_loss
+
+    cands = list(run_path.glob("best_model_*.ckpt"))
+    if cands:
+        best_p, best_v = None, float('inf')
+        for p in cands:
+            try:
+                v = float(str(p).split('=')[-1].rstrip('.ckpt'))
+            except Exception:
+                continue
+            if v < best_v:
+                best_v, best_p = v, p
+        if best_p is not None:
+            return best_p, best_v
+    
+    # return newest .ckpt if no best_model_*.ckpt is there
+    all_ckpts = sorted(run_path.glob("*.ckpt"), key=lambda x: x.stat().st_mtime, reverse=True)
+    if all_ckpts:
+        return all_ckpts[0], None
 
 class CustomFormatter(logging.Formatter):
     format = "%(asctime)s: %(message)s"
