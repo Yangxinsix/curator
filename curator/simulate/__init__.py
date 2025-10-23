@@ -1,4 +1,4 @@
-from .calculator import MLCalculator, EnsembleCalculator
+from .core.calculator import MLCalculator, EnsembleCalculator
 from .uncertainty import EnsembleUncertainty
 from .logger import MDLogger
 from .simulator import MDSimulator
