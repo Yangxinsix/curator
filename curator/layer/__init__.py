@@ -30,6 +30,7 @@ from .utils import (
     tp_out_irreps_with_instructions,
     linear_out_irreps,
     reshape_irreps,
+    find_layer_by_name_recursive,
 )
 
 __all__ = [

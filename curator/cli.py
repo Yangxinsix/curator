@@ -419,8 +419,13 @@ def simulate(config: DictConfig):
         model = load_models(config.model_path, config.device)
         model = EnsembleModel(model) if len(model) > 1 else model[0]
 
+    calc = MLCalculator(model)
+
     # Setup simulator
-    simulator = instantiate(config.simulator, model=model)
+    simulator = instantiate(config.simulator)
+    calc_callback = 
+    simulator.callbacks.append()
+
     simulator.run()
     
 @hydra.main(config_path="configs", config_name="select", version_base=None)   
