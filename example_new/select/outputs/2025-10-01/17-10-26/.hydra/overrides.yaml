@@ -1,0 +1,2 @@
+- model_path=../train/model_path
+- pool_set=../simulate/MD.traj

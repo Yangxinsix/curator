@@ -1,0 +1,3 @@
+- cfg=user_cfg.yaml
+- model/representation=mace
+- data.datapath=../../LiFePO4

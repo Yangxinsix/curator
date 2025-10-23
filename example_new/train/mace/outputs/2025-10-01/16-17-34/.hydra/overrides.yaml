@@ -1,0 +1,3 @@
+- model/representation=mace
+- data.datapath=../../LiFePO4.traj
+- model.representation.use_cueq=True
