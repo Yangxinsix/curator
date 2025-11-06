@@ -1,6 +1,5 @@
-atomwise_reduce:
-  _target_: curator.layer.AtomwiseReduce
-gradient_output:
-  _target_: curator.layer.GradientOutput
-global_rescale_shift:
-  _target_: curator.layer.GlobalRescaleShift
+defaults:
+  - _self_
+  - /model/output_modules@output_modules.atomwise_reduce: atomwise_reduce
+  - /model/output_modules@output_modules.gradient_output: gradient_output
+  - /model/output_modules@output_modules.global_rescale_shift: global_rescale_shift

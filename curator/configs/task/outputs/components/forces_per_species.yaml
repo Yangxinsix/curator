@@ -1,0 +1,16 @@
+_target_: curator.train.ModelOutput
+name: forces
+loss_fn:
+  _target_: torch.nn.MSELoss
+loss_weight: ${task.forces_weight}
+metrics:
+  mae:
+    _target_: curator.train.PerSpeciesMAE
+    label_key: atomic_numbers
+    value_key: ${...name}
+    compute_overall: true
+  rmse:
+    _target_: curator.train.PerSpeciesRMSE
+    label_key: atomic_numbers
+    value_key: ${...name}
+    compute_overall: true
