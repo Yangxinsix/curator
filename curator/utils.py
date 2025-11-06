@@ -8,7 +8,7 @@ from collections import abc
 import logging
 from ase import units
 from pathlib import Path, PosixPath
-from typing import Optional, Union
+from typing import Optional, Union, Any
 import numpy as np
 
 def register_resolvers():
@@ -72,6 +72,23 @@ def load_models(model_paths, device, load_compiled: bool=True):
             models.append(load_model(model_path, device, load_compiled))
     
     return models
+
+
+def ensure_list(value: Any):
+    """Convert dictionary-like Hydra nodes to list values.
+
+    Hydra represents overrides for sequences as dictionaries to support
+    key-based merging. This helper preserves backwards compatibility by
+    turning any mapping back into an ordered list before instantiation.
+    """
+
+    if isinstance(value, DictConfig):
+        return [value[k] for k in value.keys()]
+    if isinstance(value, dict):
+        return list(value.values())
+    if isinstance(value, ListConfig):
+        return list(value)
+    return value
 
 def find_best_model(run_path):
     # return best model path if a path is provided, else checkpoint itself

@@ -1,0 +1,6 @@
+atomwise_reduce:
+  _target_: curator.layer.AtomwiseReduce
+gradient_output:
+  _target_: curator.layer.GradientOutput
+global_rescale_shift:
+  _target_: curator.layer.GlobalRescaleShift
