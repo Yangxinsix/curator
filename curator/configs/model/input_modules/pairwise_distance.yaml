@@ -1,0 +1,4 @@
+_target_: curator.layer.PairwiseDistance
+compute_neighbor_list: True
+compute_distance_from_R: False
+cutoff: ${data.cutoff}

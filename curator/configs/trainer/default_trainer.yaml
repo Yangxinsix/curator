@@ -1,6 +1,10 @@
 defaults:
+  - _self_
   - logger: csv
-  - callbacks: default
+  - /trainer/callbacks@callbacks.model_checkpoint: model_checkpoint
+  - /trainer/callbacks@callbacks.early_stopping: early_stopping
+  - /trainer/callbacks@callbacks.learning_rate_monitor: learning_rate_monitor
+  - /trainer/callbacks@callbacks.ema: ema
 
 _target_: pytorch_lightning.Trainer
 
