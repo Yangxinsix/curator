@@ -1,0 +1,14 @@
+_target_: curator.train.ModelOutput
+name: virial
+loss_fn:
+  _target_: torch.nn.MSELoss
+loss_weight: ${task.virial_weight}
+metrics:
+  mae:
+    _target_: curator.train.PerAtomMAE
+    size_key: n_atoms
+    value_key: ${...name}  # relative interpolation
+  rmse:
+    _target_: curator.train.PerAtomRMSE
+    size_key: n_atoms
+    value_key: ${...name}
