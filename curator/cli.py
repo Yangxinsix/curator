@@ -10,10 +10,11 @@ import argparse
 import pytorch_lightning.callbacks
 import pytorch_lightning.loggers
 from .utils import (
-    read_user_config, 
-    CustomFormatter, 
+    read_user_config,
+    CustomFormatter,
     register_resolvers,
     find_best_model,
+    ensure_list,
 )
 import logging
 import socket
@@ -33,6 +34,39 @@ log.setLevel(logging.DEBUG)
 
 # register omegaconf resolvers
 register_resolvers()
+
+
+def _listify_field(container: DictConfig, key: str) -> None:
+    if container is None or not isinstance(container, (DictConfig, dict)):
+        return
+
+    if isinstance(container, DictConfig):
+        if key not in container or container[key] is None:
+            return
+        new_value = ensure_list(container[key])
+        if new_value is container[key]:
+            return
+        with open_dict(container):
+            container[key] = new_value
+    else:
+        if key not in container or container[key] is None:
+            return
+        container[key] = ensure_list(container[key])
+
+
+def _normalize_config_sequences(config: DictConfig) -> None:
+    if config is None:
+        return
+
+    if "trainer" in config:
+        _listify_field(config.trainer, "callbacks")
+
+    if "model" in config:
+        _listify_field(config.model, "input_modules")
+        _listify_field(config.model, "output_modules")
+
+    if "task" in config:
+        _listify_field(config.task, "outputs")
 
 # Trainining with Pytorch Lightning (only with weights and biasses)
 @hydra.main(config_path="configs", config_name="train", version_base=None)
@@ -62,6 +96,8 @@ def train(config: DictConfig) -> None:
     # Load the arguments 
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="train")
+
+    _normalize_config_sequences(config)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -169,6 +205,8 @@ def tmp_train(config: DictConfig):
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="train")
+
+    _normalize_config_sequences(config)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -311,9 +349,13 @@ def deploy(
         else:          
             # Set up model, optimizer and scheduler
             if cfg_path is None:
-                model = instantiate(loaded_model['model_params'], _convert_="all")
+                model_params = loaded_model['model_params']
+                _listify_field(model_params, "input_modules")
+                _listify_field(model_params, "output_modules")
+                model = instantiate(model_params, _convert_="all")
             else:
                 cfg = read_user_config(cfg_path, config_path="configs", config_name="train")
+                _normalize_config_sequences(cfg)
                 model = instantiate(cfg.model, _convert_="all")
 
             new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in loaded_model['state_dict'].items())

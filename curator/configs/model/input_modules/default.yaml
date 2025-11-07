@@ -1,0 +1,3 @@
+defaults:
+  - _self_
+  - /model/input_modules@input_modules.pairwise_distance: pairwise_distance
