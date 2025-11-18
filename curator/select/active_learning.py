@@ -400,12 +400,145 @@ class FeatureStatistics:
         :return: Regularized inverse of Fisher matrix of "shape=(n_models, n_features, n_features)".
         """
         if self.F_reg_inv is None:
-            F = self.get_features()
-            g = self.get_g()
-            # empirical regularisation
-            lam = torch.linalg.trace(F) / (g.shape[1] * g.shape[2])
-            self.F_train_reg_inv = torch.linalg.inv(F + lam * torch.eye(F.shape[1]))
-        return self.F_train_reg_inv
+            fisher = self.get_fisher()
+            n_features = fisher.shape[-1]
+            eye = torch.eye(n_features, device=fisher.device, dtype=fisher.dtype).unsqueeze(0)
+            # empirical regularisation computed per-model to stabilise inversion
+            lam = torch.linalg.trace(fisher, dim1=-2, dim2=-1) / max(n_features, 1)
+            lam = lam[:, None, None]
+            fisher_reg = fisher + lam * eye
+            self.F_reg_inv = torch.linalg.inv(fisher_reg)
+        return self.F_reg_inv
+
+
+class DistanceMetrics:
+    """Compute simple distance metrics from cached feature statistics."""
+
+    def __init__(
+        self,
+        train_stats: FeatureStatistics,
+        dataset_stats: Optional[FeatureStatistics] = None,
+        regularization: float = 1e-6,
+    ) -> None:
+        self.train_stats = train_stats
+        self.dataset_stats = dataset_stats
+        self.regularization = regularization
+        self._mean_cache: Dict[str, torch.Tensor] = {}
+        self._precision_cache: Dict[str, torch.Tensor] = {}
+
+    def get_mahalanobis_distance(
+        self,
+        stats: Optional[FeatureStatistics] = None,
+        kernel: Optional[str] = None,
+        local: bool = False,
+        reduction: Optional[str] = None,
+    ) -> torch.Tensor:
+        kernel = kernel or self._default_kernel(local)
+        stats = self._resolve_stats(stats)
+        features = self._collapse_models(stats.get_features(kernel=kernel))
+        mean = self.get_feature_mean(kernel)
+        precision = self.get_feature_precision(kernel)
+        diff = features - mean
+        dist_sq = torch.einsum('bi,ij,bj->b', diff, precision, diff)
+        distances = torch.sqrt(torch.clamp(dist_sq, min=0.0))
+        return self._reduce(distances, stats, local, reduction)
+
+    def get_euclidean_distance(
+        self,
+        stats: Optional[FeatureStatistics] = None,
+        kernel: Optional[str] = None,
+        local: bool = False,
+        reduction: Optional[str] = None,
+    ) -> torch.Tensor:
+        kernel = kernel or self._default_kernel(local)
+        stats = self._resolve_stats(stats)
+        features = self._collapse_models(stats.get_features(kernel=kernel))
+        mean = self.get_feature_mean(kernel)
+        diff = features - mean
+        distances = torch.sqrt(torch.clamp(torch.sum(diff * diff, dim=-1), min=0.0))
+        return self._reduce(distances, stats, local, reduction)
+
+    def get_cosine_distance(
+        self,
+        stats: Optional[FeatureStatistics] = None,
+        kernel: Optional[str] = None,
+        local: bool = False,
+        reduction: Optional[str] = None,
+    ) -> torch.Tensor:
+        kernel = kernel or self._default_kernel(local)
+        stats = self._resolve_stats(stats)
+        features = self._collapse_models(stats.get_features(kernel=kernel))
+        mean = self.get_feature_mean(kernel)
+        norm_features = torch.linalg.norm(features, dim=-1)
+        norm_mean = torch.linalg.norm(mean)
+        similarity = torch.einsum('bi,i->b', features, mean) / (norm_features * norm_mean + 1e-12)
+        distances = 1 - similarity
+        return self._reduce(distances, stats, local, reduction)
+
+    def set_dataset_stats(self, stats: FeatureStatistics) -> None:
+        """Update dataset statistics without rebuilding the helper."""
+        self.dataset_stats = stats
+
+    def get_feature_mean(self, kernel: str = 'gnn') -> torch.Tensor:
+        if kernel not in self._mean_cache:
+            feats = self._collapse_models(self.train_stats.get_features(kernel=kernel))
+            self._mean_cache[kernel] = torch.mean(feats, dim=0)
+        return self._mean_cache[kernel]
+
+    def get_feature_precision(self, kernel: str = 'gnn') -> torch.Tensor:
+        if kernel not in self._precision_cache:
+            feats = self._collapse_models(self.train_stats.get_features(kernel=kernel))
+            mean = self.get_feature_mean(kernel)
+            centered = feats - mean
+            denom = max(centered.shape[0] - 1, 1)
+            covariance = centered.T @ centered / denom
+            eye = torch.eye(covariance.shape[0], device=covariance.device, dtype=covariance.dtype)
+            covariance = covariance + self.regularization * eye
+            self._precision_cache[kernel] = torch.linalg.inv(covariance)
+        return self._precision_cache[kernel]
+
+    def _resolve_stats(self, stats: Optional[FeatureStatistics]) -> FeatureStatistics:
+        if stats is not None:
+            return stats
+        if self.dataset_stats is None:
+            raise ValueError("Dataset statistics are not provided.")
+        return self.dataset_stats
+
+    @staticmethod
+    def _collapse_models(features: torch.Tensor) -> torch.Tensor:
+        if features.dim() != 3:
+            raise ValueError("Expected features tensor with shape (n_models, n_items, n_features).")
+        return features.mean(dim=0)
+
+    @staticmethod
+    def _default_kernel(local: bool) -> str:
+        return 'local_gnn' if local else 'gnn'
+
+    def _reduce(
+        self,
+        distances: torch.Tensor,
+        stats: FeatureStatistics,
+        local: bool,
+        reduction: Optional[str],
+    ) -> torch.Tensor:
+        if not local or reduction is None:
+            return distances
+        if reduction not in {'mean', 'sum', 'max'}:
+            raise ValueError(f"Unsupported reduction '{reduction}'.")
+        image_idx = self._get_image_idx(stats)
+        if reduction == 'mean':
+            return scatter_mean(distances, image_idx, dim=0)
+        if reduction == 'sum':
+            return scatter_add(distances, image_idx, dim=0)
+        max_result = scatter_max(distances, image_idx, dim=0)
+        return max_result[0] if isinstance(max_result, tuple) else max_result
+
+    @staticmethod
+    def _get_image_idx(stats: FeatureStatistics) -> torch.Tensor:
+        num_atoms = stats.get_num_atoms()
+        device = num_atoms.device
+        image_idx = torch.arange(num_atoms.shape[0], device=device)
+        return torch.repeat_interleave(image_idx, num_atoms)
 
 
 class DistanceMetrics:
