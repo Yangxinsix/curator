@@ -8,11 +8,7 @@ from collections import abc
 import logging
 from ase import units
 from pathlib import Path, PosixPath
-<<<<<<< HEAD
-from typing import Optional, Union, List, Tuple
-=======
-from typing import Optional, Union, Any
->>>>>>> 6ef4b6b5317c2be332347e18a279f1efd7641e98
+from typing import Any, List, Optional, Tuple, Union
 import numpy as np
 
 def register_resolvers():
@@ -45,7 +41,39 @@ def split_list(lst, chunk_or_num, by_chunk_size=False):
             for i in range(chunk_or_num)
         ]
 
-def load_model(model_file: Union[str, Path], device = None, load_compiled: bool = True) -> torch.nn.Module:
+def _copy_config(config_like: Optional[Union[DictConfig, dict]]) -> Optional[DictConfig]:
+    """Return a mutable DictConfig copy for easier manipulation."""
+
+    if config_like is None:
+        return None
+    if isinstance(config_like, DictConfig):
+        return OmegaConf.create(OmegaConf.to_container(config_like, resolve=False))
+    if isinstance(config_like, dict):
+        return OmegaConf.create(config_like)
+    return None
+
+
+def _listify_config_field(config: Optional[DictConfig], field: str) -> None:
+    if config is None or field not in config:
+        return
+    value = config[field]
+    if isinstance(value, DictConfig):
+        config[field] = [value[k] for k in value.keys()]
+    elif isinstance(value, dict):
+        config[field] = list(value.values())
+    elif isinstance(value, ListConfig):
+        config[field] = list(value)
+
+
+def load_trained_model(
+    model_file: Union[str, Path],
+    device = None,
+    load_compiled: bool = True,
+    load_weights_only: bool = False,
+    cfg: Optional[DictConfig] = None,
+) -> torch.nn.Module:
+    """Load a trained model or checkpoint and return a torch.nn.Module."""
+
     model_file = Path(model_file)
 
     if device is None:
@@ -59,44 +87,75 @@ def load_model(model_file: Union[str, Path], device = None, load_compiled: bool 
         except Exception:
             pass
         return model
-    
-    # torch checkpoint
+
     obj = torch.load(model_file, map_location=torch.device(device))
+
     if isinstance(obj, torch.nn.Module):
-        model = obj
+        obj.to(device)
+        return obj
+
+    if isinstance(obj, dict):
+        stored_model = obj.get('model')
+        if not load_weights_only and isinstance(stored_model, torch.nn.Module):
+            stored_model.to(device)
+            return stored_model
+
+        model_cfg = cfg.model if cfg is not None else obj.get('model_params')
+        model_cfg = _copy_config(model_cfg)
+        if model_cfg is None:
+            raise ValueError("Checkpoint does not contain model parameters to instantiate.")
+        _listify_config_field(model_cfg, "input_modules")
+        _listify_config_field(model_cfg, "output_modules")
+        model = instantiate(model_cfg, _convert_="all")
+
+        data_cfg = cfg.data if cfg is not None else obj.get('data_params')
+        data_cfg = _copy_config(data_cfg)
+        if data_cfg is not None:
+            datamodule = instantiate(data_cfg, _convert_="all")
+            if hasattr(datamodule, 'setup'):
+                datamodule.setup()
+            if hasattr(model, 'initialize_modules'):
+                model.initialize_modules(datamodule)
+
+        sd = obj.get('state_dict')
+        if sd is None:
+            raise ValueError("Checkpoint is missing a state_dict.")
+        stripped = {k.replace("model.", "", 1): v for k, v in sd.items()}
+        model.load_state_dict(stripped, strict=False)
         model.to(device)
         return model
-    
-    # Dict-like checkpoints
-    if isinstance(obj, dict):
-        # if model is stored in the dict
-        if 'model' in obj and isinstance(obj['model'], torch.nn.Module):
-            model = obj['model']
-            model.to(device)
-            return model
-        # if model is not stored in the dict, instantiate it
-        if 'model' not in obj and 'state_dict' in obj:
-            datamodule = instantiate(obj['data_params'])
-            datamodule.setup()
-            model = instantiate(obj['model_params'])
-            model.initialize_modules(datamodule)
-            sd = obj['state_dict']
-            stripped = {k.replace("model.", "", 1): v for k, v in sd.items()}
-            model.load_state_dict(stripped, strict=False)
-            model.to(device)
-            return model
+
+    raise TypeError(f"Unsupported checkpoint format at {model_file}.")
+
+
+def load_model(
+    model_file: Union[str, Path],
+    device = None,
+    load_compiled: bool = True,
+    load_weights_only: bool = False,
+    cfg: Optional[DictConfig] = None,
+) -> torch.nn.Module:
+    return load_trained_model(
+        model_file,
+        device=device,
+        load_compiled=load_compiled,
+        load_weights_only=load_weights_only,
+        cfg=cfg,
+    )
 
 def load_models(
     model_like: Union[str, Path, torch.nn.Module, List[Union[str, Path, torch.nn.Module]]],
     device = None,
-    load_compiled: bool = True
+    load_compiled: bool = True,
+    load_weights_only: bool = False,
+    cfg: Optional[DictConfig] = None,
 ) -> List[torch.nn.Module]:
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
     # for single model passed with str
     if not isinstance(model_like, (list, tuple)):
-            model_like = [model_like]
+        model_like = [model_like]
     
     # for list of models passed with nn.Module
     if all(isinstance(m, torch.nn.Module) for m in model_like):
@@ -114,29 +173,33 @@ def load_models(
         if isinstance(m, (str, Path)):
             p = Path(m)
             if p.is_file() and p.suffix in {'.pt', '.pth', '.ckpt'}:
-                models.append(load_model(p, device, load_compiled))
+                models.append(
+                    load_model(
+                        p,
+                        device,
+                        load_compiled,
+                        load_weights_only=load_weights_only,
+                        cfg=cfg,
+                    )
+                )
             else:
                 best, _ = find_best_model(p)
-                models.append(load_model(best, device, load_compiled))
+                models.append(
+                    load_model(
+                        best,
+                        device,
+                        load_compiled,
+                        load_weights_only=load_weights_only,
+                        cfg=cfg,
+                    )
+                )
         else:
             raise TypeError("List elements must be all nn.Module or all str/Path.")
     
     return models
 
-<<<<<<< HEAD
-def find_best_model(run_path: Union[str, Path]) -> Tuple[Path, Optional[float]]:
-    """Return best ckpt path under a run directory or the path itself if it is a .ckpt."""
-    run_path = Path(run_path)
-    if run_path.suffix == '.ckpt':
-=======
-
 def ensure_list(value: Any):
-    """Convert dictionary-like Hydra nodes to list values.
-
-    Hydra represents overrides for sequences as dictionaries to support
-    key-based merging. This helper preserves backwards compatibility by
-    turning any mapping back into an ordered list before instantiation.
-    """
+    """Convert dictionary-like Hydra nodes to list values."""
 
     if isinstance(value, DictConfig):
         return [value[k] for k in value.keys()]
@@ -146,10 +209,12 @@ def ensure_list(value: Any):
         return list(value)
     return value
 
-def find_best_model(run_path):
-    # return best model path if a path is provided, else checkpoint itself
-    if Path(run_path).suffix == '.ckpt':
->>>>>>> 6ef4b6b5317c2be332347e18a279f1efd7641e98
+
+def find_best_model(run_path: Union[str, Path]) -> Tuple[Path, Optional[float]]:
+    """Return best ckpt path under a run directory or the path itself if it is a .ckpt."""
+
+    run_path = Path(run_path)
+    if run_path.suffix == '.ckpt':
         return run_path, None
 
     cands = list(run_path.glob("best_model_*.ckpt"))
