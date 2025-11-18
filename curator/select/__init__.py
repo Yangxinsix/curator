@@ -16,4 +16,5 @@ from .active_learning import (
     FeatureStatistics,
     RandomProjections,
     GeneralActiveLearning,
+    DistanceMetrics,
 )
