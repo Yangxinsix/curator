@@ -15,6 +15,7 @@ from .utils import (
     register_resolvers,
     find_best_model,
     ensure_list,
+    load_models,
 )
 import logging
 import socket
@@ -118,44 +119,39 @@ def train(config: DictConfig) -> None:
     if datamodule.species == 'auto':
         config.data.species = datamodule._get_species()
 
-    # TODO: enable loading existing optimizers and schedulers
+    model = hydra.utils.instantiate(config.model)
+    resume_ckpt = None
+    checkpoint_outputs = None
+
     if config.model_path is not None:
-        # When using CSVlogger and save_hyperparameters() together, the code will report pickle error.
-        # So we choose to save the entire model and outputs in LitNNP and then reload it
         config.model_path = find_best_model(config.model_path)[0]
         log.debug(f"Loading trained model from {config.model_path}")
-        # load model or model state dict
         if config.task.load_entire_model:
             state_dict = torch.load(config.model_path)
             model = state_dict['model']
-            outputs = state_dict.get('outputs', instantiate(config.task.outputs))
-        else:
+            checkpoint_outputs = state_dict.get('outputs')
+        elif config.task.load_weights_only:
             from collections import OrderedDict
             state_dict = torch.load(config.model_path)
             new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in state_dict['state_dict'].items())
-            model = instantiate(config.model)
-            model.load_state_dict(new_state_dict, strict=False)      # in case frequent model structure revision
-            outputs = instantiate(config.task.outputs)
-    else:
-        # Initiate the model from scratch
-        model = hydra.utils.instantiate(config.model)
-        outputs = instantiate(config.task.outputs)
+            model.load_state_dict(new_state_dict, strict=False)
+        else:
+            resume_ckpt = config.model_path
+            log.debug(
+                "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
+                resume_ckpt,
+            )
 
     if config.compile:
         log.debug("Compiling model with torch.compile")
         model = torch.compile(model)
 
     log.debug(f"Instantiating task <{config.task._target_}>")
-    # load optimizers and schedulers or not
-    if config.task.load_weights_only:
-        task: LitNNP = instantiate(config.task, model=model)
-    else:
-        task = LitNNP.load_from_checkpoint(
-            checkpoint_path=config.model_path, 
-            model=model, 
-            outputs=outputs,
-            strict=False,
-        )
+    task: LitNNP = instantiate(config.task, model=model)
+    if checkpoint_outputs is not None:
+        if not isinstance(checkpoint_outputs, torch.nn.ModuleList):
+            checkpoint_outputs = torch.nn.ModuleList(checkpoint_outputs)
+        task.outputs = checkpoint_outputs
 
     log.debug(f"Instantiating model {type(model)} with GNN representation {type(model.representation)}")
 
@@ -172,7 +168,7 @@ def train(config: DictConfig) -> None:
         os.makedirs(trainer.logger.save_dir + '/wandb', exist_ok=True)
 
     # Train the model
-    trainer.fit(model=task, datamodule=datamodule)
+    trainer.fit(model=task, datamodule=datamodule, ckpt_path=resume_ckpt)
     
     # Deploy model to a compiled model
     if config.deploy_model:
@@ -311,8 +307,8 @@ def deploy_main(argv: Optional[List[str]] = None):
 
 # Deploy the model and save a compiled model
 def deploy(
-        model_path: Union[str, list], 
-        target_path: str = 'compiled_model.pt', 
+        model_path: Union[str, list],
+        target_path: str = 'compiled_model.pt',
         load_weights_only: bool=False,
         cfg_path: Optional[str] = None,
         return_model: bool = False,
@@ -325,51 +321,27 @@ def deploy(
         None
     
     """
-    import torch
-    from curator.model import LitNNP
     from e3nn.util.jit import script
-    from collections import OrderedDict
-    from omegaconf import ListConfig
     from curator.model import EnsembleModel
     from curator.layer.utils import find_layer_by_name_recursive
 
-    def load_model(model_path):
-        try:
-            loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
-        except:
-            original_torch_jit_load = torch.jit.load
-            def torch_jit_load_cpu(*args, **kwargs):
-                kwargs['map_location'] = 'cpu'
-                return original_torch_jit_load(*args, **kwargs)       
-            torch.jit.load = torch_jit_load_cpu
-            loaded_model = torch.load(model_path, map_location="cpu" if not torch.cuda.is_available() else "cuda")
+    cfg = None
+    if cfg_path is not None:
+        cfg = read_user_config(cfg_path, config_path="configs", config_name="train")
+        _normalize_config_sequences(cfg)
 
-        if 'model' in loaded_model and not load_weights_only:
-            model = loaded_model['model']
-        else:          
-            # Set up model, optimizer and scheduler
-            if cfg_path is None:
-                model_params = loaded_model['model_params']
-                _listify_field(model_params, "input_modules")
-                _listify_field(model_params, "output_modules")
-                model = instantiate(model_params, _convert_="all")
-            else:
-                cfg = read_user_config(cfg_path, config_path="configs", config_name="train")
-                _normalize_config_sequences(cfg)
-                model = instantiate(cfg.model, _convert_="all")
-
-            new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in loaded_model['state_dict'].items())
-            model.load_state_dict(new_state_dict, strict=False)
-        return model
-
-    # Load model
-    if isinstance(model_path, (list, ListConfig)):
-        if len(model_path) > 1:
-            model = EnsembleModel([load_model(find_best_model(path)[0]) for path in model_path])
-        else:
-            model = load_model(model_path[0])
+    # Load model(s)
+    models = load_models(
+        model_path,
+        device=None,
+        load_compiled=False,
+        load_weights_only=load_weights_only,
+        cfg=cfg,
+    )
+    if len(models) > 1:
+        model = EnsembleModel(models)
     else:
-        model = load_model(model_path)
+        model = models[0]
 
     # Compile the model
     model_compiled = script(model)
@@ -381,7 +353,6 @@ def deploy(
 
 @hydra.main(config_path="configs", config_name="evaluate", version_base=None)
 def evaluate(config: DictConfig):
-    from .utils import load_models
     from curator.model import EnsembleModel
     from curator.simulate import MLCalculator
 
@@ -424,7 +395,6 @@ def simulate(config: DictConfig):
     Returns:
         None
     """
-    from .utils import load_models
     from curator.model import EnsembleModel
     from curator.simulate import MLCalculator
 
@@ -486,7 +456,6 @@ def select(config: DictConfig):
     from curator.select import GeneralActiveLearning
     import json
     from curator.data import AseDataset
-    from .utils import load_models
 
     # Load the arguments
     if config.cfg is not None:
