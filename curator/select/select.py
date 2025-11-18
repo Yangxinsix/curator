@@ -7,6 +7,48 @@ def max_diag(matrix: KernelMatrix, batch_size: int) -> torch.Tensor:
     """
     return torch.argsort(matrix.get_diag())[-batch_size:]
 
+def max_dist_greedy(matrix: KernelMatrix, batch_size: int, n_train: int = 0) -> torch.Tensor:
+    """Greedily select points that maximise the distance to the current set.
+
+    When ``n_train`` is provided, the last ``n_train`` columns are considered
+    already-selected (training) points and are used to initialise the distance
+    landscape before picking new pool elements.
+    """
+
+    n_pool = matrix.get_number_of_columns() - n_train
+    if n_pool <= 0 or batch_size <= 0:
+        return torch.empty(0, dtype=torch.long)
+
+    diag = matrix.get_diag()[:n_pool]
+    device = diag.device
+    dtype = diag.dtype
+
+    if n_train > 0:
+        min_sq_dists = torch.full((n_pool,), float('inf'), device=device, dtype=dtype)
+        for j in range(n_pool, n_pool + n_train):
+            train_dists = matrix.get_sq_dists(j)[:n_pool]
+            min_sq_dists = torch.minimum(min_sq_dists, train_dists)
+        start_idx = torch.argmax(min_sq_dists)
+    else:
+        min_sq_dists = diag.clone()
+        start_idx = torch.argmax(diag)
+
+    selected = [start_idx]
+    selected_mask = torch.zeros(n_pool, dtype=torch.bool, device=device)
+    selected_mask[start_idx] = True
+
+    while len(selected) < min(batch_size, n_pool):
+        sq_dists = matrix.get_sq_dists(selected[-1])[:n_pool]
+        min_sq_dists = torch.minimum(min_sq_dists, sq_dists)
+        min_sq_dists = min_sq_dists.masked_fill(selected_mask, float('-inf'))
+        next_idx = torch.argmax(min_sq_dists)
+        if selected_mask[next_idx]:
+            break
+        selected.append(next_idx)
+        selected_mask[next_idx] = True
+
+    return torch.tensor(selected, device=device, dtype=torch.long)
+
 def max_det_greedy(matrix: KernelMatrix, batch_size: int) -> torch.Tensor:
     vec_c = matrix.get_diag()
     batch_idxs = [torch.argmax(vec_c)]
