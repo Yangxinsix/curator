@@ -57,7 +57,7 @@ class FeatureCovKernelMatrix(KernelMatrix):
     p: dimensionality of features
     """
     def __init__(self, g: torch.Tensor, cov_mat: torch.Tensor) -> None:
-        super().__init__(mat.shape[1])
+        super().__init__(g.shape[1])
         self.g = g
         self.cov_mat = cov_mat
         self.cov_g = torch.einsum('mij, mbi -> mbj', self.cov_mat, g)
