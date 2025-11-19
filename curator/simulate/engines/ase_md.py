@@ -1,4 +1,5 @@
 from __future__ import annotations
+import warnings
 from typing import Any, Union
 from ase import Atoms
 from ..core.engine import BaseEngine
@@ -29,11 +30,15 @@ class MDEngine(BaseEngine):
 
     def setup(self, ctx_or_atoms: Union[SimContext, Atoms, None] = None) -> None:
         if self.dyn is None:
-            # accept either SimContext or raw Atoms
-            self.atoms = ctx_or_atoms.atoms if isinstance(ctx_or_atoms, SimContext) else ctx_or_atoms
-            if not isinstance(self.atoms, Atoms):
-                raise TypeError("MDEngine.setup expects SimContext or Atoms.")
-            self.dyn = self.dynamics_cls(self.atoms, **self.kw)
+            if isinstance(self.dynamics_cls, type):
+                # accept either SimContext or raw Atoms
+                self.atoms = ctx_or_atoms.atoms if isinstance(ctx_or_atoms, SimContext) else ctx_or_atoms
+                if not isinstance(self.atoms, Atoms):
+                    raise TypeError("MDEngine.setup expects SimContext or Atoms.")
+                self.dyn = self.dynamics_cls(self.atoms, **self.kw)
+            else:
+                self.dyn = self.dynamics_cls
+                warnings.warn("")
 
     def _attach_to_backend(self, fn, interval: int) -> None:
         if self.dyn is not None:
