@@ -27,7 +27,7 @@ class MDEngine(BaseEngine):
         self.atoms: Atoms | None = None
         self.dyn = None
 
-    def setup(self, ctx_or_atoms: Union[SimContext, Atoms]) -> None:
+    def setup(self, ctx_or_atoms: Union[SimContext, Atoms, None] = None) -> None:
         if self.dyn is None:
             # accept either SimContext or raw Atoms
             self.atoms = ctx_or_atoms.atoms if isinstance(ctx_or_atoms, SimContext) else ctx_or_atoms

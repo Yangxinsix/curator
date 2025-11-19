@@ -435,8 +435,6 @@ def simulate(config: DictConfig):
 
     # Setup simulator
     simulator = instantiate(config.simulator)
-    calc_callback = 
-    simulator.callbacks.append()
 
     simulator.run()
     
