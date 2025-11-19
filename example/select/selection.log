@@ -1,0 +1,5 @@
+2025-10-01 17:10:26,160 -    INFO - Running on host: XSH-20240927AHO
+2025-10-01 17:10:26,160 -    INFO - Seed with <123>
+2025-10-01 17:10:26,162 -    INFO - Using model from <../train/model_path>
+2025-10-01 17:10:26,429 - WARNING - The pool data set (11) is not large enough for selection! It should be larger than 10 times batch size (1000). Check your simulation!
+2025-10-01 17:10:27,405 -    INFO - Active learning selection completed! Check /home/yangxin/curator/example_new/select/selected.json for selected structures!

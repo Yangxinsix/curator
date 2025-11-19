@@ -1,0 +1,277 @@
+[2025-10-01 16:46:21,665][curator][DEBUG] - Running on host: XSH-20240927AHO
+[2025-10-01 16:46:21,665][curator][DEBUG] - Seed with <3407>
+[2025-10-01 16:46:21,666][curator][DEBUG] - Instantiating datamodule <curator.data.AtomsDataModule> from dataset ../../LiFePO4.traj
+[2025-10-01 16:46:21,667][curator.data.datamodule][INFO] - AtomsDataModule(datapath=../../LiFePO4.traj
+Dataset size=2257, training dataset size=2031, validation dataset size=225, test dataset size=0.
+scale=None, shift=None, atomwise_normalization=True, scale_forces=True
+species=auto
+avg_num_neighbors=auto
+)
+[2025-10-01 16:46:22,567][curator.data.datamodule][DEBUG] - Training model for elements: ['Li', 'O', 'P', 'Fe'].
+[2025-10-01 16:46:24,780][curator][DEBUG] - Instantiating task <curator.model.LitNNP>
+[2025-10-01 16:46:24,788][curator.model.base][DEBUG] - Energy loss weight: 1 Forces loss weight: 100
+[2025-10-01 16:46:24,788][curator][DEBUG] - Instantiating model <class 'curator.model.base.NeuralNetworkPotential'> with GNN representation <class 'curator.model.mace.MACE'>
+[2025-10-01 16:46:24,788][curator][DEBUG] - Instantiating trainer <pytorch_lightning.Trainer>
+[2025-10-01 16:46:28,180][curator.data.datamodule][DEBUG] - The average number of neighbors is calculated to be: 40.123
+[2025-10-01 16:46:29,157][curator.data.datamodule][DEBUG] - Training model for elements: ['Li', 'O', 'P', 'Fe'].
+[2025-10-01 16:46:30,171][curator.data.datamodule][DEBUG] - Using reference energies for elements: {'Li': -2.4021177291870117, 'O': -9.608469009399414, 'P': -2.4021172523498535, 'Fe': -2.4021172523498535}.
+[2025-10-01 16:46:29,323][curator.data.datamodule][DEBUG] - Forces will be scaled by forces_rms: 1.231.
+[2025-10-01 16:46:29,323][curator.data.datamodule][DEBUG] - Atomwise model outputs will be normalized.
+[2025-10-01 16:46:29,323][curator.data.datamodule][DEBUG] - Model output properties will be scaled by 1.231, shifted by -0.000.
+[2025-10-01 16:46:29,323][curator.data.datamodule][DEBUG] - Using reference energies for elements: {'Li': -2.4021177291870117, 'O': -9.608469009399414, 'P': -2.4021172523498535, 'Fe': -2.4021172523498535}.
+[2025-10-01 16:46:29,324][curator.model.base][INFO] - NeuralNetworkPotential(
+  (representation): MACE(
+    (embeddings): ModuleDict(
+      (onehot_embedding): OneHotAtomEncoding(
+        (type_mapper): TypeMapper(symbol_to_type={'Li': 0, 'O': 1, 'P': 2, 'Fe': 3}
+      )
+      (radial_basis): RadialBasisEdgeEncoding(
+        (basis): BesselBasis(cutoff=5.0, num_basis=8, prefactor=0.6324555320336759, trainable=False)
+        (cutoff_fn): PolynomialCutoff(cutoff=5.0, power=6.0)
+      )
+      (sphere_harmonics): SphericalHarmonicEdgeAttrs(
+        (sh): SphericalHarmonics()
+      )
+      (chemical_embedding): AtomwiseLinear(
+        (linear): Linear(4x0e -> 32x0e | 128 weights)
+      )
+    )
+    (interactions): ModuleList(
+      (0): RealAgnosticInteractionBlock(
+        (linear_up): Linear(32x0e -> 32x0e | 1024 weights)
+        (conv_tp): TensorProduct(32x0e x 1x0e+1x1o+1x2e+1x3o -> 32x0e+32x1o+32x2e+32x3o | 128 paths | 128 weights)
+        (conv_tp_weights): FullyConnectedNet[8, 64, 64, 64, 128]
+        (linear): Linear(32x0e+32x1o+32x2e+32x3o -> 32x0e+32x1o+32x2e+32x3o | 4096 weights)
+        (skip_tp): FullyConnectedTensorProduct(32x0e+32x1o+32x2e+32x3o x 4x0e -> 32x0e+32x1o+32x2e+32x3o | 16384 paths | 16384 weights)
+        (reshape): reshape_irreps()
+      )
+      (1-2): 2 x RealAgnosticResidualInteractionBlock(
+        (linear_up): Linear(32x0e+32x1o+32x2e+32x3o -> 32x0e+32x1o+32x2e+32x3o | 4096 weights)
+        (conv_tp): TensorProduct(32x0e+32x1o+32x2e+32x3o x 1x0e+1x1o+1x2e+1x3o -> 128x0e+192x1o+224x2e+192x3o | 736 paths | 736 weights)
+        (conv_tp_weights): FullyConnectedNet[8, 64, 64, 64, 736]
+        (linear): Linear(128x0e+192x1o+224x2e+192x3o -> 32x0e+32x1o+32x2e+32x3o | 23552 weights)
+        (skip_tp): FullyConnectedTensorProduct(32x0e+32x1o+32x2e+32x3o x 4x0e -> 32x0e+32x1o+32x2e+32x3o | 16384 paths | 16384 weights)
+        (reshape): reshape_irreps()
+      )
+      (3): RealAgnosticResidualInteractionBlock(
+        (linear_up): Linear(32x0e+32x1o+32x2e+32x3o -> 32x0e+32x1o+32x2e+32x3o | 4096 weights)
+        (conv_tp): TensorProduct(32x0e+32x1o+32x2e+32x3o x 1x0e+1x1o+1x2e+1x3o -> 128x0e+192x1o+224x2e+192x3o | 736 paths | 736 weights)
+        (conv_tp_weights): FullyConnectedNet[8, 64, 64, 64, 736]
+        (linear): Linear(128x0e+192x1o+224x2e+192x3o -> 32x0e+32x1o+32x2e+32x3o | 23552 weights)
+        (skip_tp): FullyConnectedTensorProduct(32x0e+32x1o+32x2e+32x3o x 4x0e -> 32x0e | 4096 paths | 4096 weights)
+        (reshape): reshape_irreps()
+      )
+    )
+    (products): ModuleList(
+      (0-2): 3 x EquivariantProductBasisBlock(
+        (symmetric_contractions): SymmetricContraction(
+          (contractions): ModuleList(
+            (0): Contraction(
+              (contractions_weighting): ModuleList(
+                (0-1): 2 x GraphModule()
+              )
+              (contractions_features): ModuleList(
+                (0-1): 2 x GraphModule()
+              )
+              (weights): ParameterList(
+                  (0): Parameter containing: [torch.float32 of size 4x4x32]
+                  (1): Parameter containing: [torch.float32 of size 4x1x32]
+              )
+              (graph_opt_main): GraphModule()
+            )
+            (1): Contraction(
+              (contractions_weighting): ModuleList(
+                (0-1): 2 x GraphModule()
+              )
+              (contractions_features): ModuleList(
+                (0-1): 2 x GraphModule()
+              )
+              (weights): ParameterList(
+                  (0): Parameter containing: [torch.float32 of size 4x6x32]
+                  (1): Parameter containing: [torch.float32 of size 4x1x32]
+              )
+              (graph_opt_main): GraphModule()
+            )
+            (2): Contraction(
+              (contractions_weighting): ModuleList(
+                (0-1): 2 x GraphModule()
+              )
+              (contractions_features): ModuleList(
+                (0-1): 2 x GraphModule()
+              )
+              (weights): ParameterList(
+                  (0): Parameter containing: [torch.float32 of size 4x7x32]
+                  (1): Parameter containing: [torch.float32 of size 4x1x32]
+              )
+              (graph_opt_main): GraphModule()
+            )
+            (3): Contraction(
+              (contractions_weighting): ModuleList(
+                (0-1): 2 x GraphModule()
+              )
+              (contractions_features): ModuleList(
+                (0-1): 2 x GraphModule()
+              )
+              (weights): ParameterList(
+                  (0): Parameter containing: [torch.float32 of size 4x6x32]
+                  (1): Parameter containing: [torch.float32 of size 4x1x32]
+              )
+              (graph_opt_main): GraphModule()
+            )
+          )
+        )
+        (linear): Linear(32x0e+32x1o+32x2e+32x3o -> 32x0e+32x1o+32x2e+32x3o | 4096 weights)
+      )
+      (3): EquivariantProductBasisBlock(
+        (symmetric_contractions): SymmetricContraction(
+          (contractions): ModuleList(
+            (0): Contraction(
+              (contractions_weighting): ModuleList(
+                (0-1): 2 x GraphModule()
+              )
+              (contractions_features): ModuleList(
+                (0-1): 2 x GraphModule()
+              )
+              (weights): ParameterList(
+                  (0): Parameter containing: [torch.float32 of size 4x4x32]
+                  (1): Parameter containing: [torch.float32 of size 4x1x32]
+              )
+              (graph_opt_main): GraphModule()
+            )
+          )
+        )
+        (linear): Linear(32x0e -> 32x0e | 1024 weights)
+      )
+    )
+    (readout_mlp): ModuleList(
+      (0-2): 3 x Linear(32x0e+32x1o+32x2e+32x3o -> 1x0e | 32 weights)
+      (3): AtomwiseNonLinear(
+        (linear_1): Linear(32x0e -> 16x0e | 512 weights)
+        (non_linearity): Activation [x] (16x0e -> 16x0e)
+        (linear_2): Linear(16x0e -> 1x0e | 16 weights)
+      )
+    )
+  )
+  (input_modules): ModuleList(
+    (0): PairwiseDistance(compute_neighbor_list=True, compute_distance_from_R=False, compute_forces=True)
+  )
+  (output_modules): CallbackModuleList(
+    (0): AtomwiseReduce()
+    (1): GradientOutput(grad_on_edge_diff=True, grad_on_positions=False, model_outputs=['forces'])
+    (2): GlobalRescaleShift(scale_by=tensor([1.2307]), shift_by=tensor([-9.0185e-07]), shift_by_E0=True, atomic_energies={'Li': tensor(-2.4021), 'O': tensor(-9.6085), 'P': tensor(-2.4021), 'Fe': tensor(-2.4021)}, scale_keys=['energy', 'forces'], shift_keys=['energy'], atomwise_normalization=True)
+  )
+)
+[2025-10-01 16:46:29,332][curator.model.base][DEBUG] - Model parameters: 431,984
+[2025-10-01 16:46:29,502][curator.model.base][INFO] - 
+
+[2025-10-01 16:46:29,502][curator.model.base][DEBUG] - Validating
+[2025-10-01 16:46:30,242][curator.model.base][INFO] - # epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+[2025-10-01 16:46:30,243][curator.model.base][INFO] -       0          0             173            2.03             171            1.75            1.76            1.02            1.61
+[2025-10-01 16:46:33,404][curator.model.base][INFO] -       0         10             137           0.722             136            1.01            1.05           0.879            1.44
+[2025-10-01 16:46:34,204][curator.model.base][INFO] -       0         20            39.8           0.488            39.3            0.83            0.86           0.529           0.771
+[2025-10-01 16:46:34,994][curator.model.base][INFO] -       0         30            82.1           0.421            81.6            0.77           0.799           0.725            1.11
+[2025-10-01 16:46:35,759][curator.model.base][INFO] -       0         40            39.4           0.708            38.7            1.01            1.04           0.504           0.766
+[2025-10-01 16:46:36,556][curator.model.base][INFO] -       0         50             181             1.3             180            1.03             1.4            1.09            1.65
+[2025-10-01 16:46:37,343][curator.model.base][INFO] -       0         60            66.2           0.447            65.7           0.735           0.823           0.604           0.998
+[2025-10-01 16:46:38,148][curator.model.base][INFO] -       0         70            64.5            0.22            64.3           0.574           0.577           0.665           0.987
+[2025-10-01 16:46:38,975][curator.model.base][INFO] -       0         80             137            1.56             136            1.32            1.54           0.897            1.43
+[2025-10-01 16:46:39,834][curator.model.base][INFO] -       0         90            50.7            0.41            50.3           0.652           0.788           0.576           0.873
+[2025-10-01 16:46:40,659][curator.model.base][INFO] -       0        100             172            1.63             171            1.22            1.57            1.01            1.61
+[2025-10-01 16:46:41,482][curator.model.base][INFO] -       0        110            58.5           0.361            58.2           0.525           0.739           0.598           0.939
+[2025-10-01 16:46:41,644][curator.model.base][INFO] - 
+
+[2025-10-01 16:46:41,644][curator.model.base][DEBUG] - Epoch summary:
+[2025-10-01 16:46:41,644][curator.model.base][INFO] - Validation  # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+[2025-10-01 16:46:41,644][curator.model.base][INFO] -                   0            95.4            0.66              95            0.84            0.91           0.725            1.15
+[2025-10-01 16:46:41,648][curator.model.base][INFO] - 
+
+[2025-10-01 16:46:41,648][curator.model.base][DEBUG] - Start training model
+[2025-10-01 16:46:41,649][curator.model.base][INFO] - LightningAdamW (
+Parameter Group 0
+    amsgrad: True
+    betas: [0.9, 0.999]
+    capturable: False
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 0.005
+    maximize: False
+    name: input_modules
+    weight_decay: 0.0
+
+Parameter Group 1
+    amsgrad: True
+    betas: [0.9, 0.999]
+    capturable: False
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 0.005
+    maximize: False
+    name: decay_params
+    weight_decay: 0.0
+
+Parameter Group 2
+    amsgrad: True
+    betas: [0.9, 0.999]
+    capturable: False
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 0.005
+    maximize: False
+    name: no_decay_params
+    weight_decay: 0.0
+
+Parameter Group 3
+    amsgrad: True
+    betas: [0.9, 0.999]
+    capturable: False
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 0.005
+    maximize: False
+    name: products
+    weight_decay: 0.0
+
+Parameter Group 4
+    amsgrad: True
+    betas: [0.9, 0.999]
+    capturable: False
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 0.005
+    maximize: False
+    name: readout_mlp
+    weight_decay: 0.0
+
+Parameter Group 5
+    amsgrad: True
+    betas: [0.9, 0.999]
+    capturable: False
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 0.005
+    maximize: False
+    name: output_modules
+    weight_decay: 0.0
+)
+[2025-10-01 16:46:41,651][curator.model.base][INFO] - 
+
+[2025-10-01 16:46:41,651][curator.model.base][DEBUG] - Training
+[2025-10-01 16:46:41,651][curator.model.base][INFO] - # epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+[2025-10-01 16:46:41,767][curator.model.base][INFO] -       0          0            66.1           0.701            65.4           0.959            1.03           0.605           0.995
+[2025-10-01 16:46:46,291][curator.model.base][INFO] -       0         10            98.2           0.943            97.3           0.992             1.2           0.737            1.21
+[2025-10-01 16:46:48,752][curator.model.base][INFO] -       0         20            67.8            5.89            61.9            2.85            2.99           0.503           0.969
+[2025-10-01 16:46:51,397][curator.model.base][INFO] -       0         30            63.2              20            43.3            5.45             5.5           0.545            0.81
+[2025-10-01 16:46:54,108][curator.model.base][INFO] -       0         40            35.2            3.23              32            2.16            2.21            0.51           0.696
+[2025-10-01 16:46:56,754][curator.model.base][INFO] -       0         50            20.8           0.526            20.2           0.667           0.893           0.398           0.554

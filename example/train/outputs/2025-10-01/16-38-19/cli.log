@@ -1,0 +1,94 @@
+[2025-10-01 16:38:19,380][curator][DEBUG] - Running on host: XSH-20240927AHO
+[2025-10-01 16:38:19,380][curator][DEBUG] - Seed with <3407>
+[2025-10-01 16:38:19,381][curator][DEBUG] - Instantiating datamodule <curator.data.AtomsDataModule> from dataset ../LiFePO4.traj
+[2025-10-01 16:38:19,382][curator.data.datamodule][INFO] - AtomsDataModule(datapath=../LiFePO4.traj
+Dataset size=2257, training dataset size=2031, validation dataset size=225, test dataset size=0.
+scale=None, shift=None, atomwise_normalization=True, scale_forces=True
+)
+[2025-10-01 16:38:19,392][curator][DEBUG] - Instantiating task <curator.model.LitNNP>
+[2025-10-01 16:38:19,398][curator.model.base][DEBUG] - Energy loss weight: 1 Forces loss weight: 100
+[2025-10-01 16:38:19,398][curator][DEBUG] - Instantiating model <class 'curator.model.base.NeuralNetworkPotential'> with GNN representation <class 'curator.model.painn.PainnModel'>
+[2025-10-01 16:38:19,398][curator][DEBUG] - Instantiating trainer <pytorch_lightning.Trainer>
+[2025-10-01 16:38:17,685][curator.data.datamodule][DEBUG] - Using reference energies for elements: None.
+[2025-10-01 16:38:18,665][curator.data.datamodule][DEBUG] - Forces will be scaled by forces_rms: 1.231.
+[2025-10-01 16:38:18,666][curator.data.datamodule][DEBUG] - Atomwise model outputs will be normalized.
+[2025-10-01 16:38:18,666][curator.data.datamodule][DEBUG] - Model output properties will be scaled by 1.231, shifted by -6.520.
+[2025-10-01 16:38:18,666][curator.data.datamodule][DEBUG] - Using reference energies for elements: None.
+[2025-10-01 16:38:18,666][curator.model.base][INFO] - NeuralNetworkPotential(
+  (representation): PainnModel(
+    (atom_embedding): Embedding(119, 128)
+    (message_layers): ModuleList(
+      (0-2): 3 x PainnMessage(
+        (cutoff_fn): CosineCutoff()
+        (radial_basis): SineBasis()
+        (scalar_message_mlp): Sequential(
+          (0): Linear(in_features=128, out_features=128, bias=True)
+          (1): SiLU()
+          (2): Linear(in_features=128, out_features=384, bias=True)
+        )
+        (filter_layer): Linear(in_features=20, out_features=384, bias=True)
+      )
+    )
+    (update_layers): ModuleList(
+      (0-2): 3 x PainnUpdate(
+        (update_U): Linear(in_features=128, out_features=128, bias=True)
+        (update_V): Linear(in_features=128, out_features=128, bias=True)
+        (update_mlp): Sequential(
+          (0): Linear(in_features=256, out_features=128, bias=True)
+          (1): SiLU()
+          (2): Linear(in_features=128, out_features=384, bias=True)
+        )
+      )
+    )
+    (readout_mlp): Sequential(
+      (0): Linear(in_features=128, out_features=128, bias=True)
+      (1): SiLU()
+      (2): Linear(in_features=128, out_features=1, bias=True)
+    )
+  )
+  (input_modules): ModuleList(
+    (0): PairwiseDistance(compute_neighbor_list=True, compute_distance_from_R=False, compute_forces=True)
+  )
+  (output_modules): CallbackModuleList(
+    (0): AtomwiseReduce()
+    (1): GradientOutput(grad_on_edge_diff=True, grad_on_positions=False, model_outputs=['forces'])
+    (2): GlobalRescaleShift(scale_by=tensor([1.2307]), shift_by=tensor([-6.5200]), shift_by_E0=False, atomic_energies={}, scale_keys=['energy', 'forces'], shift_keys=['energy'], atomwise_normalization=True)
+  )
+)
+[2025-10-01 16:38:18,668][curator.model.base][DEBUG] - Model parameters: 600,577
+[2025-10-01 16:38:18,846][curator.model.base][INFO] - 
+
+[2025-10-01 16:38:18,847][curator.model.base][DEBUG] - Validating
+[2025-10-01 16:38:19,389][curator.model.base][INFO] - # epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+[2025-10-01 16:38:19,389][curator.model.base][INFO] -       0          0             146            7.28             139            3.12            3.32            0.91            1.45
+[2025-10-01 16:38:20,323][curator.model.base][INFO] -       0         10             152            9.33             143            3.63            3.76           0.831            1.47
+[2025-10-01 16:38:20,865][curator.model.base][INFO] -       0         20            95.7            11.6              84            4.14            4.19           0.688            1.13
+[2025-10-01 16:38:21,114][curator.model.base][INFO] - 
+
+[2025-10-01 16:38:21,114][curator.model.base][DEBUG] - Epoch summary:
+[2025-10-01 16:38:21,114][curator.model.base][INFO] - Validation  # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+[2025-10-01 16:38:21,114][curator.model.base][INFO] -                   0             120              10             110            3.75            3.88           0.784            1.28
+[2025-10-01 16:38:21,117][curator.model.base][INFO] - 
+
+[2025-10-01 16:38:21,117][curator.model.base][DEBUG] - Start training model
+[2025-10-01 16:38:21,117][curator.model.base][INFO] - LightningAdamW (
+Parameter Group 0
+    amsgrad: False
+    betas: [0.9, 0.999]
+    capturable: False
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 0.0005
+    maximize: False
+    weight_decay: 0.01
+)
+[2025-10-01 16:38:21,119][curator.model.base][INFO] - 
+
+[2025-10-01 16:38:21,119][curator.model.base][DEBUG] - Training
+[2025-10-01 16:38:21,119][curator.model.base][INFO] - # epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+[2025-10-01 16:38:21,230][curator.model.base][INFO] -       0          0             136            8.65             127            3.45            3.62           0.864            1.39
+[2025-10-01 16:38:22,724][curator.model.base][INFO] -       0         10            29.1             2.9            26.2            2.07            2.09           0.457            0.63
+[2025-10-01 16:38:23,942][curator.model.base][INFO] -       0         20            17.4           0.044            17.4           0.223           0.258           0.374           0.513
+[2025-10-01 16:38:25,143][curator.model.base][INFO] -       0         30              11           0.566            10.4           0.886           0.926           0.294           0.398

@@ -1,0 +1,39 @@
+annotator:
+  calculator:
+    _target_: ase.calculators.vasp.Vasp
+    _convert_: partial
+    xc: pbe
+    encut: 520
+    ediff: 1.0e-05
+    ediffg: -0.02
+    algo: all
+    prec: accurate
+    sigma: 0.05
+    ibrion: 2
+    isif: 2
+    ismear: 0
+    ispin: 2
+    nelmin: 8
+    nelm: 400
+    lmaxmix: 4
+    nsw: 0
+    lreal: auto
+    ncore: 4
+    istart: 0
+    isym: 0
+    lcharg: false
+    lwave: true
+    command: mpirun vasp_std
+  _target_: curator.label.annotator.AtomsAnnotator
+  inspector:
+    _target_: curator.label.inspector.VASPInspector
+    nelm: ${annotator.calculator.nelm}
+cfg: null
+run_path: .
+datapath: null
+pool_set: null
+indices: null
+al_info: null
+split_jobs: null
+imgs_per_job: null
+job_order: null

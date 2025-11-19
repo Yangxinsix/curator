@@ -1,0 +1,4 @@
+[2025-10-01 15:44:46,908][curator][INFO] - Running on host: XSH-20240927AHO
+[2025-10-01 15:44:46,908][curator][INFO] - Seed with <123>
+[2025-10-01 15:44:46,909][curator][INFO] - Using model from <../train/model_path>
+[2025-10-01 15:45:18,064][curator][INFO] - Active learning selection completed! Check /home/yangxin/curator/example_new/select/selected.json for selected structures!

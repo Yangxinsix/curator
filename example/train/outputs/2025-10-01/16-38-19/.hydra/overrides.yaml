@@ -1,0 +1,2 @@
+- cfg=config.yaml
+- data.batch_size=18

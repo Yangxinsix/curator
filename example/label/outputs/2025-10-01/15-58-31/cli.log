@@ -1,0 +1,4 @@
+[2025-10-01 15:58:31,715][curator][INFO] - Running on host: XSH-20240927AHO
+[2025-10-01 15:58:31,716][curator][INFO] - Labelling 100 active learning selected structures: ../select/selected.json
+[2025-10-01 15:58:31,843][curator.label.annotator][WARNING] - No labelling inspector is provided. The convergence of calculation will not be checked.
+[2025-10-01 15:58:31,843][curator][INFO] - Labeling structure 0.

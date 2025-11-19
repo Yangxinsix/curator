@@ -1,0 +1,3 @@
+- annotator/calculator=gpaw
+- pool_set=../simulate/MD.traj
+- al_info=../select/selected.json
