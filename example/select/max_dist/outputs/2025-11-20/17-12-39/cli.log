@@ -1,0 +1,5 @@
+[2025-11-20 17:12:39,741][curator][INFO] - Running on host: ca571a5a3664
+[2025-11-20 17:12:39,741][curator][INFO] - Seed with <123>
+[2025-11-20 17:12:39,742][curator][INFO] - Using model from <../../train/model_path>
+[2025-11-20 17:12:40,320][curator][WARNING] - The pool data set (11) is not large enough for selection! It should be larger than 10 times batch size (1000). Check your simulation!
+[2025-11-20 17:12:41,717][curator][INFO] - Active learning selection completed! Check /workspace/curator/example/select/max_dist/selected.json for selected structures!

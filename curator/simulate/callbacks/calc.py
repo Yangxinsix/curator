@@ -53,6 +53,7 @@ class CalculatorAssign(Callback):
     def on_sim_start(self, ctx: SimContext):
         if ctx.atoms is not None:
             self._assign_and_warmup(ctx.atoms)
+            self.log.info("Calcator assigned to atoms.")
 
     def on_engine_setup(self, ctx: SimContext):
         if self.apply_to_neb_images and "neb_images" in ctx.state:

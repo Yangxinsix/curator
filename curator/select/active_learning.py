@@ -540,7 +540,6 @@ class DistanceMetrics:
         image_idx = torch.arange(num_atoms.shape[0], device=device)
         return torch.repeat_interleave(image_idx, num_atoms)
 
-
 class DistanceMetrics:
     """Compute simple distance metrics from cached feature statistics."""
 

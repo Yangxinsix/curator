@@ -1,0 +1,4 @@
+2025-11-20 17:14:17,555 -    INFO - Running on host: ca571a5a3664
+2025-11-20 17:14:17,555 -    INFO - Seed with <123>
+2025-11-20 17:14:17,557 -    INFO - Using model from <../../train/model_path>
+2025-11-20 17:15:17,782 -    INFO - Active learning selection completed! Check /workspace/curator/example/select/max_dist/selected.json for selected structures!
