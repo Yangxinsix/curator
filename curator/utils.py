@@ -209,6 +209,34 @@ def ensure_list(value: Any):
         return list(value)
     return value
 
+def ensure_dict(value: Any, prefix: str = "item"):
+    """Convert legacy list-style Hydra nodes to dictionaries."""
+
+    if isinstance(value, DictConfig):
+        return value
+    if isinstance(value, (ListConfig, list)):
+        items = {}
+        for idx, entry in enumerate(value):
+            key = _infer_sequence_key(entry, idx, prefix)
+            if key in items:
+                key = f"{key}_{idx}"
+            items[key] = entry
+        return OmegaConf.create(items)
+    return value
+
+def _camel_to_snake(name: str) -> str:
+    import re
+    return re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower()
+
+def _infer_sequence_key(entry: Any, idx: int, prefix: str) -> str:
+    if isinstance(entry, (DictConfig, dict)):
+        name = entry.get("name")
+        if isinstance(name, str) and name:
+            return name
+        target = entry.get("_target_")
+        if isinstance(target, str) and target:
+            return _camel_to_snake(target.split(".")[-1])
+    return f"{prefix}_{idx}"
 
 def find_best_model(run_path: Union[str, Path]) -> Tuple[Path, Optional[float]]:
     """Return best ckpt path under a run directory or the path itself if it is a .ckpt."""
@@ -281,6 +309,46 @@ def get_all_pairs(d, keys=()):
     else:
         yield (keys, d)
 
+def _dictify_field(
+    container: Optional[DictConfig],
+    key: str,
+    prefix: str,
+    path: str,
+    converted: set,
+) -> None:
+    if container is None or key not in container or container[key] is None:
+        return
+
+    new_value = ensure_dict(container[key], prefix)
+    if new_value is container[key]:
+        return
+
+    if isinstance(container, DictConfig):
+        with open_dict(container):
+            container[key] = new_value
+    else:
+        container[key] = new_value
+
+    converted.add(path)
+
+
+def _dictify_sequence_nodes(config: Optional[DictConfig]) -> set:
+    converted = set()
+    if config is None:
+        return converted
+
+    if "trainer" in config:
+        _dictify_field(config.trainer, "callbacks", "callback", "trainer.callbacks", converted)
+
+    if "model" in config:
+        _dictify_field(config.model, "input_modules", "input_module", "model.input_modules", converted)
+        _dictify_field(config.model, "output_modules", "output_module", "model.output_modules", converted)
+
+    if "task" in config:
+        _dictify_field(config.task, "outputs", "output", "task.outputs", converted)
+
+    return converted
+
 # Ugly workaround for specifying config files outside of the package
 def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_path="configs", config_name="train.yaml"):
     # load cfg
@@ -291,6 +359,10 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     else:
         user_cfg = OmegaConf.create()
 
+    converted_fields = set()
+    if isinstance(user_cfg, DictConfig):
+        converted_fields = _dictify_sequence_nodes(user_cfg)
+
     override_list = []
     if "defaults" in user_cfg:
         default_list = user_cfg.pop("defaults")
@@ -299,6 +371,9 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
                 for k, v in d.items():
                     override_list.append(f"{k}={v}")
     
+    for path in sorted(converted_fields):
+        override_list.append(f"~{path}")
+
     for k, v in get_all_pairs(user_cfg):
         key = ".".join(k)
         # process value

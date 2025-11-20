@@ -37,8 +37,9 @@ class MDEngine(BaseEngine):
                     raise TypeError("MDEngine.setup expects SimContext or Atoms.")
                 self.dyn = self.dynamics_cls(self.atoms, **self.kw)
             else:
+                # if dynamics_cls is a object but not a class
                 self.dyn = self.dynamics_cls
-                warnings.warn("")
+                warnings.warn(f"Dynamics is directly initiated from {self.dynamics_cls.__class__.__name__}. It is only not recommended to run simulation in this way.")
 
     def _attach_to_backend(self, fn, interval: int) -> None:
         if self.dyn is not None:

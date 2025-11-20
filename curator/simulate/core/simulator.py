@@ -5,6 +5,7 @@ from ase import Atoms
 from .context import SimContext, load_atoms_or_traj
 from .engine import BaseEngine
 from .callbacks import Callback
+import warnings
 
 class Simulator:
     """
@@ -26,6 +27,8 @@ class Simulator:
         self.callbacks = callbacks or []
         self.init_traj = init_traj
         self.start_index = start_index
+        self._step_fn = self._step_proxy()
+        self._step_attached = False
 
     def _dispatch(self, hook: str, *args):
         for cb in self.callbacks:
@@ -47,9 +50,13 @@ class Simulator:
                         cb.on_step(self.ctx)
         return _fn
 
-    def run(self, **run_kwargs):
+    def run(self, *args, **run_kwargs):
         # Prepare atoms
-        self.ctx.atoms = load_atoms_or_traj(self.init_traj, self.start_index)
+        if self.engine.atoms is not None:
+            self.ctx.atoms = self.engine.atoms
+            warnings.warn(f"Atoms are directly read from engine.")
+        else:
+            self.ctx.atoms = load_atoms_or_traj(self.init_traj, self.start_index)
 
         # preprocess before simulation
         self._dispatch("on_sim_start", self.ctx)
@@ -60,13 +67,15 @@ class Simulator:
 
         # attach step proxy — shell engines can ignore; step-aware engines should attach it.
         try:
-            self.engine.attach(self._step_proxy(), interval=1)
+            if not self._step_attached:
+                self.engine.attach(self._step_fn, interval=1)
+                self._step_attached = True
         except Exception:
             # Engines without attach support can simply ignore this
             pass
 
         try:
-            self.engine.run(**run_kwargs)
+            self.engine.run(*args, **run_kwargs)
             self._dispatch("on_sim_end", self.ctx)
         except BaseException as exc:
             self.ctx.state["exception"] = exc
