@@ -10,86 +10,10 @@ try:
     from torch_scatter import scatter_add, scatter_mean, scatter_max
 except ImportError:
     from curator.utils import scatter_add, scatter_mean, scatter_max
-from e3nn import o3
-from curator.layer.utils import find_layer_by_name_recursive
 import logging
+from curator.layer._feature import FeatureExtractor, RandomProjections
 
 logger = logging.getLogger(__name__)
-
-class FeatureExtractor(nn.Module):
-    """Extract features from neural networks"""
-
-    def __init__(self, model: nn.Module, target_layer: str = 'readout_mlp',) -> None:
-        """Extract features from neural networks
-
-        Args:
-            model (nn.Module): pytorch model
-            target_layer (str): name of target layer to extract features from
-        """
-        super().__init__()
-        self.model = model
-        self.target_layer = target_layer
-        self._features = []
-        self._grads = []
-        self.hooks = []
-        layer = find_layer_by_name_recursive(self.model, self.target_layer)
-        assert layer is not None, f"Target layer {self.target_layer} is not found!"
-
-        representation = getattr(self.model, "representation", None)
-        if representation is not None and representation.__class__.__name__ == "MACE":
-            layer = layer[-1]
-
-        for child in layer.children():
-            if isinstance(child, (nn.Linear, o3.Linear)):
-                self.hooks.append(child.register_forward_pre_hook(self.save_feats_hook))
-                self.hooks.append(child.register_backward_hook(self.save_grads_hook))
-
-    def save_feats_hook(self, _, in_feat):
-        new_feat = torch.cat((in_feat[0].detach().clone(), torch.ones_like(in_feat[0][:, 0:1])), dim=-1)
-        self._features.append(new_feat)
-
-    def save_grads_hook(self, _, __, grad_output):
-        self._grads.append(grad_output[0].detach().clone())
-
-    def unhook(self):
-        for hook in self.hooks:
-            hook.remove()
-
-    def forward(self, model_inputs: Dict[str, torch.Tensor]):
-        self._features = []
-        self._grads = []
-        _ = self.model(model_inputs)
-        return self._features, self._grads[::-1]
-    
-class RandomProjections:
-    """Store parameters of random projections"""
-    def __init__(
-            self, 
-            model: nn.Module, 
-            num_features: int,
-            dtype = torch.get_default_dtype(),
-            target_layer: str = 'readout_mlp',
-        ):
-        self.num_features = num_features
-        self.in_feat_proj = []
-        self.out_grad_proj = []
-        device = next(model.parameters()).device
-        if self.num_features > 0:
-            layer = find_layer_by_name_recursive(model, target_layer)
-            representation = getattr(model, "representation", None)
-            if representation is not None and representation.__class__.__name__ == "MACE":
-                layer = layer[-1]
-            # Input feature projection matrices (in_features + 1 for bias term), output gradient projection matrices
-            for l in layer.children():
-                if isinstance(l, nn.Linear):
-                    self.in_feat_proj.append(torch.randn(l.in_features + 1, self.num_features, dtype=dtype, device=device))
-                    self.out_grad_proj.append(torch.randn(l.out_features, self.num_features, dtype=dtype, device=device))
-                elif isinstance(l, o3.Linear):
-                    self.in_feat_proj.append(torch.randn(l.irreps_in.dim + 1, self.num_features, dtype=dtype, device=device))
-                    self.out_grad_proj.append(torch.randn(l.irreps_out.dim, self.num_features, dtype=dtype, device=device))
-            
-    def __repr__(self):
-        return f'{self.__class__.__name__}(num_features={self.num_features})'
     
 class FeatureStatistics:
     """Generate features from trained models and datasets."""
@@ -213,7 +137,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._project_all_layers(feats, grads, random_projection, image_idx)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=True)
 
@@ -225,7 +150,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._project_all_layers(feats, grads, random_projection, image_idx)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=False)
 
@@ -237,7 +163,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._layer_features(feats[-1], grads[-1], random_projection, -1)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=True)
 
@@ -249,7 +176,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._layer_features(feats[-1], grads[-1], random_projection, -1)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=False)
 
@@ -261,7 +189,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._layer_features(feats[0], grads[0], random_projection, 0)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=True)
 
@@ -273,7 +202,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._layer_features(feats[0], grads[0], random_projection, 0)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=False)
 
