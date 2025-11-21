@@ -86,12 +86,42 @@ class MahalanobisUncertainty:
 
     def __call__(self, atoms: Atoms) -> Dict[str, float]:
         if atoms.calc and properties.maha_dist in atoms.calc.results:
-            dist = float(atoms.calc.results[properties.maha_dist])
+            dist = atoms.calc.results[properties.maha_dist]
         elif self.calc is not None:
             self.calc.calculate(atoms)
-            dist = float(self.calc.results.get(properties.maha_dist, 0.0))
+            if properties.maha_dist not in self.calc.results:
+                raise RuntimeError(
+                    "Mahalanobis distance was not produced by the calculator; "
+                    "ensure the FeatureCalculator is initialized with compute_maha_dist=True."
+                )
+            dist = self.calc.results[properties.maha_dist]
         else:
             raise RuntimeError("MahalanobisUncertainty requires a calculator with FeatureCalculator output.")
+
+        # Convert to scalar, handling numpy/tensor/list containers without silently
+        # swallowing multi-valued outputs.
+        if hasattr(dist, "numel") and callable(getattr(dist, "detach", None)):
+            dist = dist.detach().cpu()
+            if dist.numel() != 1:
+                raise ValueError(
+                    f"Mahalanobis distance must be a scalar per configuration; got shape {tuple(dist.shape)}"
+                )
+            dist = dist.item()
+        elif hasattr(dist, "__len__") and not isinstance(dist, (str, bytes)):
+            from numpy import ndarray
+
+            if isinstance(dist, ndarray):
+                if dist.size != 1:
+                    raise ValueError(
+                        f"Mahalanobis distance must be a scalar per configuration; got shape {dist.shape}"
+                    )
+                dist = float(dist.item())
+            else:
+                raise ValueError(
+                    f"Mahalanobis distance must be a scalar per configuration; got type {type(dist)}"
+                )
+        else:
+            dist = float(dist)
 
         return {
             properties.maha_dist: dist,
