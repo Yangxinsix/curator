@@ -30,16 +30,22 @@ class MDEngine(BaseEngine):
 
     def setup(self, ctx_or_atoms: Union[SimContext, Atoms, None] = None) -> None:
         if self.dyn is None:
-            if isinstance(self.dynamics_cls, type):
+            if isinstance(self.dynamics_cls, type) or callable(self.dynamics_cls):
                 # accept either SimContext or raw Atoms
                 self.atoms = ctx_or_atoms.atoms if isinstance(ctx_or_atoms, SimContext) else ctx_or_atoms
                 if not isinstance(self.atoms, Atoms):
                     raise TypeError("MDEngine.setup expects SimContext or Atoms.")
-                self.dyn = self.dynamics_cls(self.atoms, **self.kw)
+                try:
+                    self.dyn = self.dynamics_cls(self.atoms, **self.kw)
+                except TypeError:
+                    # support functools.partial or callables expecting atoms only
+                    self.dyn = self.dynamics_cls(self.atoms)
             else:
-                # if dynamics_cls is a object but not a class
+                # if dynamics_cls is an object but not a class or callable
                 self.dyn = self.dynamics_cls
-                warnings.warn(f"Dynamics is directly initiated from {self.dynamics_cls.__class__.__name__}. It is only not recommended to run simulation in this way.")
+                warnings.warn(
+                    f"Dynamics is directly initiated from {self.dynamics_cls.__class__.__name__}. It is only not recommended to run simulation in this way."
+                )
 
     def _attach_to_backend(self, fn, interval: int) -> None:
         if self.dyn is not None:

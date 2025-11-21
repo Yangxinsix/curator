@@ -3,9 +3,11 @@ try:
     from torch_scatter import scatter_add, scatter_mean
 except ImportError:
     from curator.utils import scatter_add, scatter_mean
+from importlib import util
 from torch import nn
 import torch
-from typing import Dict, Optional, Callable, List, Union
+from typing import Dict, Optional, Callable, List, Union, Sequence
+import itertools
 import logging
 from .utils import find_layer_by_name_recursive
 
@@ -14,7 +16,7 @@ logger = logging.getLogger(__name__)
 class FeatureExtractor(nn.Module):
     """Extract features from neural networks"""
     def __init__(
-        self, 
+        self,
         repr_callback: Optional[Callable] = None,
         model_outputs: List[str] = ['feature', 'gradient'],
         target_layer: str = 'readout_mlp',
@@ -31,6 +33,7 @@ class FeatureExtractor(nn.Module):
         self.hooks = []
         self.model_outputs = model_outputs
         self.target_layer = target_layer
+        self._linear_types = self._resolve_linear_types()
 
         if self.repr_callback is not None:
             self.add_hooks()
@@ -53,10 +56,10 @@ class FeatureExtractor(nn.Module):
         layer = find_layer_by_name_recursive(self.repr_callback, self.target_layer)
         assert layer is not None, f"Target layer {self.target_layer} is not found!"
         from curator.model import MACE
-        if isinstance(self.model.representation, MACE):
+        if isinstance(self.repr_callback.representation, MACE):
             layer = layer[-1]
         for child in layer.children():
-            if isinstance(child, nn.Linear):
+            if isinstance(child, self._linear_types):
                 self.hooks.append(child.register_forward_pre_hook(self.save_feats_hook))
                 self.hooks.append(child.register_backward_hook(self.save_grads_hook))
 
@@ -65,20 +68,31 @@ class FeatureExtractor(nn.Module):
             data = self.repr_callback(data)
         data[properties.feature] = self._features
         data[properties.gradient] = self._grads[::-1]
-        self._features = []
-        self._grads = []
-                          
+        self._reset()
+
         return data
-    
+
     def __repr__(self):
         return f'{self.__class__.__name__}(target_layer={self.target_layer})'
+
+    def _reset(self) -> None:
+        self._features = []
+        self._grads = []
+
+    @staticmethod
+    def _resolve_linear_types() -> Sequence[type]:
+        types: List[type] = [nn.Linear]
+        if util.find_spec("e3nn.o3"):
+            from e3nn import o3
+            types.append(o3.Linear)
+        return tuple(types)
 
 class RandomProjections(nn.Module):
     """Random projection module with Gaussian distributions, storing projection matrices as buffers."""
     def __init__(
-        self, 
-        module: nn.Module, 
-        num_features: int, 
+        self,
+        module: nn.Module,
+        num_features: int,
         dtype = torch.get_default_dtype(),
         target_layer: str = 'readout_mlp',
     ):
@@ -88,6 +102,7 @@ class RandomProjections(nn.Module):
         self.in_feat_proj_buffers = []  # Store references to projection matrices for later use
         self.out_grad_proj_buffers = []
         device = next(module.parameters()).device
+        linear_types = FeatureExtractor._resolve_linear_types()
 
         if self.num_features > 0:
             # Calculate normalization constant once
@@ -95,22 +110,42 @@ class RandomProjections(nn.Module):
             layer = find_layer_by_name_recursive(module, target_layer)
             # Input feature projection matrices (in_features + 1 for bias term)
             for i, l in enumerate(layer.children()):
-                if isinstance(l, nn.Linear):
-                    in_feat_proj = torch.randn(l.in_features + 1, self.num_features, dtype=dtype, device=device)
+                if isinstance(l, linear_types):
+                    if hasattr(l, "in_features"):
+                        in_dim = l.in_features + 1
+                    elif hasattr(l, "irreps_in"):
+                        in_dim = l.irreps_in.dim + 1
+                    else:
+                        raise AttributeError("Linear-like layer missing input dimension attributes.")
+                    in_feat_proj = torch.randn(in_dim, self.num_features, dtype=dtype, device=device)
                     # Register the buffer by name
                     self.register_buffer(f'in_feat_proj_{i}', in_feat_proj)
                     self.in_feat_proj_buffers.append(f'in_feat_proj_{i}')  # Store buffer names for access
 
             # Output gradient projection matrices
             for i, l in enumerate(layer.children()):
-                if isinstance(l, nn.Linear):
-                    out_grad_proj = torch.randn(l.out_features, self.num_features, dtype=dtype, device=device)
+                if isinstance(l, linear_types):
+                    if hasattr(l, "out_features"):
+                        out_dim = l.out_features
+                    elif hasattr(l, "irreps_out"):
+                        out_dim = l.irreps_out.dim
+                    else:
+                        raise AttributeError("Linear-like layer missing output dimension attributes.")
+                    out_grad_proj = torch.randn(out_dim, self.num_features, dtype=dtype, device=device)
                     # Register the buffer by name
                     self.register_buffer(f'out_grad_proj_{i}', out_grad_proj)
                     self.out_grad_proj_buffers.append(f'out_grad_proj_{i}')  # Store buffer names for access
 
     def __repr__(self):
         return f'{self.__class__.__name__}(num_features={self.num_features})'
+
+    @property
+    def in_feat_proj(self) -> List[torch.Tensor]:
+        return [getattr(self, name) for name in self.in_feat_proj_buffers]
+
+    @property
+    def out_grad_proj(self) -> List[torch.Tensor]:
+        return [getattr(self, name) for name in self.out_grad_proj_buffers]
         
 class FeatureCalculator(nn.Module):
     def __init__(
@@ -124,6 +159,7 @@ class FeatureCalculator(nn.Module):
         compute_maha_dist: bool = False,
         precision: Optional[torch.Tensor] = None,
         feature_mean: Optional[torch.Tensor] = None,
+        max_dataset_size: Optional[int] = None,
     ) -> None:
         super().__init__()
         self.n_random_features = n_random_features
@@ -133,6 +169,10 @@ class FeatureCalculator(nn.Module):
         self.target_layer = target_layer
         self.dataset = dataset
         self.compute_maha_dist = compute_maha_dist
+        self.max_dataset_size = max_dataset_size
+
+        if self.compute_maha_dist and properties.maha_dist not in self.model_outputs:
+            self.model_outputs.append(properties.maha_dist)
 
         if self.repr_callback is not None:
             self._initialize_feature_components()
@@ -184,7 +224,11 @@ class FeatureCalculator(nn.Module):
         features = []
         image_idx = []
         device = next(self.repr_callback.parameters()).device
-        for i, sample in enumerate(dataset):
+        iterator = dataset
+        if self.max_dataset_size is not None:
+            iterator = itertools.islice(dataset, self.max_dataset_size)
+
+        for i, sample in enumerate(iterator):
             sample = {k: v.to(device) for k, v in sample.items()}
             features.append(self._compute_feature(sample, predict=True)[properties.feature].to('cpu'))   # use cpu to save memory
             image_idx.append(torch.ones(sample[properties.n_atoms], dtype=torch.long) * i)
@@ -197,6 +241,7 @@ class FeatureCalculator(nn.Module):
         # normalization for numerical stability
         mean = features.mean(dim=0)
         std = features.std(dim=0)
+        std = torch.where(std == 0, torch.ones_like(std), std)
         features = (features - mean) / std
         cov_matrix = torch.cov(features.T)
         precision = torch.inverse(cov_matrix + torch.eye(cov_matrix.size(0)) * 1e-3) # add a regularization term
