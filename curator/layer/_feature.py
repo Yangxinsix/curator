@@ -55,8 +55,8 @@ class FeatureExtractor(nn.Module):
     def add_hooks(self):
         layer = find_layer_by_name_recursive(self.repr_callback, self.target_layer)
         assert layer is not None, f"Target layer {self.target_layer} is not found!"
-        from curator.model import MACE
-        if isinstance(self.repr_callback.representation, MACE):
+        # Avoid direct imports; use class name string comparison instead for efficiency
+        if self.repr_callback.__class__.__name__ == 'MACE':
             layer = layer[-1]
         for child in layer.children():
             if isinstance(child, self._linear_types):
@@ -224,16 +224,45 @@ class FeatureCalculator(nn.Module):
         features = []
         image_idx = []
         device = next(self.repr_callback.parameters()).device
-        iterator = dataset
-        if self.max_dataset_size is not None:
-            iterator = itertools.islice(dataset, self.max_dataset_size)
+        from curator.data import collate_atomsdata
+        from torch.utils.data import DataLoader
 
-        for i, sample in enumerate(iterator):
-            sample = {k: v.to(device) for k, v in sample.items()}
-            features.append(self._compute_feature(sample, predict=True)[properties.feature].to('cpu'))   # use cpu to save memory
-            image_idx.append(torch.ones(sample[properties.n_atoms], dtype=torch.long) * i)
-        if hasattr(self.repr_callback, 'model_outputs'):
-            self.repr_callback.model_outputs.remove('all')
+        loader_kwargs = dict(
+            batch_size=self.max_dataset_size if self.max_dataset_size is not None else 1,
+            shuffle=False,
+            collate_fn=collate_atomsdata,
+        )
+        iterator = DataLoader(dataset, **loader_kwargs)
+        # No need to slice the iterator, since batch_size == max_dataset_size
+
+        for i, batch in enumerate(iterator):
+            logger.info(f"Processing batch {i+1}/{len(iterator)}")
+            batch = {k: v.to(device) for k, v in batch.items()}
+            feats = self._compute_feature(batch, predict=True)[properties.feature].to('cpu')  # use cpu to save memory
+            features.append(feats)
+            # Handle image_idx appropriately for global vs local features
+            use_local = 'local' in self.kernel if hasattr(self, 'kernel') else False
+
+            if use_local:
+                # Local: Atom-level, construct image_idx per atom
+                n_atoms = batch[properties.n_atoms]
+                if torch.is_tensor(n_atoms):
+                    batch_img_idx = []
+                    for img_j, n in enumerate(n_atoms):
+                        batch_img_idx.append(torch.full((n,), i * len(n_atoms) + img_j, dtype=torch.long))
+                    batch_img_idx = torch.cat(batch_img_idx)
+                else:
+                    batch_img_idx = torch.ones(batch[properties.n_atoms], dtype=torch.long) * i
+                image_idx.append(batch_img_idx)
+            else:
+                # Global: One entry per image (batch)
+                # image_idx should be a tensor of image indices, one per structure in batch
+                n_images = batch[properties.n_atoms].shape[0] if torch.is_tensor(batch[properties.n_atoms]) else len(batch[properties.n_atoms])
+                batch_img_idx = torch.arange(i * n_images, i * n_images + n_images, dtype=torch.long)
+                image_idx.append(batch_img_idx)
+
+            if hasattr(self.repr_callback, 'model_outputs'):
+                self.repr_callback.model_outputs.remove('all')
 
         # calculate inverse covariance matrix
         features = torch.cat(features)
