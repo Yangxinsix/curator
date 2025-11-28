@@ -152,7 +152,11 @@ def load_models(
 ) -> List[torch.nn.Module]:
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        
+
+    # Normalize OmegaConf list/tuple containers into plain Python lists for type checks.
+    if isinstance(model_like, ListConfig):
+        model_like = list(model_like)
+
     # for single model passed with str
     if not isinstance(model_like, (list, tuple)):
         model_like = [model_like]

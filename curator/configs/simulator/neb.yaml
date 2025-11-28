@@ -1,20 +1,30 @@
-method: neb
-initial_image: null
-final_image: null
-num_img: 5
-optimizer: 'FIRE'
-fmax: 0.03
-optimizer_step: 200
-mic: True
-print_step: 1
+defaults:
+  - calculator: default_calculator
+  - _self_
 
-MD:
-  small_MD: True
-  num_MD: 5 # number of images to perform MD on. Chossen to be the lowest energy config
-  temperature: 300 #K
-  friction: 0.003
-  time_step: 1 #fs
-  print_step: 1 #fs
-  total_time: 10 #fs
-  
+_target_: curator.simulate.simulator.NEBSimulator
 
+initial_image: null                # path to initial structure
+final_image: null                  # path to final structure
+num_images: 3                      # number of intermediate images
+fmax: 0.05                         # NEB convergence threshold (eV/Å)
+max_steps: 200                     # maximum optimizer steps
+print_step: 10                     # logging interval
+start_index: 0
+
+optimizer:
+  _target_: hydra.utils.get_class
+  path: ase.optimize.fire.FIRE
+
+interpolator: null                 # optional ASE interpolator
+neb_kwargs:
+  allow_shared_calculator: true    # reuse calculator across images
+opt_kwargs: {}
+
+logger:
+  _target_: curator.simulate.callbacks.thermo.MDThermoLogger
+  variables:
+    - step
+    - epot
+  interval: ${simulator.print_step}
+  header: true

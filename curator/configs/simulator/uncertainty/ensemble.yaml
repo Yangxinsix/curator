@@ -1,3 +1,4 @@
 _target_: curator.simulate.uncertainty.EnsembleUncertainty
 uncertainty_keys:
   - force_sd
+  - energy_sd
