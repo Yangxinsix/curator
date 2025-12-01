@@ -10,12 +10,181 @@ from ase import units
 from pathlib import Path, PosixPath
 from typing import Any, List, Optional, Tuple, Union
 import numpy as np
+import torch.serialization as torch_serialization
 
 def register_resolvers():
     OmegaConf.register_new_resolver("multiply", lambda x, y: x * y, replace=True)
     OmegaConf.register_new_resolver("divide", lambda x, y: x / y, replace=True)
     OmegaConf.register_new_resolver("multiply_fs", lambda x: x * units.fs, replace=True)
     OmegaConf.register_new_resolver("divide_by_fs", lambda x: x / units.fs, replace=True)
+
+from curator.layer import GlobalRescaleShift, Strain, AtomwiseReduce, PairwiseDistance, GradientOutput, RealAgnosticInteractionBlock, RealAgnosticResidualInteractionBlock
+from curator.model import NeuralNetworkPotential, MACE
+from ase.data import chemical_symbols
+import torch
+
+def create_model_from_mace(mace_model, foundation=False):
+    input_modules = [Strain(), PairwiseDistance(compute_distance_from_R=True)]
+    num_heads = len(getattr(mace_model, "heads", ["Default"])) if hasattr(mace_model, "heads") else 1
+    atomic_energies = torch.atleast_2d(mace_model.atomic_energies_fn.atomic_energies).mean(dim=-1)
+    curator_mace = MACE(
+        cutoff=float(mace_model.r_max),
+        num_interactions=len(mace_model.interactions),
+        correlation=[contraction.correlation for contraction in mace_model.products[0].symmetric_contractions.contractions],
+        species=[chemical_symbols[i] for i in mace_model.atomic_numbers],
+        hidden_irreps=mace_model.interactions[0].hidden_irreps,
+        edge_sh_irreps=mace_model.spherical_harmonics.irreps_out,
+        avg_num_neighbors=mace_model.interactions[0].avg_num_neighbors,
+        MLP_irreps=mace_model.readouts[-1].hidden_irreps,
+        num_basis=len(mace_model.radial_embedding.bessel_fn.bessel_weights),
+        power=float(mace_model.radial_embedding.cutoff_fn.p),
+        interaction_cls=RealAgnosticResidualInteractionBlock,
+        interaction_cls_first=RealAgnosticInteractionBlock if not foundation else RealAgnosticResidualInteractionBlock,
+        num_heads=num_heads,
+    )
+
+    output_modules = [
+        AtomwiseReduce(output_key='energy'),
+        GlobalRescaleShift(
+            scale_by=float(mace_model.scale_shift.scale),
+            shift_by=float(mace_model.scale_shift.shift),
+            atomic_energies={
+                int(idx): float(e)
+                for idx, e in zip(mace_model.atomic_numbers, atomic_energies.squeeze())
+            },
+        ),
+        GradientOutput(model_outputs=['energy', 'forces'], grad_on_edge_diff=False, grad_on_positions=True),
+    ]
+    curator_mace.embeddings.radial_basis.basis.load_state_dict(mace_model.radial_embedding.bessel_fn.state_dict(), strict=False)
+    curator_mace.embeddings.chemical_embedding.linear.load_state_dict(mace_model.node_embedding.linear.state_dict(), strict=False)
+    for i in range(len(mace_model.interactions)):
+        curator_mace.interactions[i].avg_num_neighbors = torch.tensor(mace_model.interactions[i].avg_num_neighbors)
+        curator_mace.interactions[i].load_state_dict(mace_model.interactions[i].state_dict(), strict=False)
+        curator_mace.products[i].load_state_dict(mace_model.products[i].state_dict())
+        if i < len(mace_model.readouts) - 1 and hasattr(mace_model.readouts[i], "linear"):
+            curator_mace.readout_mlp[i].load_state_dict(mace_model.readouts[i].linear.state_dict(), strict=False)
+        elif i < len(mace_model.readouts):
+            curator_mace.readout_mlp[i].load_state_dict(mace_model.readouts[i].state_dict(), strict=False)
+    nnp = NeuralNetworkPotential(
+        input_modules=input_modules,
+        representation=curator_mace,
+        output_modules=output_modules,
+    )
+    
+    return nnp
+
+
+def convert_mace_to_curator(mace_path: Union[str, Path], output_path: Union[str, Path], foundation: bool = False, device: Optional[torch.device] = None) -> Path:
+    """Load a mace model checkpoint and save a curator-style model."""
+    torch_serialization.add_safe_globals([slice])
+    mace_path = Path(mace_path)
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    obj = torch.load(mace_path, map_location=device)
+    mace_model = None
+    if isinstance(obj, torch.nn.Module):
+        mace_model = obj
+    elif isinstance(obj, dict):
+        mace_model = obj.get("model")
+        if mace_model is None and "state_dict" in obj:
+            raise TypeError("MACE checkpoint does not include an instantiated model; please provide a TorchScript or full model checkpoint.")
+    if mace_model is None:
+        raise TypeError(f"Unsupported MACE checkpoint format at {mace_path}")
+    curator_model = create_model_from_mace(mace_model, foundation=foundation)
+    output_path = Path(output_path)
+    torch.save(curator_model, output_path)
+    return output_path
+
+
+def _build_mace_from_curator(curator_model: Union[torch.nn.Module, NeuralNetworkPotential]):
+    """Best-effort recreation of a mace.modules.models.ScaleShiftMACE from a Curator MACE model."""
+    from mace.modules import models as mace_models
+    from mace.modules import blocks as mace_blocks
+
+    if isinstance(curator_model, NeuralNetworkPotential):
+        repr_model = curator_model.representation
+        output_modules = list(curator_model.output_modules)
+    else:
+        repr_model = curator_model
+        output_modules = []
+
+    if not isinstance(repr_model, MACE):
+        raise TypeError("Provided model is not a Curator MACE representation.")
+
+    # species / atomic numbers
+    atomic_numbers = list(range(repr_model.embeddings.onehot_embedding.num_elements))
+    mapper = getattr(repr_model.embeddings.onehot_embedding, "type_mapper", None)
+    if mapper is not None:
+        atomic_numbers = [int(z) for z in mapper.index_to_Z.cpu().tolist()]
+
+    heads = [f"head_{i}" for i in range(repr_model.num_heads)]
+    correlation = [
+        contraction.correlation for contraction in repr_model.products[0].symmetric_contractions.contractions
+    ]
+    num_basis = len(repr_model.embeddings.radial_basis.basis.bessel_weights)
+    num_polynomial_cutoff = int(repr_model.embeddings.radial_basis.cutoff_fn.power)
+    avg_num_neighbors = float(repr_model.interactions[0].avg_num_neighbors.squeeze())
+
+    scale, shift = 1.0, 0.0
+    atomic_energies = torch.zeros(len(atomic_numbers))
+    for m in output_modules:
+        if isinstance(m, GlobalRescaleShift):
+            scale = float(m.scale_by)
+            shift = float(m.shift_by)
+            atomic_energies = m.atomic_energies[atomic_numbers]
+            break
+
+    mace_model = mace_models.ScaleShiftMACE(
+        atomic_inter_scale=scale,
+        atomic_inter_shift=shift,
+        r_max=float(repr_model.cutoff),
+        num_bessel=num_basis,
+        num_polynomial_cutoff=num_polynomial_cutoff,
+        max_ell=repr_model.lmax,
+        interaction_cls=mace_blocks.InteractionBlock,
+        interaction_cls_first=mace_blocks.InteractionBlock,
+        num_interactions=len(repr_model.interactions),
+        num_elements=repr_model.embeddings.onehot_embedding.num_elements,
+        hidden_irreps=repr_model.hidden_irreps,
+        MLP_irreps=repr_model.MLP_irreps,
+        atomic_energies=atomic_energies,
+        avg_num_neighbors=avg_num_neighbors,
+        atomic_numbers=atomic_numbers,
+        correlation=correlation,
+        gate=torch.nn.functional.silu,
+        heads=heads,
+    )
+
+    # load weights (best effort, shapes match original MACE layout)
+    mace_model.radial_embedding.bessel_fn.load_state_dict(
+        repr_model.embeddings.radial_basis.basis.state_dict(), strict=False
+    )
+    mace_model.radial_embedding.cutoff_fn.load_state_dict(
+        repr_model.embeddings.radial_basis.cutoff_fn.state_dict(), strict=False
+    )
+    mace_model.node_embedding.linear.load_state_dict(
+        repr_model.embeddings.chemical_embedding.linear.state_dict(), strict=False
+    )
+    for i in range(len(repr_model.interactions)):
+        mace_model.interactions[i].load_state_dict(repr_model.interactions[i].state_dict(), strict=False)
+        mace_model.products[i].load_state_dict(repr_model.products[i].state_dict(), strict=False)
+        if i < len(mace_model.readouts) - 1 and hasattr(mace_model.readouts[i], "linear"):
+            mace_model.readouts[i].linear.load_state_dict(repr_model.readout_mlp[i].state_dict(), strict=False)
+        elif i < len(mace_model.readouts):
+            mace_model.readouts[i].load_state_dict(repr_model.readout_mlp[i].state_dict(), strict=False)
+    return mace_model
+
+
+def convert_curator_to_mace(curator_path: Union[str, Path], output_path: Union[str, Path], device: Optional[torch.device] = None) -> Path:
+    """Convert a saved Curator MACE model back to a mace.modules.models.ScaleShiftMACE checkpoint."""
+    curator_path = Path(curator_path)
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = load_model(curator_path, device=device, load_compiled=False, load_weights_only=False)
+    mace_model = _build_mace_from_curator(model)
+    output_path = Path(output_path)
+    torch.save(mace_model, output_path)
+    return output_path
 
 def dummy_load(*args, **kwargs):
     original_torch_jit_load = torch.jit.load

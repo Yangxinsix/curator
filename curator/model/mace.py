@@ -52,6 +52,7 @@ class MACE(nn.Module):
         power: int = 6,
         gate: Union[str, Callable] = 'silu',
         use_cueq: bool = False,
+        num_heads: int = 1,
         **kwargs,
     ) -> None:
         """MACE model.
@@ -73,6 +74,9 @@ class MACE(nn.Module):
             num_basis (int, optional): Number of radial basis. Defaults to 8.
             power (int, optional): Power of radial basis. Defaults to 6.
             gate (Union[str, Callable], optional): Activation function for gate. Defaults to 'silu'.
+            num_heads (int, optional): Number of readout heads. When >1, per-head atomic
+                energies are exposed at properties.atomic_energy_heads and averaged for
+                properties.atomic_energy.
         """
         super().__init__()
         
@@ -157,7 +161,9 @@ class MACE(nn.Module):
         
         self.interactions = torch.nn.ModuleList()
         self.products = torch.nn.ModuleList()
+        self.num_heads = max(1, int(num_heads))
         self.readout_mlp = torch.nn.ModuleList()
+        out_irreps = o3.Irreps(f"{self.num_heads}x0e") if self.num_heads > 1 else o3.Irreps("1x0e")
         gate_fn = activation_fn[gate] if isinstance(gate, str) else gate
         # interaction blocks
         # for last layer: only select scalar 0e
@@ -198,10 +204,17 @@ class MACE(nn.Module):
                     irreps_in=hidden_irreps_out, 
                     MLP_irreps=self.MLP_irreps,
                     gate=gate_fn,
+                    irreps_out=out_irreps,
                 )
             else:
-                readout = Linear(irreps_in=hidden_irreps_out, irreps_out=o3.Irreps('1x0e'))
+                readout = Linear(irreps_in=hidden_irreps_out, irreps_out=out_irreps)
             self.readout_mlp.append(readout)
+
+        self.model_outputs = (
+            [properties.atomic_energy_heads, properties.atomic_energy]
+            if self.num_heads > 1
+            else None
+        )
             
     def forward(self, data: properties.Type) -> properties.Type:
         # node_e0 = self.reference_energies[data[properties.Z]]
@@ -209,13 +222,11 @@ class MACE(nn.Module):
         for m in self.embeddings.values():
             data = m(data)
         
-        node_es_list = []
         node_feat = data[properties.node_feat]
         node_feat_list = []
-        
-        for interaction, product, readout in zip(
-            self.interactions, self.products, self.readout_mlp
-        ):
+        node_energy_layers = []
+
+        for interaction, product, readout in zip(self.interactions, self.products, self.readout_mlp):
             node_feat, sc = interaction(
                 node_feat, 
                 data[properties.node_attr],
@@ -229,11 +240,21 @@ class MACE(nn.Module):
                 node_attrs=data[properties.node_attr],
             )
             node_feat_list.append(node_feat)
-            node_es_list.append(readout(node_feat).squeeze())
+            node_es = readout(node_feat)
+            if self.num_heads == 1 and node_es.shape[-1] == 1:
+                node_es = node_es.squeeze(-1)
+            node_energy_layers.append(node_es)
         
-        node_feat_list = torch.cat(node_feat_list, dim=-1)
-        node_es = torch.sum(torch.stack(node_es_list, dim=0), dim=0)
-        data[properties.atomic_energy] = node_es
-        data[properties.node_feat] = node_feat_list
+        node_feat_concat = torch.cat(node_feat_list, dim=-1)
+
+        if self.num_heads == 1:
+            node_es = torch.sum(torch.stack(node_energy_layers, dim=0), dim=0)
+            data[properties.atomic_energy] = node_es
+        else:
+            head_energy = torch.stack(node_energy_layers, dim=0).sum(dim=0)  # [n_atoms, num_heads]
+            data[properties.atomic_energy_heads] = head_energy
+            data[properties.atomic_energy] = head_energy.mean(dim=-1)
+
+        data[properties.node_feat] = node_feat_concat
         
         return data
