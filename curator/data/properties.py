@@ -36,6 +36,7 @@ atomic_charge: Final[str] = "atomic_charge"
 dipole: Final[str] = "dipole"
 total_magmom: Final[str] = "total_magmom"
 atomic_energy: Final[str] = "atomic_energy"
+atomic_energy_heads: Final[str] = "atomic_energy_heads"
 
 # uncertainties
 e_var: Final[str] = "energy_var"      # energy variance
@@ -86,6 +87,7 @@ _DEFAULT_NODE_FIELDS: Set[str] = {
     atomic_numbers,
     atomic_types,
     atomic_energy,
+    atomic_energy_heads,
     forces,
     image_idx,
 }
