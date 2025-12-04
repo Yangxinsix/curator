@@ -124,7 +124,7 @@ class MahalanobisUncertainty:
             dist = float(dist)
 
         return {
-            "maha_dist": dist,
+            properties.maha_dist: dist,
             "is_outlier": dist > self.high_threshold,
             "is_warning": dist > self.low_threshold,
         }
