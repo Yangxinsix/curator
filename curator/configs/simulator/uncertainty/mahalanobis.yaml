@@ -2,3 +2,7 @@ _target_: curator.simulate.uncertainty.MahalanobisUncertainty
 high_threshold: 0.99
 low_threshold: 0.9
 dataset: null
+<<<<<<< ours
+=======
+kernel: local-full-g
+>>>>>>> theirs
