@@ -2,7 +2,6 @@ defaults:
   - _self_
   - representation: painn
   - /model/input_modules@input_modules.pairwise_distance: pairwise_distance
-  - /model/output_modules@output_modules.atomwise_reduce: atomwise_reduce
   - /model/output_modules@output_modules.gradient_output: gradient_output
   - /model/output_modules@output_modules.global_rescale_shift: global_rescale_shift
 _convert_: all

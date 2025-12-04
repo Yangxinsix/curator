@@ -14,7 +14,24 @@ This tutorial explains how to train machine learning potentials using CURATOR. C
 Training and evaluation are powered by the `PyTorch Lightning`_ framework, enabling the use of advanced deep learning features with minimal effort.
 
 Preparing Data
+.. _Hydra: https://hydra.cc/
+.. _PyTorch Lightning: https://lightning.ai/docs/pytorch/stable/
+
+Training Machine Learning Potentials
+====================================
+
+This tutorial explains how to train machine learning potentials using CURATOR. CURATOR uses `Hydra`_ for managing hyperparameters and configuration files, allowing you to leverage a wide range of Hydra features for flexible experimentation.
+
+Training and evaluation are powered by the `PyTorch Lightning`_ framework, enabling the use of advanced deep learning features with minimal effort.
+
+Preparing Data
 --------------
+
+Training equivariant neural network potentials is beginner-friendly with CURATOR. All hyperparameters are pre-defined except for the ``datapath``. Therefore, the only required input to train a model is the ab-initio dataset.
+
+CURATOR uses ASE's API to read atomistic structures, so any format supported by ASE_ is compatible. For example, you can use an **OUTCAR** file from a VASP_ calculation or an ASE-compatible ``.traj`` file.
+
+A minimal training task can be launched with:
 
 Training equivariant neural network potentials is beginner-friendly with CURATOR. All hyperparameters are pre-defined except for the ``datapath``. Therefore, the only required input to train a model is the ab-initio dataset.
 
@@ -35,11 +52,25 @@ This employs CURATOR's default settings, using the PaiNN_ model architecture. If
       curator-train model/representation=nequip
 
 - Or specify them in a separate YAML configuration file:
+This employs CURATOR's default settings, using the PaiNN_ model architecture. If you want to customize hyperparameters, you can either:
+
+- Use the command-line override:
 
   .. code-block:: bash
 
+      curator-train model/representation=nequip
+
+- Or specify them in a separate YAML configuration file:
+
+  .. code-block:: bash
+  .. code-block:: bash
+
+      curator-train cfg=user_cfg.yaml
       curator-train cfg=user_cfg.yaml
 
+You can define any parameters in the config file. For reference, the meanings of different parameters are documented under ``curator/configs/``. Once a job is run, a complete ``config.yaml`` file will be generated. This file contains the effective configuration and can be reused or modified for future tasks.
+
+All other CURATOR tasks (e.g., selection, evaluation) can be initiated in the same way.
 You can define any parameters in the config file. For reference, the meanings of different parameters are documented under ``curator/configs/``. Once a job is run, a complete ``config.yaml`` file will be generated. This file contains the effective configuration and can be reused or modified for future tasks.
 
 All other CURATOR tasks (e.g., selection, evaluation) can be initiated in the same way.
@@ -50,20 +81,33 @@ Using Hydra's Defaults List
 CURATOR supports multiple equivariant GNN architectures, including PaiNN_, NequIP_, and MACE_. Switching between them usually requires updating many hyperparameters, which can be cumbersome.
 
 Hydra's ``defaults`` list allows you to easily switch architectures by referencing a pre-defined configuration:
+Using Hydra's Defaults List
+---------------------------
+
+CURATOR supports multiple equivariant GNN architectures, including PaiNN_, NequIP_, and MACE_. Switching between them usually requires updating many hyperparameters, which can be cumbersome.
+
+Hydra's ``defaults`` list allows you to easily switch architectures by referencing a pre-defined configuration:
 
 .. code-block:: yaml
+
 
     defaults:
       - model/representation: mace
 
 Similarly, you can configure other components such as loss functions, loggers, and evaluation metrics. For example:
+Similarly, you can configure other components such as loss functions, loggers, and evaluation metrics. For example:
 
 .. code-block:: yaml
+
 
     defaults:
       - task/outputs: energy_force_virial
       - trainer/logger: wandb
 
+Instantiating Objects in Python
+-------------------------------
+
+You may wish to create models or datasets programmatically from a config file. CURATOR supports this via Hydra's ``instantiate`` function.
 Instantiating Objects in Python
 -------------------------------
 
@@ -76,10 +120,12 @@ You may wish to create models or datasets programmatically from a config file. C
     from curator.utils import read_user_config
 
     cfg = read_user_config("user_cfg.yaml", config_name="train.yaml")
+    cfg = read_user_config("user_cfg.yaml", config_name="train.yaml")
     model = instantiate(cfg.model)
     data = instantiate(cfg.data)
     data.setup()
 
+Hydra supports recursive instantiation and parameter overrides:
 Hydra supports recursive instantiation and parameter overrides:
 
 .. code-block:: python
@@ -135,6 +181,7 @@ To resume training from a specific checkpoint:
 .. 4. **Reference energy subtraction**: Subtracts fixed reference values.
 .. 5. **Force scaling**: Adjusts force magnitude for training stability.
 
+Multi-GPU Training
 Multi-GPU Training
 ------------------
 

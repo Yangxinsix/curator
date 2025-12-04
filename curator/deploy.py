@@ -29,6 +29,17 @@ def get_arguments(arg_list=None):
         type=str,
         help="Configuration file that defines model parameters",
     )
+    parser.add_argument(
+        "--lammps",
+        action="store_true",
+        help="Deploy model for LAMMPS MLIAP package",
+    )
+    parser.add_argument(
+        "--elements",
+        type=str,
+        nargs="+",
+        help="Elements that used for LAMMPS MLIAP model",
+    )
 
     return parser.parse_args(arg_list)
 
@@ -38,4 +49,6 @@ if __name__ == "__main__":
         model_path=args.model_path,
         target_path=args.target_path,
         load_weights_only=args.load_weights_only,
+        lammps_mliap=args.lammps,
+        element_types=args.elements,
     )

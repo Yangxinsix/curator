@@ -1,5 +1,5 @@
-from .painn import PainnModel
-from .nequip import NequipModel
+from .painn import Painn
+from .nequip import Nequip
 from .mace import MACE
 from .base import (
     NeuralNetworkPotential,
