@@ -82,8 +82,7 @@ class NeuralNetworkPotential(nn.Module):
             if hasattr(module, 'update_callback'):
                 module.update_callback = self.collect_outputs
             if hasattr(module, 'repr_callback'):
-                module.repr_callback = self
-                module.register_repr_callback()        # activate repr callback for feature extractor and calculator
+                module.register_repr_callback(self)        # activate repr callback for feature extractor and calculator
             if hasattr(module, "model_outputs") and module.model_outputs is not None:
                 for model_output in module.model_outputs:
                     if model_output not in self.model_outputs:

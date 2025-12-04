@@ -64,8 +64,10 @@ class FeatureExtractor(nn.Module):
                 self.hooks.append(child.register_backward_hook(self.save_grads_hook))
 
     def forward(self, data: properties.Type, predict: bool=False) -> properties.Type:
-        if predict:
-            data = self.repr_callback(data)
+        # repr_callback may modify the original data in place, so we need to make a copy of the data
+        new_data = data.copy()
+        if predict: # in predict mode, modify the data in place
+            new_data = self.repr_callback(new_data)
         data[properties.feature] = self._features
         data[properties.gradient] = self._grads[::-1]
         self._reset()
@@ -180,17 +182,33 @@ class FeatureCalculator(nn.Module):
             if self.compute_maha_dist:
                 assert self.dataset is not None or hasattr(self, 'precision'), "Mahalanobis distance can not be calculated without precision matrix or provided reference dataset."
                 self.get_covariance_matrix(precision, feature_mean, dataset)
+            self._sync_device_with_repr()
 
     def _initialize_feature_components(self, repr_callback: Optional[nn.Module] = None):
         repr_callback = repr_callback or self.repr_callback
         self.feature_extractor = FeatureExtractor(repr_callback, target_layer=self.target_layer)
         self.random_projections = RandomProjections(repr_callback, self.n_random_features, target_layer=self.target_layer)
     
-    def register_repr_callback(self, repr_callback: Optional[nn.Module] = None):
+    def register_repr_callback(self, repr_callback: nn.Module):
+        if self.repr_callback is repr_callback and hasattr(self, "feature_extractor"):
+            self._sync_device_with_repr()
+            return
+
+        self.repr_callback = repr_callback
         self._initialize_feature_components(repr_callback)
+        self._sync_device_with_repr()
         if self.compute_maha_dist:
             assert self.dataset is not None or hasattr(self, 'precision'), "Mahalanobis distance can not be calculated without precision matrix or provided reference dataset."
             self.get_covariance_matrix()
+
+    def _sync_device_with_repr(self):
+        if self.repr_callback is None:
+            return
+        device = next(self.repr_callback.parameters()).device
+        self.to(device)
+        for name, buf in self.named_buffers(recurse=False):
+            if buf.device != device:
+                setattr(self, name, buf.to(device))
 
     def forward(self, data: properties.Type, predict: bool=False) -> properties.Type:
         data = self._compute_feature(data, predict=predict)
@@ -206,8 +224,9 @@ class FeatureCalculator(nn.Module):
         ):
         if precision is not None and feature_mean is not None:
             logger.info('Loading precision matrix and feature mean from provided values.')
-            self.register_buffer('precision', precision)
-            self.register_buffer('feature_mean', feature_mean)
+            device = next(self.repr_callback.parameters()).device if self.repr_callback is not None else torch.device('cpu')
+            self.register_buffer('precision', precision.to(device))
+            self.register_buffer('feature_mean', feature_mean.to(device))
             return
             
         if dataset is None:
@@ -261,9 +280,6 @@ class FeatureCalculator(nn.Module):
                 batch_img_idx = torch.arange(i * n_images, i * n_images + n_images, dtype=torch.long)
                 image_idx.append(batch_img_idx)
 
-            if hasattr(self.repr_callback, 'model_outputs'):
-                self.repr_callback.model_outputs.remove('all')
-
         # calculate inverse covariance matrix
         features = torch.cat(features)
         image_idx = torch.cat(image_idx)
@@ -279,12 +295,13 @@ class FeatureCalculator(nn.Module):
         maha_dist = torch.sqrt(torch.einsum("ij,jk,ik->i", features, precision, features))
         maha_dist = scatter_mean(maha_dist, image_idx, dim=0)
 
-        self.register_buffer('feature_mean', mean)
-        self.register_buffer('feature_std', std)
-        self.register_buffer('cov_matrix', cov_matrix)
-        self.register_buffer('precision', precision)
-        self.register_buffer('maha_dist', maha_dist)
-    
+        device = next(self.repr_callback.parameters()).device if self.repr_callback is not None else torch.device('cpu')
+        self.register_buffer('feature_mean', mean.to(device))
+        self.register_buffer('feature_std', std.to(device))
+        self.register_buffer('cov_matrix', cov_matrix.to(device))
+        self.register_buffer('precision', precision.to(device))
+        self.register_buffer('maha_dist', maha_dist.to(device))
+
     def mahalanobis_distance(self, data: properties.Type) -> properties.Type:
         if properties.feature in data:
             feats = (data[properties.feature] - self.feature_mean) / self.feature_std
@@ -295,15 +312,15 @@ class FeatureCalculator(nn.Module):
         return data
 
     def _compute_feature(self, data: properties.Type, predict: bool=False) -> properties.Type:
-        data = self.feature_extractor(data, predict=predict)
+        data = self.feature_extractor(data, predict=predict)       # this will modify the data in place if in predict mode
         feats, grads = data[properties.feature], data[properties.gradient]
         in_feat_projs = [getattr(self.random_projections, name) for name in self.random_projections.in_feat_proj_buffers]
         out_grad_projs = [getattr(self.random_projections, name) for name in self.random_projections.out_grad_proj_buffers]
 
-        if 'local' not in self.kernel:
-            if self.kernel == 'full-gradient':
+        if 'local' in self.kernel:
+            if self.kernel == 'local-full-g':
                 atomic_feat = torch.zeros(
-                    data[properties.image_idx].shape[0], 
+                    data[properties.n_atoms].sum().item(),
                     self.n_random_features, 
                     dtype=data[properties.edge_diff].dtype,
                     device=data[properties.edge_diff].device,
@@ -315,22 +332,22 @@ class FeatureCalculator(nn.Module):
                     out_grad_projs,
                 ):
                     atomic_feat += (feat @ in_proj) * (grad @ out_proj)
-            elif self.kernel == 'll-gradient':
+            elif self.kernel == 'local-ll-g':
                 if self.n_random_features != 0:
                     atomic_feat = (feats[-1] @ in_feat_projs[-1]) * (grads[-1] @ out_grad_projs[-1])
                 else:
                     atomic_feat = feats[-1][:, :-1]    # remove bias
-            elif self.kernel == 'gnn':
+            elif self.kernel == 'local-gnn':
                 if self.n_random_features != 0:
                     atomic_feat = (feats[0] @ in_feat_projs[0]) * (grads[0] @ out_grad_projs[0])
                 else:
                     atomic_feat = feats[0][:, :-1]    # remove bias
 
-            atoms_feat = scatter_add(atomic_feat, data[properties.image_idx], 0)
+            atoms_feat = atomic_feat
         else:
-            if self.kernel == 'local-full-g':
+            if self.kernel == 'full-gradient':
                 atoms_feat = torch.zeros(
-                    data[properties.image_idx].shape[0], 
+                    data[properties.n_atoms].shape[0], 
                     self.n_random_features, 
                     dtype=data[properties.positions].dtype,
                     device=data[properties.positions].device,
@@ -341,13 +358,14 @@ class FeatureCalculator(nn.Module):
                     in_feat_projs,
                     out_grad_projs,
                 ):
+                    print(feat.shape, grad.shape, in_proj.shape, out_proj.shape)
                     atoms_feat += (feat @ in_proj) * (grad @ out_proj)
-            elif self.kernel == 'local-ll-g':
+            elif self.kernel == 'll-gradient':
                 if self.n_random_features != 0:
                     atoms_feat = (feats[-1] @ in_feat_projs[-1]) * (grads[-1] @ out_grad_projs[-1])
                 else:
                     atoms_feat = feats[-1][:, :-1]    # remove bias
-            elif self.kernel == 'local-gnn':
+            elif self.kernel == 'gnn':
                 if self.n_random_features != 0:
                     atoms_feat = (feats[0] @ in_feat_projs[0]) * (grads[0] @ out_grad_projs[0])
                 else:
