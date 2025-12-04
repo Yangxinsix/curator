@@ -259,7 +259,7 @@ class MatScipyNeighborList(NeighborListTransform):
     ) -> None:
         super().__init__(*args, **kwargs)
         if not ("matscipy" in sys.modules):
-            raise ModuleNotFoundError("This neighbor list implementation needs scipy module!")
+            raise ModuleNotFoundError("This neighbor list implementation needs matscipy module!")
         self.return_cell_displacements = return_cell_displacements
 
     def _build_neighbor_list(
@@ -307,6 +307,7 @@ class BatchNeighborList(nn.Module):
         super().__init__()
         self.requires_grad = requires_grad
         self.return_distance = return_distance
+        self.neighbor_list = neighbor_list
         if isinstance(neighbor_list, str):
             if neighbor_list == 'MatScipy':
                 self.neighbor_list = MatScipyNeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance)

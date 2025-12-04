@@ -1,5 +1,7 @@
 
 
+
+
 <!DOCTYPE html>
 <html class="writer-html5" lang="en" data-content_root="../">
 <head>
@@ -9,8 +11,16 @@
   <title>Training Machine Learning Potentials &mdash; Tutorial for CURATOR 1.0.0 documentation</title>
       <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
       <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
+  <title>Training Machine Learning Potentials &mdash; Tutorial for CURATOR 1.0.0 documentation</title>
+      <link rel="stylesheet" type="text/css" href="../_static/pygments.css?v=b86133f3" />
+      <link rel="stylesheet" type="text/css" href="../_static/css/theme.css?v=e59714d7" />
 
   
+      <script src="../_static/jquery.js?v=5d32c60e"></script>
+      <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
+      <script src="../_static/documentation_options.js?v=8d563738"></script>
+      <script src="../_static/doctools.js?v=9bcbadda"></script>
+      <script src="../_static/sphinx_highlight.js?v=dc90522c"></script>
       <script src="../_static/jquery.js?v=5d32c60e"></script>
       <script src="../_static/_sphinx_javascript_frameworks_compat.js?v=2cd50e6c"></script>
       <script src="../_static/documentation_options.js?v=8d563738"></script>
@@ -68,6 +78,7 @@
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="../interface/lammps.html">LAMMPS interface</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../interface/lammps_mliap.html">Using CURATOR with LAMMPS ML-IAP package</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../interface/lammps_mliap.html">Using CURATOR with LAMMPS ML-IAP package</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../interface/openmm.html">OpenMM interface</a></li>
 </ul>
 
@@ -86,6 +97,7 @@
   <ul class="wy-breadcrumbs">
       <li><a href="../index.html" class="icon icon-home" aria-label="Home"></a></li>
       <li class="breadcrumb-item active">Training Machine Learning Potentials</li>
+      <li class="breadcrumb-item active">Training Machine Learning Potentials</li>
       <li class="wy-breadcrumbs-aside">
             <a href="../_sources/tutorials/training.rst.txt" rel="nofollow"> View page source</a>
       </li>
@@ -99,7 +111,14 @@
 <h1>Training Machine Learning Potentials<a class="headerlink" href="#training-machine-learning-potentials" title="Link to this heading"></a></h1>
 <p>This tutorial explains how to train machine learning potentials using CURATOR. CURATOR uses <a class="reference external" href="https://hydra.cc/">Hydra</a> for managing hyperparameters and configuration files, allowing you to leverage a wide range of Hydra features for flexible experimentation.</p>
 <p>Training and evaluation are powered by the <a class="reference external" href="https://lightning.ai/docs/pytorch/stable/">PyTorch Lightning</a> framework, enabling the use of advanced deep learning features with minimal effort.</p>
+<h1>Training Machine Learning Potentials<a class="headerlink" href="#training-machine-learning-potentials" title="Link to this heading"></a></h1>
+<p>This tutorial explains how to train machine learning potentials using CURATOR. CURATOR uses <a class="reference external" href="https://hydra.cc/">Hydra</a> for managing hyperparameters and configuration files, allowing you to leverage a wide range of Hydra features for flexible experimentation.</p>
+<p>Training and evaluation are powered by the <a class="reference external" href="https://lightning.ai/docs/pytorch/stable/">PyTorch Lightning</a> framework, enabling the use of advanced deep learning features with minimal effort.</p>
 <section id="preparing-data">
+<h2>Preparing Data<a class="headerlink" href="#preparing-data" title="Link to this heading"></a></h2>
+<p>Training equivariant neural network potentials is beginner-friendly with CURATOR. All hyperparameters are pre-defined except for the <code class="docutils literal notranslate"><span class="pre">datapath</span></code>. Therefore, the only required input to train a model is the ab-initio dataset.</p>
+<p>CURATOR uses ASE’s API to read atomistic structures, so any format supported by <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/install.html">ASE</a> is compatible. For example, you can use an <strong>OUTCAR</strong> file from a <a class="reference external" href="https://www.vasp.at/">VASP</a> calculation or an ASE-compatible <code class="docutils literal notranslate"><span class="pre">.traj</span></code> file.</p>
+<p>A minimal training task can be launched with:</p>
 <h2>Preparing Data<a class="headerlink" href="#preparing-data" title="Link to this heading"></a></h2>
 <p>Training equivariant neural network potentials is beginner-friendly with CURATOR. All hyperparameters are pre-defined except for the <code class="docutils literal notranslate"><span class="pre">datapath</span></code>. Therefore, the only required input to train a model is the ab-initio dataset.</p>
 <p>CURATOR uses ASE’s API to read atomistic structures, so any format supported by <a class="reference external" href="https://wiki.fysik.dtu.dk/ase/install.html">ASE</a> is compatible. For example, you can use an <strong>OUTCAR</strong> file from a <a class="reference external" href="https://www.vasp.at/">VASP</a> calculation or an ASE-compatible <code class="docutils literal notranslate"><span class="pre">.traj</span></code> file.</p>
@@ -107,6 +126,14 @@
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curator-train<span class="w"> </span>data.datapath<span class="o">=</span>water.traj
 </pre></div>
 </div>
+<p>This employs CURATOR’s default settings, using the <a class="reference external" href="https://arxiv.org/abs/2102.03150">PaiNN</a> model architecture. If you want to customize hyperparameters, you can either:</p>
+<ul>
+<li><p>Use the command-line override:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curator-train<span class="w"> </span>model/representation<span class="o">=</span>nequip
+</pre></div>
+</div>
+</li>
+<li><p>Or specify them in a separate YAML configuration file:</p>
 <p>This employs CURATOR’s default settings, using the <a class="reference external" href="https://arxiv.org/abs/2102.03150">PaiNN</a> model architecture. If you want to customize hyperparameters, you can either:</p>
 <ul>
 <li><p>Use the command-line override:</p>

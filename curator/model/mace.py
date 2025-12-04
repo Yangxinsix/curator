@@ -4,9 +4,12 @@ from e3nn import o3
 from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
 
+from functools import partial
 from curator.layer import (
     OneHotAtomEncoding,
     AtomwiseLinear,
+    AtomwiseNN,
+    MACEAtomwiseNN,
     AtomwiseNonLinear,
     RadialBasisEdgeEncoding,
     BesselBasis,
@@ -16,7 +19,7 @@ from curator.layer import (
     RealAgnosticInteractionBlock,
     EquivariantProductBasisBlock,
 )
-from curator.layer._cuequivariance_wrapper import Linear, set_use_cueq
+from curator.layer._cuequivariance_wrapper import set_use_cueq
 from curator.data import properties
 from typing import List, Optional, Dict, Union, Callable, Type
 
@@ -51,6 +54,7 @@ class MACE(nn.Module):
         num_basis: int = 8,
         power: int = 6,
         gate: Union[str, Callable] = 'silu',
+        readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
         **kwargs,
     ) -> None:
@@ -78,10 +82,10 @@ class MACE(nn.Module):
         
         self.cutoff = cutoff
         self.parity = parity
-        if use_cueq:
-            set_use_cueq(True)
-        else:
-            set_use_cueq(False)
+        self.species = species
+
+        # use cuequivariance globally
+        set_use_cueq(use_cueq)
 
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions
@@ -157,8 +161,6 @@ class MACE(nn.Module):
         
         self.interactions = torch.nn.ModuleList()
         self.products = torch.nn.ModuleList()
-        self.readout_mlp = torch.nn.ModuleList()
-        gate_fn = activation_fn[gate] if isinstance(gate, str) else gate
         # interaction blocks
         # for last layer: only select scalar 0e
         # for first layer: 
@@ -192,29 +194,30 @@ class MACE(nn.Module):
                 use_sc="Residual" in str(interaction_cls_first) if i == 0 else True,
             )
             self.products.append(prod)
-            
-            if i == num_interactions - 1:
-                readout = AtomwiseNonLinear(
-                    irreps_in=hidden_irreps_out, 
-                    MLP_irreps=self.MLP_irreps,
-                    gate=gate_fn,
-                )
+
+            # Setup readout function
+            if isinstance(readout, AtomwiseNN):
+                self.readout = readout
             else:
-                readout = Linear(irreps_in=hidden_irreps_out, irreps_out=o3.Irreps('1x0e'))
-            self.readout_mlp.append(readout)
+                self.readout = readout(num_interactions=num_interactions, hidden_irreps=self.hidden_irreps)
             
     def forward(self, data: properties.Type) -> properties.Type:
-        # node_e0 = self.reference_energies[data[properties.Z]]
-        # e0 = scatter_add(node_e0, data[properties.image_idx])
+        # add mask for local interaction part
+        edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
+        mask = edge_dist < self.cutoff
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
+
+        
         for m in self.embeddings.values():
             data = m(data)
         
-        node_es_list = []
+        data[properties.node_embedding] = data[properties.node_feat]        # store node embedding for some modules (charge equilibration)
+        
         node_feat = data[properties.node_feat]
         node_feat_list = []
         
-        for interaction, product, readout in zip(
-            self.interactions, self.products, self.readout_mlp
+        for interaction, product in zip(
+            self.interactions, self.products
         ):
             node_feat, sc = interaction(
                 node_feat, 
@@ -229,11 +232,14 @@ class MACE(nn.Module):
                 node_attrs=data[properties.node_attr],
             )
             node_feat_list.append(node_feat)
-            node_es_list.append(readout(node_feat).squeeze())
         
         node_feat_list = torch.cat(node_feat_list, dim=-1)
-        node_es = torch.sum(torch.stack(node_es_list, dim=0), dim=0)
-        data[properties.atomic_energy] = node_es
         data[properties.node_feat] = node_feat_list
+
+        # get properties
+        data = self.readout(data)
+
+        # restore neighbor list
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx, edge_diff, edge_dist
         
         return data

@@ -8,18 +8,20 @@ from curator.data import properties
 from curator.layer import (
     OneHotAtomEncoding,
     AtomwiseLinear,
+    AtomwiseNN,
     RadialBasisEdgeEncoding,
     BesselBasis,
     PolynomialCutoff,
     SphericalHarmonicEdgeAttrs,
     InteractionLayer,
 )
-from curator.layer._cuequivariance_wrapper import Linear, set_use_cueq
+from curator.layer._cuequivariance_wrapper import set_use_cueq
 
-from typing import OrderedDict, Dict, List, Optional, Union, Callable
+from typing import OrderedDict, Dict, List, Optional, Union, Callable, Type
+from functools import partial
 
 from e3nn.util.jit import compile_mode
-class NequipModel(torch.nn.Module):
+class Nequip(torch.nn.Module):
     """Nequip model."""
     def __init__(
         self,
@@ -30,7 +32,6 @@ class NequipModel(torch.nn.Module):
         hidden_irreps: Union[o3.Irreps, str, None] = None,
         edge_sh_irreps: Union[o3.Irreps, str, None] = None,
         node_irreps: Union[o3.Irreps, str, None] = None,
-        MLP_irreps: Union[o3.Irreps, str, None] = None,
         lmax: int = 2,
         parity: bool = True,
         num_features: Optional[int] = None,
@@ -42,6 +43,7 @@ class NequipModel(torch.nn.Module):
         nonlinearity_scalars: Dict[int, Callable] = {"e": "ssp", "o": "tanh"},
         nonlinearity_gates: Dict[int, Callable] = {"e": "ssp", "o": "abs"},
         convolution_kwargs: dict = {},
+        readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
         use_cueq: bool = False,
         **kwargs,
     ) -> None:
@@ -72,10 +74,9 @@ class NequipModel(torch.nn.Module):
         self.num_features = num_features
         self.lmax = lmax
         self.parity = parity
-        if use_cueq:
-            set_use_cueq(True)
-        else:
-            set_use_cueq(False)
+        self.species = species
+        
+        set_use_cueq(use_cueq)
         
         if num_elements is None:
             num_elements = len(species) if species is not None else 119
@@ -108,13 +109,6 @@ class NequipModel(torch.nn.Module):
             self.hidden_irreps = o3.Irreps(hidden_irreps)
         else:
             self.hidden_irreps = hidden_irreps
-        # MLP_irreps
-        if MLP_irreps is None:
-            self.MLP_irreps = o3.Irreps([(max(1, num_features // 2), (0, 1))])
-        elif isinstance(MLP_irreps, str):
-            self.MLP_irreps = o3.Irreps(MLP_irreps)
-        else:
-            self.MLP_irreps = MLP_irreps
         
         self.embeddings = nn.ModuleDict()
         self.embeddings['onehot_embedding'] = OneHotAtomEncoding(num_elements=num_elements, species=species)
@@ -136,6 +130,12 @@ class NequipModel(torch.nn.Module):
         )
         self.irreps_in[properties.node_feat] = self.embeddings.chemical_embedding.irreps_out
         
+        # only for extracting configs
+        self.nonlinearity_type = nonlinearity_type
+        self.nonlinearity_scalars = nonlinearity_scalars
+        self.nonlinearity_gates = nonlinearity_gates
+        self.convolution_kwargs=convolution_kwargs
+
         self.interactions = nn.ModuleList()
         for _ in range(num_interactions):
             interaction = InteractionLayer(
@@ -150,23 +150,37 @@ class NequipModel(torch.nn.Module):
             self.interactions.append(interaction)
             self.irreps_in.update(interaction.irreps_out)
         
-        self.readout_mlp = nn.Sequential(
-            Linear(
-                irreps_in=self.irreps_in[properties.node_feat],
-                irreps_out=self.MLP_irreps,
-            ),
-            Linear(
-                irreps_in=self.MLP_irreps, 
-                irreps_out=o3.Irreps('1x0e'),
-            ),
-        )
+        # Setup readout function
+        if isinstance(readout, AtomwiseNN):
+            self.readout = readout
+        else:
+            self.readout = readout(self.irreps_in[properties.node_feat], use_e3nn=True)
         
-    def forward(self, data: properties.Type) -> properties.Type:        
+    def forward(self, data: properties.Type) -> properties.Type:
+        # add mask for local interaction part
+        edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
+        mask = edge_dist < self.cutoff
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
+
         for m in self.embeddings.values():
             data = m(data)
-            
-        for m in self.interactions:
-            data = m(data)
         
-        data[properties.atomic_energy] = self.readout_mlp(data[properties.node_feat]).squeeze()
+        data[properties.node_embedding] = data[properties.node_feat]        # store node embedding for some modules (charge equilibration)
+        
+        node_feat = data[properties.node_feat]
+        for interaction in self.interactions:
+            node_feat = interaction(
+                node_feat,
+                data[properties.node_attr],
+                data[properties.edge_idx], 
+                data[properties.edge_dist_embedding],
+                data[properties.edge_diff_embedding],
+            )
+        
+        data[properties.node_feat] = node_feat
+        data = self.readout(data)
+
+        # restore neighbor list
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx, edge_diff, edge_dist
+        
         return data

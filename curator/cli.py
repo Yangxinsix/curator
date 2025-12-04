@@ -312,6 +312,8 @@ def deploy(
         load_weights_only: bool=False,
         cfg_path: Optional[str] = None,
         return_model: bool = False,
+        lammps_mliap: bool = False,
+        element_types: Optional[List[str]] = None,
     ):
     """ Deploy the model and save a compiled model.
 
@@ -321,6 +323,7 @@ def deploy(
         None
     
     """
+    import torch
     from e3nn.util.jit import script
     from curator.model import EnsembleModel
     from curator.layer.utils import find_layer_by_name_recursive
@@ -342,6 +345,22 @@ def deploy(
         model = EnsembleModel(models)
     else:
         model = models[0]
+
+    if lammps_mliap:
+        from curator.simulate.lammps_mliap_interface import LAMMPS_MLIAP
+        lmp_model = LAMMPS_MLIAP(model, element_types)
+        if target_path == 'compiled_model.pt':
+            target_path = 'lmp_model.pt'
+        torch.save(lmp_model, target_path)
+        return lmp_model
+
+    if lammps_mliap:
+        from curator.simulate.lammps_mliap_interface import LAMMPS_MLIAP
+        lmp_model = LAMMPS_MLIAP(model, element_types)
+        if target_path == 'compiled_model.pt':
+            target_path = 'lmp_model.pt'
+        torch.save(lmp_model, target_path)
+        return lmp_model
 
     # Compile the model
     model_compiled = script(model)

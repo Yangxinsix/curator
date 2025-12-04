@@ -1,18 +1,20 @@
 import torch
 from torch import nn
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Type, Union, Any
+from functools import partial
 
 from curator.data import (
     properties,
 )
 from curator.layer import (
     PainnMessage, 
-    PainnUpdate, 
+    PainnUpdate,
+    AtomwiseNN,
 )
 
 
-class PainnModel(nn.Module):
-    """PainnModel without edge updating"""
+class Painn(nn.Module):
+    """Painn without edge updating"""
     def __init__(
         self, 
         num_interactions: int, 
@@ -21,9 +23,10 @@ class PainnModel(nn.Module):
         num_basis: int = 20,
         cutoff_fn: Optional[nn.Module]=None,
         radial_basis: Optional[nn.Module]=None,
+        readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
         **kwargs,
     ):
-        """PainnModel without edge updating
+        """Painn without edge updating
 
         Args:
             num_interactions (int): Number of interaction blocks
@@ -59,29 +62,49 @@ class PainnModel(nn.Module):
         )
         
         # Setup readout function
-        self.readout_mlp = nn.Sequential(
-            nn.Linear(self.num_features, self.num_features),
-            nn.SiLU(),
-            nn.Linear(self.num_features, 1),
-        )
+        if isinstance(readout, AtomwiseNN):
+            self.readout = readout
+        else:
+            self.readout = readout(num_features)
 
     def forward(
         self, 
         data: properties.Type,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
     ) -> properties.Type:
-        total_atoms = int(torch.sum(data[properties.n_atoms]))
-        data[properties.node_feat] = self.atom_embedding(data[properties.Z])
-        data[properties.node_vect] = torch.zeros(
-            (total_atoms, 3, self.num_features),
-            device=data[properties.edge_diff].device,
-            dtype=data[properties.edge_diff].dtype,
+        # add mask for local interaction part
+        edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
+        mask = edge_dist < self.cutoff
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
+
+        node_scalar = self.atom_embedding(data[properties.Z])
+        total_atoms = node_scalar.shape[0]
+        node_vector = torch.zeros(
+            (total_atoms, self.num_features * 3),
+            device=edge_diff.device,
+            dtype=edge_diff.dtype,
         )
+        node_feat = torch.cat([node_scalar, node_vector], dim=-1)
+        data[properties.node_embedding] = node_scalar        # store node embedding for some modules (charge equilibration)
         
         for message_layer, update_layer in zip(self.message_layers, self.update_layers):
-            data = message_layer(data)
-            data = update_layer(data)
+            node_feat = message_layer(
+                node_feat,
+                edge_idx,
+                edge_dist,
+                edge_diff,
+                lammps_data=lammps_data,
+                n_local=n_local,
+                n_ghost=n_ghost,
+            )
+            node_feat = update_layer(node_feat)
         
-        # it can be any atomic properties like atomic charge although it is called atomic energy
-        data[properties.atomic_energy] = self.readout_mlp(data[properties.node_feat]).squeeze()
-        
+        data[properties.node_feat] = node_feat[:, :self.num_features]
+        data = self.readout(data)
+
+        # restore neighbor list
+        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx, edge_diff, edge_dist
+
         return data
