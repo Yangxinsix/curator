@@ -12,21 +12,23 @@ from typing import Any, List, Optional, Tuple, Union
 import numpy as np
 import torch.serialization as torch_serialization
 
+# convert mace and curator models
+from curator.layer import GlobalRescaleShift, Strain, AtomwiseReduce, PairwiseDistance, GradientOutput, RealAgnosticInteractionBlock, RealAgnosticResidualInteractionBlock
+from curator.model import NeuralNetworkPotential, MACE
+from ase.data import chemical_symbols
+import torch
+
 def register_resolvers():
     OmegaConf.register_new_resolver("multiply", lambda x, y: x * y, replace=True)
     OmegaConf.register_new_resolver("divide", lambda x, y: x / y, replace=True)
     OmegaConf.register_new_resolver("multiply_fs", lambda x: x * units.fs, replace=True)
     OmegaConf.register_new_resolver("divide_by_fs", lambda x: x / units.fs, replace=True)
 
-from curator.layer import GlobalRescaleShift, Strain, AtomwiseReduce, PairwiseDistance, GradientOutput, RealAgnosticInteractionBlock, RealAgnosticResidualInteractionBlock
-from curator.model import NeuralNetworkPotential, MACE
-from ase.data import chemical_symbols
-import torch
-
-def create_model_from_mace(mace_model, foundation=False):
+def create_model_from_mace(mace_model):
     input_modules = [Strain(), PairwiseDistance(compute_distance_from_R=True)]
     num_heads = len(getattr(mace_model, "heads", ["Default"])) if hasattr(mace_model, "heads") else 1
-    atomic_energies = torch.atleast_2d(mace_model.atomic_energies_fn.atomic_energies).mean(dim=-1)
+    interaction_cls_first = globals()[mace_model.interactions[0].__class__.__name__]
+    interaction_cls = globals()[mace_model.interactions[-1].__class__.__name__]
     curator_mace = MACE(
         cutoff=float(mace_model.r_max),
         num_interactions=len(mace_model.interactions),
@@ -38,8 +40,8 @@ def create_model_from_mace(mace_model, foundation=False):
         MLP_irreps=mace_model.readouts[-1].hidden_irreps,
         num_basis=len(mace_model.radial_embedding.bessel_fn.bessel_weights),
         power=float(mace_model.radial_embedding.cutoff_fn.p),
-        interaction_cls=RealAgnosticResidualInteractionBlock,
-        interaction_cls_first=RealAgnosticInteractionBlock if not foundation else RealAgnosticResidualInteractionBlock,
+        interaction_cls=interaction_cls,
+        interaction_cls_first=interaction_cls_first,
         num_heads=num_heads,
     )
 
@@ -50,7 +52,7 @@ def create_model_from_mace(mace_model, foundation=False):
             shift_by=float(mace_model.scale_shift.shift),
             atomic_energies={
                 int(idx): float(e)
-                for idx, e in zip(mace_model.atomic_numbers, atomic_energies.squeeze())
+                for idx, e in zip(mace_model.atomic_numbers, mace_model.atomic_energies_fn.atomic_energies.squeeze())
             },
         ),
         GradientOutput(model_outputs=['energy', 'forces'], grad_on_edge_diff=False, grad_on_positions=True),
