@@ -16,7 +16,7 @@ from ._painn_message import PainnMessage
 from ._painn_update import PainnUpdate
 from ._pairwise_distance import PairwiseDistance, get_pair_distance
 from ._symmetric_contraction import Contraction, SymmetricContraction
-from ._rescale import GlobalScaleShift, PerSpeciesScaleShift
+from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift
 from ._strain import Strain
 from ._feature import FeatureExtractor, FeatureCalculator, RandomProjections
 from .cutoff import CosineCutoff, PolynomialCutoff
@@ -70,8 +70,8 @@ __all__ = [
     PairwiseDistance,         # input modules (preprocess, calculate pairwise distances)
     Strain,                   # input modules (preprocess, add strain on cell and atom positions)
     GradientOutput,           # output modules (output forces and stress)
-    GlobalScaleShift,            # output modules (postprocess energy)
-    PerSpeciesScaleShift,
+    GlobalRescaleShift,            # output modules (postprocess energy)
+    PerSpeciesRescaleShift,
     FeatureExtractor,
     FeatureCalculator, 
     RandomProjections,
