@@ -9,7 +9,7 @@ except ImportError:
 from ase.data import atomic_numbers, chemical_symbols
 
 # TODO: add __repr__ for modules
-class GlobalScaleShift(torch.nn.Module):
+class GlobalRescaleShift(torch.nn.Module):
     def __init__(
         self,
         scale_by: Union[float,Dict[str, float],Dict[int, float],None] = None,                            # standard deviation used to rescale output
@@ -148,7 +148,7 @@ class GlobalScaleShift(torch.nn.Module):
         )
             
             
-class PerSpeciesScaleShift(torch.nn.Module):
+class PerSpeciesRescaleShift(torch.nn.Module):
     def __init__(
         self,
         scales: Union[Dict[str, float], Dict[int, float], None] = None,                            # standard deviation used to rescale output

@@ -8,7 +8,7 @@ from collections import abc
 import logging
 from ase import units
 from pathlib import Path, PosixPath
-from typing import Any, List, Optional, Tuple, Union
+from typing import Any, List, Optional, Tuple, Union, Dict
 import numpy as np
 import re
 

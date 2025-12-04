@@ -8,6 +8,6 @@ model:
       - forces
       - virial
       - stress
-  - _target_: curator.layer.GlobalScaleShift
+  - _target_: curator.layer.GlobalRescaleShift
 task:
   virial_weight: 1
