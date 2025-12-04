@@ -1,123 +1,14 @@
 from __future__ import annotations
 
-"""Uncertainty calculation helpers."""
+"""Mahalanobis-distance-based uncertainty estimator."""
 
-from abc import ABC, abstractmethod
-from typing import Dict, Optional, Sequence, Union
+from typing import Dict, Optional, Union
 
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 
 from curator.data import properties
-
-
-class BaseUncertainty(ABC):
-    """Base class for uncertainty estimators.
-
-    Subclasses should populate :attr:`uncertainty_keys` with the metrics they
-    compute, optionally attach a calculator, and define thresholds for warning
-    and outlier detection. The :meth:`__call__` output always includes the
-    uncertainty values along with ``is_warning`` and ``is_outlier`` flags.
-    """
-
-    def __init__(
-        self,
-        uncertainty_keys: Sequence[str],
-        calculator: Optional[Calculator] = None,
-        low_threshold: Optional[float] = None,
-        high_threshold: Optional[float] = None,
-        threshold_key: Optional[str] = None,
-    ) -> None:
-        self.uncertainty_keys = tuple(uncertainty_keys)
-        self.calc = calculator
-        self.low_threshold = low_threshold
-        self.high_threshold = high_threshold
-        self.threshold_key = threshold_key or (self.uncertainty_keys[0] if self.uncertainty_keys else None)
-
-    @abstractmethod
-    def __call__(self, atoms: Atoms) -> Dict[str, Union[float, bool]]:
-        """Compute uncertainty values for ``atoms``."""
-
-    def _format_output(self, values: Dict[str, float]) -> Dict[str, Union[float, bool, None]]:
-        """Return a result dictionary including warning and outlier flags."""
-
-        result: Dict[str, Union[float, bool, None]] = {key: values.get(key) for key in self.uncertainty_keys}
-
-        warn = False
-        outlier = False
-        if self.threshold_key and result.get(self.threshold_key) is not None:
-            value = float(result[self.threshold_key])
-            warn = self.low_threshold is not None and value > self.low_threshold
-            outlier = self.high_threshold is not None and value > self.high_threshold
-            if outlier and not warn:
-                warn = True
-
-        result["is_warning"] = warn
-        result["is_outlier"] = outlier
-        return result
-
-
-class EnsembleUncertainty(BaseUncertainty):
-    def __init__(
-        self,
-        uncertainty_keys: Sequence[str] = (properties.f_sd, properties.f_var),
-        calculator: Optional[Calculator] = None,
-        low_threshold: Optional[float] = None,
-        high_threshold: Optional[float] = None,
-    ) -> None:
-        super().__init__(
-            uncertainty_keys=uncertainty_keys,
-            calculator=calculator,
-            low_threshold=low_threshold,
-            high_threshold=high_threshold,
-        )
-
-    def __call__(self, atoms: Atoms) -> Dict[str, Union[float, bool, None]]:
-        values: Dict[str, float] = {}
-        if atoms.calc and all(key in atoms.calc.results for key in self.uncertainty_keys):
-            values = {key: float(atoms.calc.results[key]) for key in self.uncertainty_keys}
-        elif self.calc is not None:
-            self.calc.calculate(atoms)
-            values = {
-                key: float(self.calc.results[key])
-                for key in self.uncertainty_keys
-                if key in self.calc.results
-            }
-
-        return self._format_output(values)
-
-
-class MCDropoutUncertainty(BaseUncertainty):
-    def __init__(
-        self,
-        predictor,
-        n_samples: int = 20,
-        key: str = properties.f_sd,
-        calculator: Optional[Calculator] = None,
-        low_threshold: Optional[float] = None,
-        high_threshold: Optional[float] = None,
-    ) -> None:
-        self.predictor = predictor
-        self.n = int(n_samples)
-        uncertainty_keys = (key, properties.f_var)
-        super().__init__(
-            uncertainty_keys=uncertainty_keys,
-            calculator=calculator,
-            low_threshold=low_threshold,
-            high_threshold=high_threshold,
-            threshold_key=key,
-        )
-
-    def __call__(self, atoms: Atoms) -> Dict[str, Union[float, bool, None]]:
-        import numpy as np
-
-        samples = [self.predictor(atoms) for _ in range(self.n)]
-        arr = np.asarray(samples, dtype=float)
-        values = {
-            self.uncertainty_keys[0]: float(arr.std()),
-            self.uncertainty_keys[1]: float(arr.var()),
-        }
-        return self._format_output(values)
+from .base import BaseUncertainty
 
 
 class MahalanobisUncertainty(BaseUncertainty):
