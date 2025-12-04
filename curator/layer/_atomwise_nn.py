@@ -83,6 +83,8 @@ class AtomwiseNN(nn.Module):
         if isinstance(out_features, str):
             out_features = o3.Irreps(out_features)
 
+        self.in_features = in_features
+        self.out_features = out_features
         self.use_e3nn = use_e3nn
         self.n_hidden_layers = n_hidden_layers
 
