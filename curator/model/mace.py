@@ -3,11 +3,13 @@ from torch import nn
 from e3nn import o3
 from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
+from functools import partial
 
 from curator.layer import (
     OneHotAtomEncoding,
     AtomwiseLinear,
-    AtomwiseNonLinear,
+    AtomwiseNN,
+    MACEAtomwiseNN,
     RadialBasisEdgeEncoding,
     BesselBasis,
     PolynomialCutoff,
@@ -51,8 +53,8 @@ class MACE(nn.Module):
         num_basis: int = 8,
         power: int = 6,
         gate: Union[str, Callable] = 'silu',
+        readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
-        num_heads: int = 1,
         **kwargs,
     ) -> None:
         """MACE model.
@@ -199,22 +201,11 @@ class MACE(nn.Module):
             )
             self.products.append(prod)
             
-            if i == num_interactions - 1:
-                readout = AtomwiseNonLinear(
-                    irreps_in=hidden_irreps_out, 
-                    MLP_irreps=self.MLP_irreps,
-                    gate=gate_fn,
-                    irreps_out=out_irreps,
-                )
-            else:
-                readout = Linear(irreps_in=hidden_irreps_out, irreps_out=out_irreps)
-            self.readout_mlp.append(readout)
-
-        self.model_outputs = (
-            [properties.atomic_energy_heads, properties.atomic_energy]
-            if self.num_heads > 1
-            else None
-        )
+        # Setup readout function
+        if isinstance(readout, AtomwiseNN):
+            self.readout = readout
+        else:
+            self.readout = readout(num_interactions=num_interactions, hidden_irreps=self.hidden_irreps)
             
     def forward(self, data: properties.Type) -> properties.Type:
         # node_e0 = self.reference_energies[data[properties.Z]]
@@ -224,7 +215,6 @@ class MACE(nn.Module):
         
         node_feat = data[properties.node_feat]
         node_feat_list = []
-        node_energy_layers = []
 
         for interaction, product, readout in zip(self.interactions, self.products, self.readout_mlp):
             node_feat, sc = interaction(

@@ -16,6 +16,7 @@ from ._symmetric_contraction import Contraction, SymmetricContraction
 from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift
 from ._strain import Strain
 from ._feature import FeatureExtractor, FeatureCalculator, RandomProjections
+from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN
 from .cutoff import CosineCutoff, PolynomialCutoff
 from .nonlinearities import ShiftedSoftPlus
 from .radial_basis import (
@@ -68,4 +69,7 @@ __all__ = [
     FeatureExtractor,
     FeatureCalculator, 
     RandomProjections,
+    MACEAtomwiseNN,
+    AtomwiseNN,
+    Dense,
 ]
