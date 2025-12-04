@@ -1,5 +1,4 @@
 defaults:
   - _self_
-  - /model/output_modules@output_modules.atomwise_reduce: atomwise_reduce
   - /model/output_modules@output_modules.gradient_output: gradient_output
   - /model/output_modules@output_modules.global_rescale_shift: global_rescale_shift
