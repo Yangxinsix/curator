@@ -70,14 +70,7 @@ class ThermoWithUncertainty(MDThermoLogger):
             include_keys = getattr(self._unc_backend, "uncertainty_keys", ()) or ()
         self._include = tuple(include_keys) or ((self.monitor,) if self.monitor else ())
 
-        for k in self._include:
-            if k not in self.variables:
-                self.variables.append(k)
-
-        # Register getters for each included uncertainty key
-        for k in self._include:
-            if k not in self.variable_funcs:
-                self.variable_funcs[k] = (lambda kk: (lambda ctx: self._get_unc_value(ctx, kk)))(k)
+        self._ensure_uncertainty_columns()
 
         # Optional trajectory writer
         self._traj: Optional[Trajectory] = None
@@ -88,6 +81,8 @@ class ThermoWithUncertainty(MDThermoLogger):
         if self.save_path:
             self._traj = Trajectory(self.save_path, "w")
         self._low_hits_total = 0
+        # Re-assert uncertainty columns in case the backend or monitor was swapped post-init
+        self._ensure_uncertainty_columns()
         return super().on_sim_start(ctx)
 
     def on_step(self, ctx: SimContext):
@@ -129,6 +124,13 @@ class ThermoWithUncertainty(MDThermoLogger):
             return float(data.get(key, float("nan")))
         except Exception:
             return float("nan")
+
+    def _ensure_uncertainty_columns(self):
+        for k in self._include:
+            if k not in self.variables:
+                self.variables.append(k)
+            if k not in self.variable_funcs:
+                self.variable_funcs[k] = (lambda kk: (lambda ctx: self._get_unc_value(ctx, kk)))(k)
 
     def _apply_band_and_stop(self, ctx: SimContext):
         data = ctx.state.get("uncertainty") or {}

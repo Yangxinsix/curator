@@ -55,8 +55,13 @@ class FeatureExtractor(nn.Module):
     def add_hooks(self):
         layer = find_layer_by_name_recursive(self.repr_callback, self.target_layer)
         assert layer is not None, f"Target layer {self.target_layer} is not found!"
+<<<<<<< ours
         # Avoid direct imports; use class name string comparison instead for efficiency
         if self.repr_callback.__class__.__name__ == 'MACE':
+=======
+        from curator.model import MACE
+        if isinstance(self.repr_callback.representation, MACE):
+>>>>>>> theirs
             layer = layer[-1]
         for child in layer.children():
             if isinstance(child, self._linear_types):
@@ -241,8 +246,9 @@ class FeatureCalculator(nn.Module):
         if hasattr(self.repr_callback, 'model_outputs'):
             self.repr_callback.model_outputs.append('all')
         features = []
-        image_idx = []
+        image_idx = [] if 'local' in self.kernel else None
         device = next(self.repr_callback.parameters()).device
+<<<<<<< ours
         from curator.data import collate_atomsdata
         from torch.utils.data import DataLoader
 
@@ -279,10 +285,36 @@ class FeatureCalculator(nn.Module):
                 n_images = batch[properties.n_atoms].shape[0] if torch.is_tensor(batch[properties.n_atoms]) else len(batch[properties.n_atoms])
                 batch_img_idx = torch.arange(i * n_images, i * n_images + n_images, dtype=torch.long)
                 image_idx.append(batch_img_idx)
+=======
+        iterator = dataset
+        if self.max_dataset_size is not None:
+            iterator = itertools.islice(dataset, self.max_dataset_size)
+
+        offset = 0
+        for sample in iterator:
+            sample = {k: v.to(device) for k, v in sample.items()}
+            feat = self._compute_feature(sample, predict=True)[properties.feature].to('cpu')
+            features.append(feat)   # use cpu to save memory
+
+            if image_idx is not None:
+                image_idx.append(
+                    torch.full(
+                        (sample[properties.n_atoms],),
+                        fill_value=offset,
+                        dtype=torch.long,
+                    )
+                )
+
+            offset += feat.shape[0]
+
+        if hasattr(self.repr_callback, 'model_outputs'):
+            self.repr_callback.model_outputs.remove('all')
+>>>>>>> theirs
 
         # calculate inverse covariance matrix
         features = torch.cat(features)
-        image_idx = torch.cat(image_idx)
+        if image_idx is not None:
+            image_idx = torch.cat(image_idx)
         # normalization for numerical stability
         mean = features.mean(dim=0)
         std = features.std(dim=0)
@@ -293,7 +325,8 @@ class FeatureCalculator(nn.Module):
 
         # calculate 95th percentile for uncertainty threshold
         maha_dist = torch.sqrt(torch.einsum("ij,jk,ik->i", features, precision, features))
-        maha_dist = scatter_mean(maha_dist, image_idx, dim=0)
+        if image_idx is not None:
+            maha_dist = scatter_mean(maha_dist, image_idx, dim=0)
 
         device = next(self.repr_callback.parameters()).device if self.repr_callback is not None else torch.device('cpu')
         self.register_buffer('feature_mean', mean.to(device))
