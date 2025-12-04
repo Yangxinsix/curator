@@ -28,6 +28,7 @@ cell_displacements: Final[str] = "_cell_displacements"     # cell displacements 
 # chemical properties
 energy: Final[str] = "energy"
 forces: Final[str] = "forces"
+edge_forces: Final[str] = "edge_forces"
 strain: Final[str] = "strain"
 stress: Final[str] = "stress"
 virial: Final[str] = "virial"
@@ -36,6 +37,10 @@ atomic_charge: Final[str] = "atomic_charge"
 dipole: Final[str] = "dipole"
 total_magmom: Final[str] = "total_magmom"
 atomic_energy: Final[str] = "atomic_energy"
+fermi_level: Final[str] = "fermi_level"
+ewald_energy: Final[str] = "ewald_energy"
+ewald_forces: Final[str] = "ewald_forces"
+residual_forces: Final[str] = "residual_forces"     # residual forces from chi and hardness, this is meaningless
 
 # uncertainties
 e_var: Final[str] = "energy_var"      # energy variance
@@ -60,9 +65,10 @@ energy_uncertainty: Final[str] = "energy_uncertainty"
 forces_uncertainty: Final[str] = "forces_uncertainty"
 
 # node and edge feature keys (for nequip and mace)
-edge_diff_embedding: Final[str] = "_edge_diff_embedding"
-edge_dist_embedding: Final[str] = "_edge_dist_embedding"
-node_attr: Final[str] = "_node_attribute"
+edge_diff_embedding: Final[str] = "_edge_diff_embedding"        # this will not change during forward once generated
+edge_dist_embedding: Final[str] = "_edge_dist_embedding"        # this will not change during forward once generated
+node_embedding: Final[str] = "_node_embedding"                  # this is typically generated from node embedding block in the model, and will not change once generated
+node_attr: Final[str] = "_node_attribute"                       # this will not change during forward once generated
 node_feat: Final[str] = "_node_feature"
 node_vect: Final[str] = "_node_vector"
 sc: Final[str] = "_skip_connection"
@@ -126,3 +132,14 @@ _NODE_FIELDS: Set[str] = set(_DEFAULT_NODE_FIELDS)
 _EDGE_FIELDS: Set[str] = set(_DEFAULT_EDGE_FIELDS)
 _GRAPH_FIELDS: Set[str] = set(_DEFAULT_GRAPH_FIELDS)
 _INDEX_FIELDS: Set[str] = set(_DEFAULT_INDEX_FIELDS)
+
+# activation functions
+activation_fn = {
+    "silu": torch.nn.SiLU(),
+    'identity': torch.nn.Identity(),
+    "tanh": torch.tanh,
+    "abs": torch.abs,
+    "None": None,
+}
+
+# output modules

@@ -6,6 +6,7 @@ import multiprocessing
 import torch
 from curator.data import properties, NeighborListTransform, Asap3NeighborList
 from ase.data import chemical_symbols, atomic_numbers
+from ase import units
 
 '''
 This is a class to store large amounts of ab initio reference data
@@ -54,12 +55,12 @@ class QMDatabase:
         cell = None if data[4] is None else self._deblob(data[4], dtype=np.float32, shape=(3, 3))
         energy = np.array([data[5]], dtype=np.float32) if data[5] is not None else None
         forces = self._deblob(data[6], dtype=np.float32, shape=(n_atoms, 3)) if data[6] is not None else None
-        total_charge = np.array([data[7]], dtype=np.float32) if data[7] is not None else None
-        atomic_charge = None if data[8] is None else self._deblob(data[8], dtype=np.float32, shape=(n_atoms,))
-        total_magmom = np.array([data[9]], dtype=np.float32) if data[9] is not None else None
-        dipole = None if data[10] is None else self._deblob(data[10], dtype=np.float32, shape=(1, 3))
-        virial = None if data[11] is None else self._deblob(data[11], dtype=np.float32, shape=(1, 6))
-        stress = None if data[12] is None else self._deblob(data[12], dtype=np.float32, shape=(1, 6))
+        virial = None if data[7] is None else self._deblob(data[7], dtype=np.float32, shape=(1, 6))
+        stress = None if data[8] is None else self._deblob(data[8], dtype=np.float32, shape=(1, 6))
+        total_charge = np.array([data[9]], dtype=np.float32) if data[9] is not None else None
+        atomic_charge = None if data[10] is None else self._deblob(data[10], dtype=np.float32, shape=(n_atoms,))
+        total_magmom = np.array([data[11]], dtype=np.float32) if data[11] is not None else None
+        dipole = None if data[12] is None else self._deblob(data[12], dtype=np.float32, shape=(1, 3))
 
         # must have properties
         atoms_data = {
@@ -240,7 +241,7 @@ class QMDatabase:
     #         for atomic_number, atomic_ch, pos, force in zip(atomic_numbers, atomic_charge, positions, forces):
     #             file.write('{0} {1: 11.6f} {2: 11.6f} {3: 11.6f} {4: 11.6f} {5: 11.6f} {6: 11.6f} {7: 11.6f}\n'.format(chemical_symbols[atomic_number], atomic_ch, *pos, *force))
 
-class AseDatabase(QMDatabase, torch.utils.data.Dataset):
+class Sqlite3Dataset(QMDatabase, torch.utils.data.Dataset):
     def __init__(
             self,
             filename, 
@@ -261,12 +262,12 @@ class AseDatabase(QMDatabase, torch.utils.data.Dataset):
         
     def __getitem__(self, idx):
         cursor = self._get_connection(flags=apsw.SQLITE_OPEN_READONLY).cursor()
-        data = cursor.execute('''SELECT * FROM data WHERE id='''+str(idx)).fetchone()
+        data = cursor.execute('''SELECT * FROM data WHERE id='''+str(int(idx))).fetchone()
         atoms_data = self._unpack_data_tuple(data)
+        atoms_data = self.dict_to_torch_tensors(atoms_data)
         # transform
         for t in self.transforms:
             atoms_data = t(atoms_data)
-        atoms_data = self.dict_to_torch_tensors(atoms_data)
         return atoms_data
     
     @staticmethod
@@ -287,6 +288,8 @@ class AseDatabase(QMDatabase, torch.utils.data.Dataset):
                     tensor_dict[key] = torch.tensor(value, dtype=torch.long)
                 elif np.issubdtype(value.dtype, np.floating):  # Check if it's a float array
                     tensor_dict[key] = torch.tensor(value, dtype=default_dtype)
+                elif np.issubdtype(value.dtype, bool):
+                    tensor_dict[key] = torch.tensor(value, dtype=torch.bool)
                 else:
                     raise ValueError(f"Unsupported data type for key '{key}': {value.dtype}")
             else:
@@ -298,46 +301,46 @@ def write_runner_to_db(path_to_input, db_path):
     flags = apsw.SQLITE_OPEN_READWRITE | apsw.SQLITE_OPEN_CREATE
     db = QMDatabase(db_path, flags=flags)
     for line in open(path_to_input):
-        PBC = 0
-        C = None
         if line.startswith('begin'):
+            PBC = 0
+            C = None
             R, Z, Q_a, F = [], [], [], []
-        if line.startswith('atom'):
+        elif line.startswith('atom'):
             l = line.strip().split()
             R.append(np.array([l[1], l[2], l[3]], dtype=float))
             Z.append(atomic_numbers[l[4]])
             Q_a.append(float(l[5]))
             F.append(np.array([l[-3], l[-2], l[-1]], dtype=float))
-        if line.startswith('energy'):
+        elif line.startswith('energy'):
             E = float(line.strip().split()[1])
-        if line.startswith('charge'):
+        elif line.startswith('charge'):
             Q = float(line.strip().split()[1])
-        if line.startswith('lattice'):
+        elif line.startswith('lattice'):
             PBC = 1
             l = line.strip().split()
             if C == None:
                 C = [np.array([l[1], l[2], l[3]], dtype=float)]
             else:
                 C.append(np.array([l[1], l[2], l[3]], dtype=float))
-        if line.startswith('end'):
+        elif line.startswith('end'):
             R = np.asarray(R)
             Z = np.asarray(Z)
             Q_a = np.asarray(Q_a)
             F = np.asarray(F)
-            D = np.sum(R * Q, axis=0)
+            D = np.sum(R * Q_a[:, None], axis=0)
             if C != None:
                 C = np.asarray(C)
 
             atoms_data = {
                 properties.atomic_numbers: Z,
                 properties.pbc: PBC,
-                properties.positions: R,
-                properties.cell: C,
-                properties.energy: E,
-                properties.forces: F,
+                properties.positions: R * units.Bohr / units.Angstrom,
+                properties.cell: C * units.Bohr / units.Angstrom,
+                properties.energy: E * units.Hartree / units.eV,
+                properties.forces: F * (units.Hartree / units.Bohr) / (units.eV / units.Angstrom),
                 properties.total_charge: Q,
                 properties.atomic_charge: Q_a,
-                properties.dipole: D,
+                properties.dipole: D * units.Bohr / units.Angstrom,
             }
 
             db.add_data(atoms_data)

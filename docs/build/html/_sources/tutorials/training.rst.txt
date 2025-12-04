@@ -108,7 +108,7 @@ You can also customize checkpointing behavior in the configuration file, for exa
 
 To resume training from a specific checkpoint:
 
-.. code-block:: bash
+- Use the command-line override:
 
     curator-train model_path=model_path/best_model_epoch=10.ckpt
 

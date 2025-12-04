@@ -178,7 +178,7 @@ def train(
 
     # access rescale layers
     rescale_layers = []
-    for layer in model.output_modules:
+    for layer in model.output_modules.values():
         if hasattr(layer, "unscale"):
             rescale_layers.append(layer)
 
