@@ -38,20 +38,20 @@ class NeuralNetworkPotential(nn.Module):
 
         self.representation = representation
         self.model_outputs = model_outputs
-        self.input_modules = CallbackModuleDict(input_modules, on_register_callback=None)
-        self.output_modules = CallbackModuleDict(output_modules, on_register_callback=self.register_callbacks)
+        self.input_modules = CallbackModuleList(input_modules, on_register_callback=None)
+        self.output_modules = CallbackModuleList(output_modules, on_register_callback=self.register_callbacks)
         self._initialized: bool = False
         self.collect_outputs()
         self.register_callbacks()
         
     def forward(self, data: properties.Type) -> properties.Type:
         data = data.copy()
-        for m in self.input_modules.values():
+        for m in self.input_modules:
             data = m(data)
             
         data = self.representation(data)
         
-        for m in self.output_modules.values():
+        for m in self.output_modules:
             data = m(data)
         
         return self.extract_outputs(data)
@@ -89,7 +89,7 @@ class NeuralNetworkPotential(nn.Module):
                         self.model_outputs.append(model_output)
                         
         if target_module is None:
-            for module in self.output_modules.values():
+            for module in self.output_modules:
                 register_module(module)
         elif isinstance(target_module, list):
             for module in target_module:
@@ -123,80 +123,6 @@ class CallbackModuleList(nn.ModuleList):
         if self.on_register_callback is not None:
             self.on_register_callback(module)
         super().__setitem__(idx, module)
-
-class CallbackModuleDict(nn.ModuleDict):
-    """
-    A ModuleDict variant that:
-      1) When you append/extend/insert, auto-keys by the module’s class name
-         converted to snake_case.
-      2) When you assign via dict[key] = module, uses the provided key.
-      3) Optionally invokes a callback on each registration.
-      4) Supports append, extend, and insert like a ModuleList.
-    """
-    def __init__(self,
-                 modules: list[nn.Module] = None,
-                 on_register_callback=None):
-        super().__init__()
-        # callback signature: fn(module, key_name)
-        self.on_register_callback = on_register_callback
-        if modules:
-            for m in modules:
-                self._register_by_class(m)
-
-    @staticmethod
-    def _camel_to_snake(name: str) -> str:
-        """
-        Convert a CamelCase string to snake_case.
-        E.g. "MyAwesomeModule" -> "my_awesome_module"
-        """
-        s1 = re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', name)
-        return s1.lower()
-    
-    def _register_by_class(self, module: nn.Module):
-        """
-        Register a module under its class-based snake_case key.
-        """
-        key = self._camel_to_snake(module.__class__.__name__)
-        if self.on_register_callback is not None:
-            self.on_register_callback(module)
-        super().__setitem__(key, module)
-
-    def __setitem__(self, key: str, module: nn.Module):
-        """
-        If the user does dict[key] = module, register under the explicit key.
-        """
-        if self.on_register_callback is not None:
-            self.on_register_callback(module)
-        super().__setitem__(key, module)
-
-    def append(self, module: nn.Module):
-        """
-        Append a single module (class-based naming).
-        """
-        self._register_by_class(module)
-
-    def extend(self, modules: list[nn.Module]):
-        """
-        Append multiple modules (class-based naming).
-        """
-        for m in modules:
-            self._register_by_class(m)
-
-    def insert(self, index: int, module: nn.Module):
-        """
-        Insert a module at a specific position (class-based naming).
-        Since dicts preserve insertion order, rebuild to insert at index.
-        """
-        key = self._camel_to_snake(module.__class__.__name__)
-        if self.on_register_callback is not None:
-            self.on_register_callback(module)
-
-        items = list(self.items())
-        items.insert(index, (key, module))
-
-        super().clear()
-        for k, m in items:
-            super().__setitem__(k, m)
 
 # ligtning model
 class LitNNP(pl.LightningModule):
@@ -244,7 +170,7 @@ class LitNNP(pl.LightningModule):
             # if not self.model._initialized:  # need to initialize modules everytime to update scales and atomic energies
             self.model.initialize_modules(self.trainer.datamodule)
             self.rescale_layers = []
-            for layer in self.model.output_modules.values():
+            for layer in self.model.output_modules:
                 if hasattr(layer, "unscale"):
                     self.rescale_layers.append(layer)
         logger.info(self.model)
