@@ -3,7 +3,6 @@ from __future__ import annotations
 import logging
 from typing import Any, List, Optional, Sequence
 
-<<<<<<< ours
 from ase import Atoms
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
 from hydra.utils import instantiate
@@ -16,17 +15,6 @@ from .core.simulator import Simulator
 from .core.context import load_atoms_or_traj
 from .engines.ase_md import MDEngine
 from .engines.neb import NEBEngine
-=======
-from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
-from hydra.utils import instantiate
-from omegaconf import DictConfig
-
-from curator.data import properties
-from .callbacks import CalculatorAssign, ThermoWithUncertainty, TrajectoryWriter
-from .core.simulator import Simulator
-from .core.context import load_atoms_or_traj
-from .engines.ase_md import MDEngine
->>>>>>> theirs
 from .uncertainty import MahalanobisUncertainty
 
 
@@ -144,8 +132,6 @@ class MDSimulator:
         sim = Simulator(atoms, engine, callbacks=callbacks, start_index=None, logger=self._logger)
         sim.run(steps=self.max_steps)
 
-<<<<<<< ours
-
 class NEBSimulator:
     """Hydra-friendly wrapper to run ASE NEB optimizations."""
 
@@ -236,5 +222,3 @@ class NEBSimulator:
         sim = Simulator(images[0], engine, callbacks=callbacks, start_index=None, logger=self._logger)
         sim.run(fmax=self.fmax, steps=self.max_steps)
 
-=======
->>>>>>> theirs

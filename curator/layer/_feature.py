@@ -243,7 +243,6 @@ class FeatureCalculator(nn.Module):
         features = []
         image_idx = [] if 'local' in self.kernel else None
         device = next(self.repr_callback.parameters()).device
-<<<<<<< ours
         from curator.data import collate_atomsdata
         from torch.utils.data import DataLoader
 
@@ -280,31 +279,6 @@ class FeatureCalculator(nn.Module):
                 n_images = batch[properties.n_atoms].shape[0] if torch.is_tensor(batch[properties.n_atoms]) else len(batch[properties.n_atoms])
                 batch_img_idx = torch.arange(i * n_images, i * n_images + n_images, dtype=torch.long)
                 image_idx.append(batch_img_idx)
-=======
-        iterator = dataset
-        if self.max_dataset_size is not None:
-            iterator = itertools.islice(dataset, self.max_dataset_size)
-
-        offset = 0
-        for sample in iterator:
-            sample = {k: v.to(device) for k, v in sample.items()}
-            feat = self._compute_feature(sample, predict=True)[properties.feature].to('cpu')
-            features.append(feat)   # use cpu to save memory
-
-            if image_idx is not None:
-                image_idx.append(
-                    torch.full(
-                        (sample[properties.n_atoms],),
-                        fill_value=offset,
-                        dtype=torch.long,
-                    )
-                )
-
-            offset += feat.shape[0]
-
-        if hasattr(self.repr_callback, 'model_outputs'):
-            self.repr_callback.model_outputs.remove('all')
->>>>>>> theirs
 
         # calculate inverse covariance matrix
         features = torch.cat(features)

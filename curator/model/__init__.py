@@ -6,3 +6,5 @@ from .base import (
     LitNNP,
 )
 from .ensemble import EnsembleModel
+
+from . import compat

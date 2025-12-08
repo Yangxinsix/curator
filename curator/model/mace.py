@@ -58,7 +58,6 @@ class MACE(nn.Module):
         power: int = 6,
         gate: Union[str, Callable] = 'silu',
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
-        readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
         **kwargs,
     ) -> None:
