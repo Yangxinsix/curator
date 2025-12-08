@@ -1,13 +1,16 @@
 from .core.calculator import MLCalculator, EnsembleCalculator
-from .core.uncertainty import EnsembleUncertainty
-# from .logger import MDLogger
-# from .simulator import MDSimulator
+from .logger import MDLogger
+from .simulator import MDSimulator
+from .uncertainty import BaseUncertainty, EnsembleUncertainty, MahalanobisUncertainty, MCDropoutUncertainty
 from .lammps_mliap_interface import *
 
 __all__ = [
     MLCalculator,
     EnsembleCalculator,
+    BaseUncertainty,
     EnsembleUncertainty,
-    # MDLogger,
-    # MDSimulator,
+    MahalanobisUncertainty,
+    MCDropoutUncertainty,
+    MDLogger,
+    MDSimulator,
 ]

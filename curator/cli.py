@@ -445,7 +445,7 @@ def simulate(config: DictConfig):
     calc = MLCalculator(model)
 
     # Setup simulator
-    simulator = instantiate(config.simulator)
+    simulator = instantiate(config.simulator, calculator=calc)
 
     simulator.run()
     

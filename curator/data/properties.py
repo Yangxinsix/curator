@@ -92,6 +92,7 @@ _DEFAULT_NODE_FIELDS: Set[str] = {
     atomic_numbers,
     atomic_types,
     atomic_energy,
+    atomic_energy_heads,
     forces,
     image_idx,
 }
