@@ -55,13 +55,8 @@ class FeatureExtractor(nn.Module):
     def add_hooks(self):
         layer = find_layer_by_name_recursive(self.repr_callback, self.target_layer)
         assert layer is not None, f"Target layer {self.target_layer} is not found!"
-<<<<<<< ours
         # Avoid direct imports; use class name string comparison instead for efficiency
         if self.repr_callback.__class__.__name__ == 'MACE':
-=======
-        from curator.model import MACE
-        if isinstance(self.repr_callback.representation, MACE):
->>>>>>> theirs
             layer = layer[-1]
         for child in layer.children():
             if isinstance(child, self._linear_types):

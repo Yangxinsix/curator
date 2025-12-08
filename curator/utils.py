@@ -12,9 +12,6 @@ from typing import Any, List, Optional, Tuple, Union
 import numpy as np
 import torch.serialization as torch_serialization
 
-# convert mace and curator models
-from curator.layer import GlobalRescaleShift, Strain, AtomwiseReduce, PairwiseDistance, GradientOutput, RealAgnosticInteractionBlock, RealAgnosticResidualInteractionBlock
-from curator.model import NeuralNetworkPotential, MACE
 from ase.data import chemical_symbols
 import torch
 
@@ -25,10 +22,17 @@ def register_resolvers():
     OmegaConf.register_new_resolver("divide_by_fs", lambda x: x / units.fs, replace=True)
 
 def create_model_from_mace(mace_model):
+    from curator.layer import GlobalRescaleShift, Strain, AtomwiseReduce, PairwiseDistance, GradientOutput, RealAgnosticInteractionBlock, RealAgnosticResidualInteractionBlock
+    from curator.model import NeuralNetworkPotential, MACE
+    interaction_map = {
+        'RealAgnosticInteractionBlock': RealAgnosticInteractionBlock,
+        'RealAgnosticResidualInteractionBlock': RealAgnosticResidualInteractionBlock,
+    }
+
     input_modules = [Strain(), PairwiseDistance(compute_distance_from_R=True)]
     num_heads = len(getattr(mace_model, "heads", ["Default"])) if hasattr(mace_model, "heads") else 1
-    interaction_cls_first = globals()[mace_model.interactions[0].__class__.__name__]
-    interaction_cls = globals()[mace_model.interactions[-1].__class__.__name__]
+    interaction_cls_first = interaction_map.get(mace_model.interactions[0].__class__.__name__, RealAgnosticInteractionBlock)
+    interaction_cls = interaction_map.get(mace_model.interactions[0].__class__.__name__, RealAgnosticResidualInteractionBlock)
     curator_mace = MACE(
         cutoff=float(mace_model.r_max),
         num_interactions=len(mace_model.interactions),
@@ -98,7 +102,9 @@ def convert_mace_to_curator(mace_path: Union[str, Path], output_path: Union[str,
     return output_path
 
 
-def _build_mace_from_curator(curator_model: Union[torch.nn.Module, NeuralNetworkPotential]):
+def _build_mace_from_curator(curator_model):
+    from curator.layer import GlobalRescaleShift
+    from curator.model import NeuralNetworkPotential, MACE
     """Best-effort recreation of a mace.modules.models.ScaleShiftMACE from a Curator MACE model."""
     from mace.modules import models as mace_models
     from mace.modules import blocks as mace_blocks
