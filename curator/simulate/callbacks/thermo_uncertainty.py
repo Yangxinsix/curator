@@ -62,19 +62,15 @@ class ThermoWithUncertainty(MDThermoLogger):
         self.high = float(high)
         self.save_path = save_path
         self.uncertain_count = uncertain_count
+        self._logged_uncertainty = False
 
         # Ensure the uncertainty keys appear as columns
+        include_keys: Sequence[str] = ()
         if self._unc_backend is not None:
-            self._include = self._unc_backend.uncertainty_keys
+            include_keys = getattr(self._unc_backend, "uncertainty_keys", ()) or ()
+        self._include = tuple(include_keys) or ((self.monitor,) if self.monitor else ())
 
-        for k in self._include:
-            if k not in self.variables:
-                self.variables.append(k)
-
-        # Register getters for each included uncertainty key
-        for k in self._include:
-            if k not in self.variable_funcs:
-                self.variable_funcs[k] = (lambda kk: (lambda ctx: self._get_unc_value(ctx, kk)))(k)
+        self._ensure_uncertainty_columns()
 
         # Optional trajectory writer
         self._traj: Optional[Trajectory] = None
@@ -85,6 +81,8 @@ class ThermoWithUncertainty(MDThermoLogger):
         if self.save_path:
             self._traj = Trajectory(self.save_path, "w")
         self._low_hits_total = 0
+        # Re-assert uncertainty columns in case the backend or monitor was swapped post-init
+        self._ensure_uncertainty_columns()
         return super().on_sim_start(ctx)
 
     def on_step(self, ctx: SimContext):
@@ -94,13 +92,21 @@ class ThermoWithUncertainty(MDThermoLogger):
 
         # Compute uncertainties (if backend is provided)
         if self._unc_backend is not None:
+            if not self._logged_uncertainty:
+                self.log.info(f"uncertainty backend state: {self._unc_backend}")
             try:
                 ctx.state["uncertainty"] = self._unc_backend(ctx.atoms) or {}
-            except Exception:
+            except Exception as exc:
+                if self.log is not None:
+                    self.log.exception(f"Uncertainty backend failed at step {ctx.step}: {exc}")
                 ctx.state["uncertainty"] = {}
 
         # Apply band actions using the chosen monitor
         self._apply_band_and_stop(ctx)
+
+        if not self._logged_uncertainty:
+            self.log.info(f"uncertainty snapshot: {ctx.state.get('uncertainty')}")
+            self._logged_uncertainty = True
 
         # Print the thermo line (now includes all uncertainty columns)
         return super().on_step(ctx)
@@ -118,6 +124,13 @@ class ThermoWithUncertainty(MDThermoLogger):
             return float(data.get(key, float("nan")))
         except Exception:
             return float("nan")
+
+    def _ensure_uncertainty_columns(self):
+        for k in self._include:
+            if k not in self.variables:
+                self.variables.append(k)
+            if k not in self.variable_funcs:
+                self.variable_funcs[k] = (lambda kk: (lambda ctx: self._get_unc_value(ctx, kk)))(k)
 
     def _apply_band_and_stop(self, ctx: SimContext):
         data = ctx.state.get("uncertainty") or {}

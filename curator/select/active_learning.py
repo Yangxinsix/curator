@@ -6,13 +6,13 @@ from curator.data import collate_atomsdata
 from .select import *
 from .kernel import *
 from curator.data import properties
+from curator.layer.utils import find_layer_by_name_recursive
 try:
     from torch_scatter import scatter_add, scatter_mean, scatter_max
 except ImportError:
     from curator.utils import scatter_add, scatter_mean, scatter_max
-from e3nn import o3
-from curator.layer.utils import find_layer_by_name_recursive
 import logging
+from curator.layer._feature import FeatureExtractor, RandomProjections
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +214,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._project_all_layers(feats, grads, random_projection, image_idx)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=True)
 
@@ -226,7 +227,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._project_all_layers(feats, grads, random_projection, image_idx)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=False)
 
@@ -238,7 +240,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._layer_features(feats[-1], grads[-1], random_projection, -1)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=True)
 
@@ -250,7 +253,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._layer_features(feats[-1], grads[-1], random_projection, -1)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=False)
 
@@ -262,7 +266,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._layer_features(feats[0], grads[0], random_projection, 0)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=True)
 
@@ -274,7 +279,8 @@ class FeatureStatistics:
         to_cpu: bool,
     ) -> torch.Tensor:
         image_idx = model_inputs[properties.image_idx]
-        feats, grads = feature_extractor(model_inputs)
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
         atomic_g = self._layer_features(feats[0], grads[0], random_projection, 0)
         return self._aggregate_atomic_features(atomic_g, image_idx, to_cpu, reduce_to_structure=False)
 

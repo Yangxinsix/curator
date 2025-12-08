@@ -3,11 +3,14 @@ from torch import nn
 from e3nn import o3
 from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
+from functools import partial
 
 from functools import partial
 from curator.layer import (
     OneHotAtomEncoding,
     AtomwiseLinear,
+    AtomwiseNN,
+    MACEAtomwiseNN,
     AtomwiseNN,
     MACEAtomwiseNN,
     AtomwiseNonLinear,
@@ -55,6 +58,7 @@ class MACE(nn.Module):
         power: int = 6,
         gate: Union[str, Callable] = 'silu',
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
+        readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
         **kwargs,
     ) -> None:
@@ -77,6 +81,9 @@ class MACE(nn.Module):
             num_basis (int, optional): Number of radial basis. Defaults to 8.
             power (int, optional): Power of radial basis. Defaults to 6.
             gate (Union[str, Callable], optional): Activation function for gate. Defaults to 'silu'.
+            num_heads (int, optional): Number of readout heads. When >1, per-head atomic
+                energies are exposed at properties.atomic_energy_heads and averaged for
+                properties.atomic_energy.
         """
         super().__init__()
         

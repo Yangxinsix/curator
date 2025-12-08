@@ -1,4 +1,9 @@
 _target_: curator.simulate.logger.MDLogger
-logger: null
-uncertainty: null
-min_calls: 1000
+variables: full_thermodynamics
+interval: ${simulator.print_step}
+header: true
+monitor: mahalanobis_distance
+low: 0.05
+high: 0.5
+save_path: ${run_path}/warning_struct.traj
+uncertain_count: null

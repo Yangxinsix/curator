@@ -27,6 +27,7 @@ class NEBEngine(BaseEngine):
         self.interpolator = interpolator
         self.neb_kwargs = neb_kwargs or {}
         self.opt_kwargs = opt_kwargs or {}
+        self.atoms = None
         self.neb = None
         self.opt = None
 
@@ -40,6 +41,8 @@ class NEBEngine(BaseEngine):
         self.neb = self.NEB(imgs, **self.neb_kwargs)
         self.opt = self.optimizer_cls(self.neb, **self.opt_kwargs)
         ctx.state["neb_images"] = imgs
+        if ctx.atoms is None:
+            ctx.atoms = imgs[0]
 
     def _attach_to_backend(self, fn, interval: int) -> None:
         if self.opt is not None:
