@@ -354,14 +354,6 @@ def deploy(
         torch.save(lmp_model, target_path)
         return lmp_model
 
-    if lammps_mliap:
-        from curator.simulate.lammps_mliap_interface import LAMMPS_MLIAP
-        lmp_model = LAMMPS_MLIAP(model, element_types)
-        if target_path == 'compiled_model.pt':
-            target_path = 'lmp_model.pt'
-        torch.save(lmp_model, target_path)
-        return lmp_model
-
     # Compile the model
     model_compiled = script(model)
     metadata = {"cutoff": str(find_layer_by_name_recursive(model_compiled, 'cutoff')).encode("ascii")}
