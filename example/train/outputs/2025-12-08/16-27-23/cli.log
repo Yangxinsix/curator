@@ -1,3 +1,0 @@
-[2025-12-08 16:27:23,207][curator][DEBUG] - Running on host: SKY-20190820VTG
-[2025-12-08 16:27:23,208][curator][DEBUG] - Seed with <3407>
-[2025-12-08 16:27:23,215][curator][DEBUG] - Instantiating datamodule <curator.data.AtomsDataModule> from dataset ../LiFePO4.traj
