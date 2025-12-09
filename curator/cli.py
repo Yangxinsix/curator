@@ -16,6 +16,8 @@ from .utils import (
     find_best_model,
     ensure_list,
     load_models,
+    upgrade_checkpoint,
+    convert_mace_to_curator,
 )
 import logging
 import socket
@@ -304,6 +306,67 @@ def deploy_main(argv: Optional[List[str]] = None):
         cfg_path=args.cfg_path,
         return_model=False,
     )
+
+def _convert_parse_args(argv: Optional[List[str]] = None):
+    parser = argparse.ArgumentParser(
+        description="Convert original MACE checkpoints to Curator format or upgrade Curator checkpoints",
+        fromfile_prefix_chars="+",
+    )
+    parser.add_argument(
+        "ckpt_path",
+        metavar="INPUT_FILE",
+        type=str,
+        help="Path to a MACE or Curator checkpoint to convert",
+    )
+    parser.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        help="Output path for the converted checkpoint (default: alongside input with _converted suffix)",
+    )
+    parser.add_argument(
+        "--device",
+        type=str,
+        default="cpu",
+        help="Device for loading the checkpoint; defaults to CPU so conversion works without GPUs",
+    )
+    parser.add_argument(
+        "-u",
+        "--update",
+        action="store_true",
+        help="Update an old CURATOR checkpoint by rebuilding the stored model.",
+    )
+
+    return parser.parse_args(argv)
+
+def convert_main(argv: Optional[List[str]] = None):
+    args = _convert_parse_args(argv)
+
+    device = args.device
+    target = None
+
+    if args.update:
+        target = upgrade_checkpoint(
+            ckpt_path=args.ckpt_path,
+            output_path=args.output,
+            device=device,
+        )
+    else:
+        import torch
+
+        ckpt_path = Path(args.ckpt_path)
+        output_path = args.output
+        if output_path is None:
+            output_path = ckpt_path.with_name(f"{ckpt_path.stem}_converted{ckpt_path.suffix}")
+        target = convert_mace_to_curator(
+            mace_path=ckpt_path,
+            output_path=output_path,
+            device=torch.device(device),
+        )
+
+    print(f"Converted checkpoint saved to {target}")
+
+    return target
 
 # Deploy the model and save a compiled model
 def deploy(
