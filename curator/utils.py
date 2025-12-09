@@ -101,7 +101,6 @@ def convert_mace_to_curator(mace_path: Union[str, Path], output_path: Union[str,
     torch.save(curator_model, output_path)
     return output_path
 
-
 def _build_mace_from_curator(curator_model):
     from curator.layer import GlobalRescaleShift
     from curator.model import NeuralNetworkPotential, MACE
@@ -846,6 +845,10 @@ def get_representation_config(model):
         except AttributeError:
             correlation = rep.products[0].symmetric_contractions.contraction_degree
 
+        try:
+            gate = rep.readout.readout_mlp[0].activation.acts[0].f
+        except:
+            gate = rep.readout_mlp[-1].non_linearity.acts[0].f
         rep_config = {
             "cutoff": rep.cutoff,
             "num_interactions": len(rep.interactions),
@@ -862,7 +865,7 @@ def get_representation_config(model):
             "avg_num_neighbors": float(rep.interactions[0].avg_num_neighbors),
             "num_basis": rep.embeddings.radial_basis.basis.num_basis,
             "power": rep.embeddings.radial_basis.cutoff_fn.p,
-            "gate": rep.readout.readout_mlp[0].activation.acts[0].f,
+            "gate": gate,
         }
     elif model.representation.__class__.__name__ == 'Nequip':
         species = list(rep.embeddings.onehot_embedding.type_mapper.symbol_to_type.keys())
@@ -1000,8 +1003,8 @@ def convert_e3nn_to_cueq(model):
     cueq_rep = model.representation.__class__(**rep_config)
 
     cueq_model = model.__class__(
-        input_modules=list(model.input_modules.values()),
-        output_modules=list(model.output_modules.values()),
+        input_modules=list(model.input_modules),
+        output_modules=list(model.output_modules),
         representation=cueq_rep,
         model_outputs=model.model_outputs,
     )
@@ -1011,19 +1014,94 @@ def convert_e3nn_to_cueq(model):
     return cueq_model
 
 def update_model(model):
+    import warnings
     rep_config = get_representation_config(model)
     new_rep = model.representation.__class__(**rep_config)
 
+    old_state_dict = model.representation.state_dict()
+
+    # replace readout weight name
     try:
-        new_rep.load_state_dict(model.representation.state_dict())
+        if new_rep.__class__.__name__ == 'MACE':
+            for i in range(len(model.representation.readout_mlp)):
+                # replace normal layers
+                if i != len(model.representation.readout_mlp) - 1:
+                    for name in ['weight', 'bias', 'output_mask']:
+                        old_state_dict[f'readout.readouts.{i}.linear.{name}'] = old_state_dict.pop(f'readout_mlp.{i}.{name}')
+                    warnings.warn("Rename weights in deprecated readouts.")
+                else:
+                # replace readout_mlp layer
+                    for j in range(len(new_rep.readout.readout_mlp)):
+                        for name in ['weight', 'bias', 'output_mask']:
+                            old_state_dict[f'readout.readouts.{i}.{j}.linear.{name}'] = old_state_dict.pop(f'readout_mlp.{i}.linear_{j+1}.{name}')
+                            old_state_dict[f'readout.readout_mlp.{j}.linear.{name}'] = old_state_dict[f'readout.readouts.{i}.{j}.linear.{name}']
+                    warnings.warn("Rename weights in deprecated readout_mlp.")
+        elif new_rep.__class__.__name__ == 'Painn':
+            for i in range(len(new_rep.readout.readout_mlp)):
+                for name in ['weight', 'bias']:
+                    old_state_dict[f'readout.readout_mlp.{i}.linear.{name}'] = old_state_dict.pop(f'readout_mlp.{2*i}.{name}')
+            warnings.warn("Rename weights in deprecated readout_mlp.")
+
+    except KeyError:
+        pass
+
+    try:
+        new_rep.load_state_dict(old_state_dict)
     except:
-        print("Load weights from old model failed!")
+        warnings.warn("Loading weights from old model failed!")
 
     new_model = model.__class__(
-        input_modules=list(model.input_modules.values()),
-        output_modules=list(model.output_modules.values()),
+        input_modules=list(model.input_modules),        # almost no update in input_modules and output_modules
+        output_modules=list(model.output_modules),
         representation=new_rep,
         model_outputs=model.model_outputs,
     )
 
     return new_model
+
+def upgrade_checkpoint(
+    ckpt_path: Union[str, Path],
+    output_path: Optional[Union[str, Path]] = None,
+    device: Optional[Union[str, torch.device]] = None,
+) -> Path:
+    """Upgrade an older Curator checkpoint by rebuilding its stored model.
+
+    Loads the checkpoint on CPU by default (so conversion works without GPUs),
+    rebuilds the model via ``update_model``, and writes a new checkpoint.
+    """
+    import curator.model.compat  # registers legacy class aliases for torch.load
+    from collections import OrderedDict
+
+    ckpt_path = Path(ckpt_path)
+    if device is None:
+        device = torch.device("cpu")
+    elif isinstance(device, str):
+        device = torch.device(device)
+
+    if output_path is None:
+        output_path = ckpt_path.with_name(f"{ckpt_path.stem}_converted{ckpt_path.suffix}")
+    output_path = Path(output_path)
+
+    obj = torch.load(ckpt_path, map_location=device)
+
+    if isinstance(obj, torch.nn.Module):
+        upgraded_model = update_model(obj)
+        torch.save(upgraded_model, output_path)
+        return output_path
+
+    if not isinstance(obj, dict):
+        raise TypeError(f"Unsupported checkpoint type: {type(obj)}")
+
+    if "model" not in obj:
+        raise KeyError("Checkpoint is missing 'model' entry to upgrade.")
+
+    upgraded_model = update_model(obj["model"])
+    obj["model"] = upgraded_model
+    if "state_dict" in obj:
+        state_dict = upgraded_model.state_dict()
+        new_state_dict = OrderedDict()
+        for k in state_dict.keys():
+            new_state_dict['model.' + k] = state_dict[k]
+        obj["state_dict"] = new_state_dict
+    torch.save(obj, output_path)
+    return output_path
