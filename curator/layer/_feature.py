@@ -58,10 +58,12 @@ class FeatureExtractor(nn.Module):
         # # Avoid direct imports; use class name string comparison instead for efficiency
         # if self.repr_callback.__class__.__name__ == 'MACE':
         #     layer = layer[-1]
-        for child in layer.children():
-            if isinstance(child, self._linear_types):
-                self.hooks.append(child.register_forward_pre_hook(self.save_feats_hook))
-                self.hooks.append(child.register_backward_hook(self.save_grads_hook))
+        linear_modules = [m for m in layer.modules() if isinstance(m, self._linear_types)]
+        if not linear_modules:
+            logger.warning(f"No linear-like submodules found under target layer {self.target_layer}")
+        for child in linear_modules:
+            self.hooks.append(child.register_forward_pre_hook(self.save_feats_hook))
+            self.hooks.append(child.register_backward_hook(self.save_grads_hook))
 
     def forward(self, data: properties.Type, predict: bool=False) -> properties.Type:
         # repr_callback may modify the original data in place, so we need to make a copy of the data
@@ -87,6 +89,12 @@ class FeatureExtractor(nn.Module):
         if util.find_spec("e3nn.o3"):
             from e3nn import o3
             types.append(o3.Linear)
+        try:
+            from curator.layer._cuequivariance_wrapper import Linear as CueqLinear
+            types.append(CueqLinear)
+        except Exception:
+            # If the cuequivariant Linear is unavailable, skip it.
+            pass
         return tuple(types)
 
 class RandomProjections(nn.Module):
