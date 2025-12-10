@@ -118,33 +118,33 @@ class RandomProjections(nn.Module):
             # Calculate normalization constant once
             # normalization = torch.sqrt(torch.tensor(self.num_features, dtype=dtype, device=device))
             layer = find_layer_by_name_recursive(module, target_layer)
-            # Input feature projection matrices (in_features + 1 for bias term)
-            for i, l in enumerate(layer.children()):
-                if isinstance(l, linear_types):
-                    if hasattr(l, "in_features"):
-                        in_dim = l.in_features + 1
-                    elif hasattr(l, "irreps_in"):
-                        in_dim = l.irreps_in.dim + 1
-                    else:
-                        raise AttributeError("Linear-like layer missing input dimension attributes.")
-                    in_feat_proj = torch.randn(in_dim, self.num_features, dtype=dtype, device=device)
-                    # Register the buffer by name
-                    self.register_buffer(f'in_feat_proj_{i}', in_feat_proj)
-                    self.in_feat_proj_buffers.append(f'in_feat_proj_{i}')  # Store buffer names for access
+            linear_modules = [m for m in layer.modules() if isinstance(m, linear_types)]
+            if not linear_modules:
+                raise ValueError(f"No linear-like submodules found under target layer {target_layer}")
 
-            # Output gradient projection matrices
-            for i, l in enumerate(layer.children()):
-                if isinstance(l, linear_types):
-                    if hasattr(l, "out_features"):
-                        out_dim = l.out_features
-                    elif hasattr(l, "irreps_out"):
-                        out_dim = l.irreps_out.dim
-                    else:
-                        raise AttributeError("Linear-like layer missing output dimension attributes.")
-                    out_grad_proj = torch.randn(out_dim, self.num_features, dtype=dtype, device=device)
-                    # Register the buffer by name
-                    self.register_buffer(f'out_grad_proj_{i}', out_grad_proj)
-                    self.out_grad_proj_buffers.append(f'out_grad_proj_{i}')  # Store buffer names for access
+            # Input feature and output gradient projection matrices (in_features + 1 for bias term)
+            for i, l in enumerate(linear_modules):
+                if hasattr(l, "in_features"):
+                    in_dim = l.in_features + 1
+                elif hasattr(l, "irreps_in"):
+                    in_dim = l.irreps_in.dim + 1
+                else:
+                    raise AttributeError("Linear-like layer missing input dimension attributes.")
+
+                in_feat_proj = torch.randn(in_dim, self.num_features, dtype=dtype, device=device)
+                self.register_buffer(f'in_feat_proj_{i}', in_feat_proj)
+                self.in_feat_proj_buffers.append(f'in_feat_proj_{i}')  # Store buffer names for access
+
+                if hasattr(l, "out_features"):
+                    out_dim = l.out_features
+                elif hasattr(l, "irreps_out"):
+                    out_dim = l.irreps_out.dim
+                else:
+                    raise AttributeError("Linear-like layer missing output dimension attributes.")
+
+                out_grad_proj = torch.randn(out_dim, self.num_features, dtype=dtype, device=device)
+                self.register_buffer(f'out_grad_proj_{i}', out_grad_proj)
+                self.out_grad_proj_buffers.append(f'out_grad_proj_{i}')  # Store buffer names for access
 
     def __repr__(self):
         return f'{self.__class__.__name__}(num_features={self.num_features})'
@@ -180,34 +180,63 @@ class FeatureCalculator(nn.Module):
         self.dataset = dataset
         self.compute_maha_dist = compute_maha_dist
         self.max_dataset_size = max_dataset_size
+        self._skip_forward: bool = False  # avoid re-entrancy when repr_callback routes back here
 
         if self.compute_maha_dist and properties.maha_dist not in self.model_outputs:
             self.model_outputs.append(properties.maha_dist)
 
-        if self.repr_callback is not None:
-            self._initialize_feature_components()
+        if repr_callback is not None:
+            self.initialize_feature_components(
+                repr_callback=repr_callback,
+                precision=precision,
+                feature_mean=feature_mean,
+                dataset=self.dataset,
+            )
+        elif self.compute_maha_dist:
+            if self.dataset is not None:
+                logger.warning('Module repr_callback is not provided. To calculate mahalanobis, the provided dataset will be used to calculate precision matrix afterwards.')
+            else:
+                raise ValueError("repr_callback is required when compute_maha_dist is enabled.")
 
-            if self.compute_maha_dist:
-                assert self.dataset is not None or hasattr(self, 'precision'), "Mahalanobis distance can not be calculated without precision matrix or provided reference dataset."
-                self.get_covariance_matrix(precision, feature_mean, dataset)
+    def initialize_feature_components(
+        self,
+        repr_callback: Optional[nn.Module] = None,
+        precision: Optional[torch.Tensor] = None,
+        feature_mean: Optional[torch.Tensor] = None,
+        dataset: Union[torch.utils.data.Dataset, str, None] = None,
+    ):
+        new_repr = repr_callback or self.repr_callback
+        if new_repr is None:
+            raise ValueError("repr_callback must be provided to initialize feature components.")
+
+        if dataset is not None:
+            self.dataset = dataset
+
+        same_repr = new_repr is self.repr_callback and hasattr(self, "feature_extractor") and hasattr(self, "random_projections")
+        self.repr_callback = new_repr
+
+        if not same_repr:
+            self.feature_extractor = FeatureExtractor(self.repr_callback, target_layer=self.target_layer)
+            self.random_projections = RandomProjections(self.repr_callback, self.n_random_features, target_layer=self.target_layer)
             self._sync_device_with_repr()
 
-    def _initialize_feature_components(self, repr_callback: Optional[nn.Module] = None):
-        repr_callback = repr_callback or self.repr_callback
-        self.feature_extractor = FeatureExtractor(repr_callback, target_layer=self.target_layer)
-        self.random_projections = RandomProjections(repr_callback, self.n_random_features, target_layer=self.target_layer)
+        should_compute_cov = self.compute_maha_dist and (
+            (precision is not None and feature_mean is not None)
+            or not hasattr(self, 'precision')
+            or dataset is not None
+        )
+        if should_compute_cov:
+            self.get_covariance_matrix(
+                precision=precision,
+                feature_mean=feature_mean,
+                dataset=dataset or self.dataset,
+            )
     
     def register_repr_callback(self, repr_callback: nn.Module):
-        if self.repr_callback is repr_callback and hasattr(self, "feature_extractor"):
-            self._sync_device_with_repr()
-            return
-
-        self.repr_callback = repr_callback
-        self._initialize_feature_components(repr_callback)
-        self._sync_device_with_repr()
-        if self.compute_maha_dist:
-            assert self.dataset is not None or hasattr(self, 'precision'), "Mahalanobis distance can not be calculated without precision matrix or provided reference dataset."
-            self.get_covariance_matrix()
+        self.initialize_feature_components(
+            repr_callback=repr_callback,
+            dataset=self.dataset,
+        )
 
     def _sync_device_with_repr(self):
         if self.repr_callback is None:
@@ -219,6 +248,8 @@ class FeatureCalculator(nn.Module):
                 setattr(self, name, buf.to(device))
 
     def forward(self, data: properties.Type, predict: bool=False) -> properties.Type:
+        if self._skip_forward:
+            return data
         data = self._compute_feature(data, predict=predict)
         if self.compute_maha_dist:
             data = self.mahalanobis_distance(data)
@@ -230,6 +261,12 @@ class FeatureCalculator(nn.Module):
             feature_mean: Optional[torch.Tensor] = None,
             dataset: Union[torch.utils.data.Dataset, str, None] = None,
         ):
+        if not self.compute_maha_dist:
+            return
+
+        if self.repr_callback is None:
+            raise ValueError("repr_callback is required to compute covariance and Mahalanobis distance.")
+
         if precision is not None and feature_mean is not None:
             logger.info('Loading precision matrix and feature mean from provided values.')
             device = next(self.repr_callback.parameters()).device if self.repr_callback is not None else torch.device('cpu')
@@ -239,6 +276,8 @@ class FeatureCalculator(nn.Module):
             
         if dataset is None:
             dataset = self.dataset
+        if dataset is None:
+            raise ValueError("Mahalanobis distance requested but no dataset or precision/feature_mean provided.")
         if isinstance(dataset, str):
             from curator.data import AseDataset
             logger.info(f'Calculating features from provided dataset <{dataset}>.')
@@ -262,31 +301,35 @@ class FeatureCalculator(nn.Module):
         iterator = DataLoader(dataset, **loader_kwargs)
         # No need to slice the iterator, since batch_size == max_dataset_size
 
-        for i, batch in enumerate(iterator):
-            logger.info(f"Processing batch {i+1}/{len(iterator)}")
-            batch = {k: v.to(device) for k, v in batch.items()}
-            feats = self._compute_feature(batch, predict=True)[properties.feature].to('cpu')  # use cpu to save memory
-            features.append(feats)
-            # Handle image_idx appropriately for global vs local features
-            use_local = 'local' in self.kernel if hasattr(self, 'kernel') else False
+        try:
+            self._skip_forward = True  # prevent recursive call when repr_callback is the parent model
+            for i, batch in enumerate(iterator):
+                logger.info(f"Processing batch {i+1}/{len(iterator)}")
+                batch = {k: v.to(device) for k, v in batch.items()}
+                feats = self._compute_feature(batch, predict=True)[properties.feature].to('cpu')  # use cpu to save memory
+                features.append(feats)
+                # Handle image_idx appropriately for global vs local features
+                use_local = 'local' in self.kernel if hasattr(self, 'kernel') else False
 
-            if use_local:
-                # Local: Atom-level, construct image_idx per atom
-                n_atoms = batch[properties.n_atoms]
-                if torch.is_tensor(n_atoms):
-                    batch_img_idx = []
-                    for img_j, n in enumerate(n_atoms):
-                        batch_img_idx.append(torch.full((n,), i * len(n_atoms) + img_j, dtype=torch.long))
-                    batch_img_idx = torch.cat(batch_img_idx)
+                if use_local:
+                    # Local: Atom-level, construct image_idx per atom
+                    n_atoms = batch[properties.n_atoms]
+                    if torch.is_tensor(n_atoms):
+                        batch_img_idx = []
+                        for img_j, n in enumerate(n_atoms):
+                            batch_img_idx.append(torch.full((n,), i * len(n_atoms) + img_j, dtype=torch.long))
+                        batch_img_idx = torch.cat(batch_img_idx)
+                    else:
+                        batch_img_idx = torch.ones(batch[properties.n_atoms], dtype=torch.long) * i
+                    image_idx.append(batch_img_idx)
                 else:
-                    batch_img_idx = torch.ones(batch[properties.n_atoms], dtype=torch.long) * i
-                image_idx.append(batch_img_idx)
-            else:
-                # Global: One entry per image (batch)
-                # image_idx should be a tensor of image indices, one per structure in batch
-                n_images = batch[properties.n_atoms].shape[0] if torch.is_tensor(batch[properties.n_atoms]) else len(batch[properties.n_atoms])
-                batch_img_idx = torch.arange(i * n_images, i * n_images + n_images, dtype=torch.long)
-                image_idx.append(batch_img_idx)
+                    # Global: One entry per image (batch)
+                    # image_idx should be a tensor of image indices, one per structure in batch
+                    n_images = batch[properties.n_atoms].shape[0] if torch.is_tensor(batch[properties.n_atoms]) else len(batch[properties.n_atoms])
+                    batch_img_idx = torch.arange(i * n_images, i * n_images + n_images, dtype=torch.long)
+                    image_idx.append(batch_img_idx)
+        finally:
+            self._skip_forward = False
 
         # calculate inverse covariance matrix
         features = torch.cat(features)
@@ -313,6 +356,9 @@ class FeatureCalculator(nn.Module):
         self.register_buffer('maha_dist', maha_dist.to(device))
 
     def mahalanobis_distance(self, data: properties.Type) -> properties.Type:
+        if not hasattr(self, 'precision') or not hasattr(self, 'feature_mean'):
+            raise RuntimeError("Cannot compute Mahalanobis distance without a covariance matrix.")
+
         if properties.feature in data:
             feats = (data[properties.feature] - self.feature_mean) / self.feature_std
             maha_dist = torch.sqrt(torch.einsum("ij,jk,ik->i", feats, self.precision, feats))
@@ -322,10 +368,23 @@ class FeatureCalculator(nn.Module):
         return data
 
     def _compute_feature(self, data: properties.Type, predict: bool=False) -> properties.Type:
+        if not hasattr(self, 'feature_extractor') or not hasattr(self, 'random_projections'):
+            raise RuntimeError("Feature extractor is not initialized; ensure repr_callback is provided.")
         data = self.feature_extractor(data, predict=predict)       # this will modify the data in place if in predict mode
         feats, grads = data[properties.feature], data[properties.gradient]
+        if not feats or not grads:
+            raise RuntimeError(
+                "FeatureExtractor did not capture features/gradients. "
+                "Ensure the repr_callback forward/backward runs with hooks attached before calling FeatureCalculator, "
+                "or call with predict=True so repr_callback executes within FeatureCalculator."
+            )
         in_feat_projs = [getattr(self.random_projections, name) for name in self.random_projections.in_feat_proj_buffers]
         out_grad_projs = [getattr(self.random_projections, name) for name in self.random_projections.out_grad_proj_buffers]
+        if not in_feat_projs or not out_grad_projs:
+            raise RuntimeError(
+                "RandomProjections has no projection buffers; ensure the target layer contains linear-like modules "
+                "and n_random_features > 0."
+            )
 
         if 'local' in self.kernel:
             if self.kernel == 'local-full-g':
