@@ -2,7 +2,7 @@
 from hydra.utils import instantiate
 import hydra
 from hydra import compose, initialize
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, OmegaConf
 import sys, os, json
 from pathlib import Path
 import argparse
@@ -14,10 +14,10 @@ from .utils import (
     CustomFormatter,
     register_resolvers,
     find_best_model,
-    ensure_list,
     load_models,
     upgrade_checkpoint,
     convert_mace_to_curator,
+    normalize_config_sequences,
 )
 import logging
 import socket
@@ -38,38 +38,6 @@ log.setLevel(logging.DEBUG)
 # register omegaconf resolvers
 register_resolvers()
 
-
-def _listify_field(container: DictConfig, key: str) -> None:
-    if container is None or not isinstance(container, (DictConfig, dict)):
-        return
-
-    if isinstance(container, DictConfig):
-        if key not in container or container[key] is None:
-            return
-        new_value = ensure_list(container[key])
-        if new_value is container[key]:
-            return
-        with open_dict(container):
-            container[key] = new_value
-    else:
-        if key not in container or container[key] is None:
-            return
-        container[key] = ensure_list(container[key])
-
-
-def _normalize_config_sequences(config: DictConfig) -> None:
-    if config is None:
-        return
-
-    if "trainer" in config:
-        _listify_field(config.trainer, "callbacks")
-
-    if "model" in config:
-        _listify_field(config.model, "input_modules")
-        _listify_field(config.model, "output_modules")
-
-    if "task" in config:
-        _listify_field(config.task, "outputs")
 
 # Trainining with Pytorch Lightning (only with weights and biasses)
 @hydra.main(config_path="configs", config_name="train", version_base=None)
@@ -100,7 +68,7 @@ def train(config: DictConfig) -> None:
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="train")
 
-    _normalize_config_sequences(config)
+    normalize_config_sequences(config)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -204,7 +172,7 @@ def tmp_train(config: DictConfig):
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="train")
 
-    _normalize_config_sequences(config)
+    normalize_config_sequences(config)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -394,7 +362,7 @@ def deploy(
     cfg = None
     if cfg_path is not None:
         cfg = read_user_config(cfg_path, config_path="configs", config_name="train")
-        _normalize_config_sequences(cfg)
+        normalize_config_sequences(cfg)
 
     # Load model(s)
     models = load_models(
