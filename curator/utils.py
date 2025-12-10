@@ -533,6 +533,21 @@ def _dictify_sequence_nodes(config: Optional[DictConfig]) -> set:
 
     return converted
 
+def normalize_config_sequences(config: Optional[DictConfig]) -> None:
+    """Convert configurable sequence fields to list form for easier consumption."""
+    if config is None:
+        return
+
+    if "trainer" in config:
+        _listify_config_field(config.trainer, "callbacks")
+
+    if "model" in config:
+        _listify_config_field(config.model, "input_modules")
+        _listify_config_field(config.model, "output_modules")
+
+    if "task" in config:
+        _listify_config_field(config.task, "outputs")
+
 # Ugly workaround for specifying config files outside of the package
 def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_path="configs", config_name="train.yaml"):
     # load cfg
@@ -581,6 +596,8 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     
     # Allow write access to unknown fields
     OmegaConf.set_struct(composed_cfg, False)
+
+    normalize_config_sequences(composed_cfg)
         
     return composed_cfg
 
