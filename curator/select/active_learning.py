@@ -5,6 +5,7 @@ from typing import List, Dict, Tuple, Optional, Union
 from curator.data import collate_atomsdata
 from .select import *
 from .kernel import *
+from e3nn import o3
 from curator.data import properties
 from curator.layer.utils import find_layer_by_name_recursive
 try:

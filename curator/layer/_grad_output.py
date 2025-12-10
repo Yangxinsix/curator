@@ -21,6 +21,8 @@ class GradientOutput(torch.nn.Module):
         self.grad_on_positions = grad_on_positions
         self.update_callback = update_callback
         self.model_outputs = model_outputs
+        if self.compute_edge_forces and properties.edge_forces not in self.model_outputs:
+            self.model_outputs.append(properties.edge_forces)
 
     @torch.jit.ignore
     def update_model_outputs(self, outputs: Union[List[str], str]):
