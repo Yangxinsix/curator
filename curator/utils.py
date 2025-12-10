@@ -1050,9 +1050,51 @@ def update_model(model):
     except:
         warnings.warn("Loading weights from old model failed!")
 
+    output_modules = model.output_modules
+    # fix output modules
+    try:
+        # modify modules in-place
+        for i, m in enumerate(output_modules):
+            if m.__class__.__name__ == 'GradientOutput':
+                output_modules[i] = m.__class__(
+                    grad_on_edge_diff = m.grad_on_edge_diff,
+                    grad_on_positions = m.grad_on_positions,
+                    compute_edge_forces = getattr(m, 'compute_edge_forces', False),
+                    compute_edge_forces_only = getattr(m, 'compute_edge_forces_only', False),
+                    model_outputs = m.model_outputs,
+                )
+                warnings.warn('Replace GradientOutput module.')
+            if m.__class__.__name__ == 'GlobalRescaleShift':
+                scale_by = m.scale_by.detach().clone().cpu().squeeze().item()
+                shift_by = m.shift_by.detach().clone().cpu().squeeze().item()
+                output_modules[i] = m.__class__(
+                    scale_by=scale_by,
+                    shift_by=shift_by,
+                    scale_trainable=isinstance(getattr(m, "scale_by", None), torch.nn.Parameter),
+                    shift_trainable=isinstance(getattr(m, "shift_by", None), torch.nn.Parameter),
+                    scale_keys=list(m.scale_keys),
+                    shift_keys=list(m.shift_keys),
+                    atomwise_shift=bool(getattr(m, "atomwise_shift", False)),
+                    atomwise_normalization=bool(m.atomwise_normalization),
+                    output_keys=list(m.output_keys),
+                    atomic_energies=(
+                        m.atomic_energies.detach().clone()
+                        if getattr(m, "shift_by_E0", torch.tensor(False)).item()
+                        else None
+                    )
+                )
+                warnings.warn('Replace GlobalRescaleShift module.')
+        # remove module
+        for i, m in enumerate(output_modules):
+            if m.__class__.__name__ == 'AtomwiseReduce':
+                output_modules.pop(i)
+                warnings.warn('Remove AtomwiseReduce module in output modules.')
+    except:
+        pass
+
     new_model = model.__class__(
         input_modules=list(model.input_modules),        # almost no update in input_modules and output_modules
-        output_modules=list(model.output_modules),
+        output_modules=list(output_modules),
         representation=new_rep,
         model_outputs=model.model_outputs,
     )

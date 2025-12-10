@@ -55,9 +55,9 @@ class FeatureExtractor(nn.Module):
     def add_hooks(self):
         layer = find_layer_by_name_recursive(self.repr_callback, self.target_layer)
         assert layer is not None, f"Target layer {self.target_layer} is not found!"
-        # Avoid direct imports; use class name string comparison instead for efficiency
-        if self.repr_callback.__class__.__name__ == 'MACE':
-            layer = layer[-1]
+        # # Avoid direct imports; use class name string comparison instead for efficiency
+        # if self.repr_callback.__class__.__name__ == 'MACE':
+        #     layer = layer[-1]
         for child in layer.children():
             if isinstance(child, self._linear_types):
                 self.hooks.append(child.register_forward_pre_hook(self.save_feats_hook))

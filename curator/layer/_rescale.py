@@ -12,8 +12,8 @@ from ase.data import atomic_numbers, chemical_symbols
 class GlobalRescaleShift(torch.nn.Module):
     def __init__(
         self,
-        scale_by: Union[float,Dict[str, float],Dict[int, float],None] = None,                            # standard deviation used to rescale output
-        shift_by: Union[float,Dict[str, float],Dict[int, float],None ]= None,                            # mean value used to shift output
+        scale_by: Union[float, Dict[str, float], Dict[int, float], None] = None,                            # standard deviation used to rescale output
+        shift_by: Union[float, Dict[str, float], Dict[int, float], None]= None,                            # mean value used to shift output
         scale_trainable: bool=False,
         shift_trainable: bool=False,
         scale_keys: List[str] = ["energy"],
