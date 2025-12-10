@@ -76,7 +76,7 @@ sc: Final[str] = "_skip_connection"
 # features and gradients (for active learning and uncertainty quantification)
 feature: Final[str] = "feature"
 gradient: Final[str] = "gradient"
-maha_dist: Final[str] = "mahalanobis_distance"
+maha_dist: Final[str] = "maha_dist"         # mahalanobis distance
 
 _DEFAULT_INDEX_FIELDS: Set[str] = {
     image_idx,

@@ -43,8 +43,8 @@ class MahalanobisUncertainty(BaseUncertainty):
                     break
 
             if self.feature_calculator is None:
+                # pre-define a feature calculator, then add this module into model's output modules.
                 self.feature_calculator = FeatureCalculator(
-                    repr_callback=self.calc.model,
                     dataset=dataset,
                     compute_maha_dist=True,
                     max_dataset_size=max_structures,
