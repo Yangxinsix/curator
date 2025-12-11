@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
+- We will try to add the following engines for MD simulations:
+ - TorchSim
+ - TorchMD
+ - OpenMM
+ - Jax-MD
+
 
 ### Added
 
