@@ -1,7 +1,7 @@
 import torch
 from e3nn.util.jit import script
 from omegaconf import open_dict, OmegaConf, DictConfig, ListConfig
-from hydra import compose, initialize
+from hydra import compose, initialize, initialize_config_dir
 import hydra
 from hydra.utils import instantiate
 from collections import abc
