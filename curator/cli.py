@@ -176,14 +176,14 @@ def tmp_train(config: DictConfig):
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
-    log.info("Running on host: " + str(socket.gethostname()))
+    log.debug("Running on host: " + str(socket.gethostname()))
     
     # Set up the seed
     if "seed" in config:
-        log.info(f"Seed with <{config.seed}>")
+        log.debug(f"Seed with <{config.seed}>")
         seed_everything(config.seed, workers=True)
     else:
-        log.info("Seed randomly...")
+        log.debug("Seed randomly...")
     
     # Setup the logger
     # set up logger
@@ -233,7 +233,7 @@ def tmp_train(config: DictConfig):
         model_compiled = script(model)
         metadata = {"cutoff": str(model_compiled.representation.cutoff).encode("ascii")}
         model_compiled.save(f"{config.run_path}/compiled_model.pt", _extra_files=metadata)
-        log.info(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
+        log.debug(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
 
 def _deploy_parse_args(argv: Optional[List[str]] = None):
     parser = argparse.ArgumentParser(
@@ -389,7 +389,7 @@ def deploy(
     model_compiled = script(model)
     metadata = {"cutoff": str(find_layer_by_name_recursive(model_compiled, 'cutoff')).encode("ascii")}
     model_compiled.save(target_path, _extra_files=metadata)
-    log.info(f"Deploying compiled model at <{target_path}> from <{model_path}>")
+    log.debug(f"Deploying compiled model at <{target_path}> from <{model_path}>")
     if return_model:
         return model_compiled
 
@@ -410,10 +410,10 @@ def evaluate(config: DictConfig):
     fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
     fh.setLevel(logging.DEBUG)
     log.addHandler(fh)
-    log.info("Running on host: " + str(socket.gethostname()))
+    log.debug("Running on host: " + str(socket.gethostname()))
 
     # Load model. Uses a compiled model, if any, otherwise a uncompiled model
-    log.info("Using model from <{}>".format(config.model_path))
+    log.debug("Using model from <{}>".format(config.model_path))
     if config.deploy is not None:
         model = deploy(
             config.model_path, 
@@ -448,36 +448,21 @@ def simulate(config: DictConfig):
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     
     # set logger
+    # set up logger
     fh = logging.FileHandler(os.path.join(config.run_path, "simulation.log"), mode="w")
-    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
-    fh.setLevel(logging.DEBUG)
+    fh.setFormatter(CustomFormatter())
     log.addHandler(fh)
-    log.info("Running on host: " + str(socket.gethostname()))
+    log.debug("Running on host: " + str(socket.gethostname()))
 
     # Set up the seed
     if "seed" in config:
-        log.info(f"Seed with <{config.seed}>")
+        log.debug(f"Seed with <{config.seed}>")
         seed_everything(config.seed, workers=True)
     else:
-        log.info("Seed randomly...")
-    
-    # Load model. Uses a compiled model, if any, otherwise a uncompiled model
-    log.info("Using model from <{}>".format(config.model_path))
-    if config.deploy is not None:
-        model = deploy(
-            config.model_path, 
-            load_weights_only=config.deploy.load_weights_only,
-            return_model=True,
-        )
-    else:
-        model = load_models(config.model_path, config.device)
-        model = EnsembleModel(model) if len(model) > 1 else model[0]
-
-    calc = MLCalculator(model)
+        log.debug("Seed randomly...")
 
     # Setup simulator
-    simulator = instantiate(config.simulator, calculator=calc)
-
+    simulator = instantiate(config.simulator)
     simulator.run()
     
 @hydra.main(config_path="configs", config_name="select", version_base=None)   
@@ -510,18 +495,18 @@ def select(config: DictConfig):
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
-    log.info("Running on host: " + str(socket.gethostname()))
+    log.debug("Running on host: " + str(socket.gethostname()))
 
     # Set up the seed
     if "seed" in config:
-        log.info(f"Seed with <{config.seed}>")
+        log.debug(f"Seed with <{config.seed}>")
         seed_everything(config.seed, workers=True)
     else:
-        log.info("Seed randomly...")
+        log.debug("Seed randomly...")
     
     # Set up datamodule and load training and validation set
     # The active learning only works for uncompiled model at the moment
-    log.info("Using model from <{}>".format(config.model_path))
+    log.debug("Using model from <{}>".format(config.model_path))
     models = load_models(config.model_path, config.device, load_compiled=False)
     cutoff = models[0].representation.cutoff
 
@@ -570,7 +555,7 @@ def select(config: DictConfig):
     with open(config.run_path+'/selected.json', 'w') as f:
         json.dump(al_info, f)
     
-    log.info(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for selected structures!")
+    log.debug(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for selected structures!")
     if config.save_images:
         pool_set = read_trajectory(config.pool_set)
         selected_images = [pool_set[i] for i in indices]
@@ -578,7 +563,7 @@ def select(config: DictConfig):
         with Trajectory(config.save_images if isinstance(config.save_images, str) else 'selected.traj', 'w') as traj:
             for atoms in selected_images:
                 traj.write(atoms)
-        log.info(f"Saving selected images into {save_path}.")
+        log.debug(f"Saving selected images into {save_path}.")
 
 # Label the dataset selected by active learning
 @hydra.main(config_path="configs", config_name="label", version_base=None)   
@@ -611,7 +596,7 @@ def label(config: DictConfig):
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
-    log.info("Running on host: " + str(socket.gethostname()))
+    log.debug("Running on host: " + str(socket.gethostname()))
 
     # get images and set parameters
     if config.pool_set:
@@ -621,9 +606,9 @@ def label(config: DictConfig):
         if config.al_info:
             with open(config.al_info) as f:
                 indices = json.load(f)["selected"]
-                log.info(f"Labelling {len(indices)} active learning selected structures: {config.al_info}")
+                log.debug(f"Labelling {len(indices)} active learning selected structures: {config.al_info}")
         elif indices is not None:
-            log.info(f"Labelling {len(indices)} selected structures: {config.indices}")
+            log.debug(f"Labelling {len(indices)} selected structures: {config.indices}")
         
         images = [images[i] for i in indices] if indices is not None else [atoms for atoms in images]
     else:
@@ -637,7 +622,7 @@ def label(config: DictConfig):
         if config.imgs_per_job:
             images = split_list(images, config.imgs_per_job, by_chunk_size=True)
         images = images[config.job_order]          # specify which parts of the images to label
-        log.info(f"Rank {config.job_order}. Total structures: {len(images)}")
+        log.debug(f"Rank {config.job_order}. Total structures: {len(images)}")
 
     # create or read existing ase database
     db = connect(config.run_path+'/dft_structures.db')
@@ -652,16 +637,16 @@ def label(config: DictConfig):
     all_converged = []
     for i, atoms in enumerate(images):
         # Label the structure with the choosen method
-        log.info(f"Labeling structure {i}.")
+        log.debug(f"Labeling structure {i}.")
         try:
             existing_converged = db[i+1].get('converged')
             if not existing_converged:
                 converged = annotator.annotate(atoms)
                 db.update(id=i+1, atoms=atoms, converged=converged)
-                log.info(f"Recomputing structure {i} converged: {converged}")
+                log.debug(f"Recomputing structure {i} converged: {converged}")
             else:
                 converged = existing_converged
-                log.info(f"Structure {i} converged. Skipping...")
+                log.debug(f"Structure {i} converged. Skipping...")
             all_converged.append(converged)
         except KeyError:
             converged = annotator.annotate(atoms)
@@ -677,14 +662,14 @@ def label(config: DictConfig):
     
     # write to datapath
     if config.datapath is not None:
-        log.info(f"Write atoms to {config.datapath}.") 
+        log.debug(f"Write atoms to {config.datapath}.") 
         total_dataset = Trajectory(config.datapath, 'a')
         for row in db.select(converged=True):
             if row.get('stored'):
-                log.info(f"Structure {row.id - 1} is already stored in <{config.datapath}>. Skipping...")
+                log.debug(f"Structure {row.id - 1} is already stored in <{config.datapath}>. Skipping...")
             else:
                 db.update(id=row.id, stored=True)
-                log.info(f"Write structure {row.id - 1} to <{config.datapath}>")
+                log.debug(f"Write structure {row.id - 1} to <{config.datapath}>")
                 total_dataset.write(row.toatoms())
     
     if not all(all_converged):

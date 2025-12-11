@@ -1,0 +1,8 @@
+callbacks:
+  - _target_: curator.simulate.callbacks.calc.CalculatorAssign
+    calculator: ${calculator}
+    warmup: true
+    require_forces: false
+  - _target_: curator.simulate.callbacks.thermo.MDThermoLogger
+    variables: basic_energies
+    interval: 1

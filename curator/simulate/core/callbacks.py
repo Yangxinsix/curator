@@ -12,7 +12,7 @@ class Callback(ABC):
 
 class LoggerCallback(Callback):
     def __init__(self, logger: Optional[logging.Logger] = None, level: int = logging.INFO):
-        self.log = logger or logging.getLogger("Simulator")
+        self.log = logger or logging.getLogger(__name__)
         self.level = level
     def on_sim_start(self, ctx): self.log.log(self.level, "Simulation started.")
     def on_engine_setup(self, ctx): self.log.log(self.level, f"Engine ready: {type(ctx.engine).__name__}")

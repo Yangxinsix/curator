@@ -19,13 +19,15 @@ class UncertaintyMonitor(Callback):
     Parameters
     ----------
     backend : Callable[[Atoms], Dict[str, float]]
-        Function that returns uncertainty dict for the current Atoms.
-    monitor : str
-        The uncertainty monitor to check (e.g., "sigma").
-    low : float
-        Lower threshold.
-    high : float
-        Upper threshold.
+        Function that returns uncertainty dict for the current Atoms. Should include keys:
+        - monitor value(s)
+        - optional "is_warning" and "is_outlier" flags
+    monitor : str | None
+        The uncertainty monitor to check (e.g., "sigma"). Used when flags are absent.
+    low : float | None
+        Lower threshold (used only if backend flags and monitor are absent).
+    high : float | None
+        Upper threshold (used only if backend flags and monitor are absent).
     interval : int
         Evaluate every N steps.
     save_path : str | None
@@ -38,9 +40,9 @@ class UncertaintyMonitor(Callback):
     def __init__(
         self,
         backend: Callable,
-        monitor: str = properties.f_sd,
-        low: float = 0.05,
-        high: float = 0.5,
+        monitor: Optional[str] = None,
+        low: Optional[float] = 0.05,
+        high: Optional[float] = 0.5,
         interval: int = 1,
         save_path: Optional[str] = None,
         uncertain_count: Optional[int] = None,
@@ -53,7 +55,8 @@ class UncertaintyMonitor(Callback):
         self.interval = max(1, int(interval))
         self.save_path = save_path
         self.uncertain_count = uncertain_count
-        self.log = logger or logging.getLogger("Simulator")
+        self.log = logger or logging.getLogger(__name__)
+        self._threshold_key = None  # filled on first call
 
         self._traj: Optional[Trajectory] = None
         self._low_hits_total = 0  # cumulative counter of (val >= low)
@@ -70,37 +73,71 @@ class UncertaintyMonitor(Callback):
         res: Dict[str, float] = self.backend(ctx.atoms) or {}
         ctx.state["uncertainty"] = res
 
+        # Capture threshold key if backend provides it
+        if self._threshold_key is None:
+            self._threshold_key = getattr(self.backend, "threshold_key", None)
+
         if self.monitor not in res:
             # Print nothing extra if the monitor is missing.
             return
 
-        val = float(res[self.monitor])
+        # Prefer backend flags if provided
+        is_warn = bool(res.get("is_warning", False))
+        is_out = bool(res.get("is_outlier", False))
+        monitor_key = self._threshold_key or self.monitor
 
-        # Always print the uncertainty value
+        if "is_warning" in res or "is_outlier" in res:
+            # Use flags directly; do not depend on monitor thresholds
+            pairs = " ".join(f"{k}={v}" for k, v in sorted(res.items()))
+            self.log.info(f"[uncertainty] step={ctx.step} {pairs}")
+
+            if is_out:
+                if self._traj is not None:
+                    self._traj.write(ctx.atoms)
+                ctx.state["early_stop_reason"] = (
+                    f"uncertainty {monitor_key or 'N/A'} flagged as outlier; "
+                    f"value={res.get(monitor_key, 'N/A')}"
+                )
+                return
+            if is_warn:
+                if self._traj is not None:
+                    self._traj.write(ctx.atoms)
+                if self.uncertain_count is not None:
+                    self._low_hits_total += 1
+                    if self._low_hits_total >= self.uncertain_count:
+                        ctx.state["early_stop_reason"] = (
+                            f"uncertainty {monitor_key or 'N/A'} flagged warning "
+                            f"{self._low_hits_total} times (threshold={self.uncertain_count}); "
+                            f"last_value={res.get(monitor_key, 'N/A')}"
+                        )
+            return
+
+        # Fallback: threshold-based
+        if monitor_key is None:
+            return
+        if monitor_key not in res:
+            return
+        val = float(res[monitor_key])
         pairs = " ".join(f"{k}={float(v):.6f}" for k, v in sorted(res.items()))
         self.log.info(f"[uncertainty] step={ctx.step} {pairs}")
 
-        # Band checks
-        if val >= self.high:
-            # high: print already done, then save, then early-stop
+        # Only apply thresholds if provided
+        if self.high is not None and val >= self.high:
             if self._traj is not None:
                 self._traj.write(ctx.atoms)
-            ctx.state["early_stop_reason"] = f"uncertainty {self.monitor}={val:.6f} >= high({self.high})"
-            return  # stop ASAP (EarlyStopCallback will raise)
+            ctx.state["early_stop_reason"] = f"uncertainty {monitor_key}={val:.6f} >= high({self.high})"
+            return
 
-        elif val >= self.low:
-            # medium: print already done, then save
+        if self.low is not None and val >= self.low:
             if self._traj is not None:
                 self._traj.write(ctx.atoms)
-
-        # Cumulative low-hit early-stop: count whenever val >= low (medium or high)
-        if val >= self.low and self.uncertain_count is not None:
-            self._low_hits_total += 1
-            if self._low_hits_total >= self.uncertain_count:
-                ctx.state["early_stop_reason"] = (
-                    f"uncertainty {self.monitor} >= low({self.low}) "
-                    f"{self._low_hits_total} times (threshold={self.uncertain_count})"
-                )
+            if self.uncertain_count is not None:
+                self._low_hits_total += 1
+                if self._low_hits_total >= self.uncertain_count:
+                    ctx.state["early_stop_reason"] = (
+                        f"uncertainty {monitor_key} >= low({self.low}) "
+                        f"{self._low_hits_total} times (threshold={self.uncertain_count})"
+                    )
 
     def on_sim_end(self, ctx: SimContext):
         if self._traj is not None:

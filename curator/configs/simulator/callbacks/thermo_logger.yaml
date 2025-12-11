@@ -1,0 +1,4 @@
+_target_: curator.simulate.callbacks.thermo.MDThermoLogger
+variables: basic_energies
+interval: 1
+header: true

@@ -1,0 +1,12 @@
+defaults:
+  - engine: ase_langevin
+  - /simulator/callbacks@callbacks.calc_assign: calc_assign
+  - /simulator/callbacks@callbacks.thermo: thermo_with_uncertainty
+  - /simulator/callbacks@callbacks.early_stop: early_stop
+  - _self_
+
+_target_: curator.simulate.core.simulator.Simulator
+init_traj: null
+start_index: null
+run_kwargs:
+  steps: 100

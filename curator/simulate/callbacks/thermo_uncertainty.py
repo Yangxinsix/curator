@@ -23,9 +23,9 @@ class ThermoWithUncertainty(MDThermoLogger):
         If provided, compute uncertainty right before printing.
         If None, read from ctx.state['uncertainty'] only.
     monitor : Sequence[str] | None
-        Uncertainty keys to include as columns (e.g., ("forces_sd", "forces_var")).
-    low, high : float
-        Band thresholds.
+        Uncertainty keys to include as columns (e.g., ("forces_sd", "forces_var")). Used for printing/fallback thresholds.
+    low, high : float | None
+        Band thresholds (used only if backend flags are absent).
     save_path : str | None
         If set, save medium/high frames to this trajectory.
     uncertain_count : int | None
@@ -43,9 +43,9 @@ class ThermoWithUncertainty(MDThermoLogger):
         custom_functions: Optional[Dict[str, Callable[[SimContext], Any]]] = None,
         # Uncertainty
         uncertainty_backend: Optional[Callable[[Any], Dict[str, float]]] = None,
-        monitor: Optional[str] = properties.f_sd,
-        low: float = 0.05,
-        high: float = 0.5,
+        monitor: Optional[str] = None,
+        low: Optional[float] = 0.05,
+        high: Optional[float] = 0.5,
         save_path: Optional[str] = 'warning_struct.traj',
         uncertain_count: Optional[int] = None,
     ):
@@ -68,6 +68,7 @@ class ThermoWithUncertainty(MDThermoLogger):
         include_keys: Sequence[str] = ()
         if self._unc_backend is not None:
             include_keys = getattr(self._unc_backend, "uncertainty_keys", ()) or ()
+        # Prefer backend-provided keys; fall back to monitor if supplied
         self._include = tuple(include_keys) or ((self.monitor,) if self.monitor else ())
 
         self._ensure_uncertainty_columns()
@@ -76,6 +77,7 @@ class ThermoWithUncertainty(MDThermoLogger):
         self._traj: Optional[Trajectory] = None
         # Cumulative counter for early-stop on low band
         self._low_hits_total = 0
+        self._threshold_key = getattr(self._unc_backend, "threshold_key", None) if self._unc_backend else None
 
     def on_sim_start(self, ctx: SimContext):
         if self.save_path:
@@ -132,29 +134,61 @@ class ThermoWithUncertainty(MDThermoLogger):
             if k not in self.variable_funcs:
                 self.variable_funcs[k] = (lambda kk: (lambda ctx: self._get_unc_value(ctx, kk)))(k)
 
+    def _resolve_monitor_key(self) -> Optional[str]:
+        return self._threshold_key or self.monitor
+
     def _apply_band_and_stop(self, ctx: SimContext):
         data = ctx.state.get("uncertainty") or {}
-        if self.monitor not in data:
-            return
-        val = float(data[self.monitor])
 
-        # high: save + early-stop
-        if val >= self.high:
+        monitor_key = self._resolve_monitor_key()
+
+        # Prefer backend flags
+        is_warn = bool(data.get("is_warning", False))
+        is_out = bool(data.get("is_outlier", False))
+
+        if "is_warning" in data or "is_outlier" in data:
+            if is_out:
+                if self._traj is not None:
+                    self._traj.write(ctx.atoms)
+                ctx.state["early_stop_reason"] = (
+                    f"uncertainty {monitor_key or 'N/A'} flagged as outlier; "
+                    f"value={data.get(monitor_key, 'N/A')}"
+                )
+                return
+
+            if is_warn:
+                if self._traj is not None:
+                    self._traj.write(ctx.atoms)
+                if self.uncertain_count is not None:
+                    self._low_hits_total += 1
+                    if self._low_hits_total >= self.uncertain_count:
+                        ctx.state["early_stop_reason"] = (
+                            f"uncertainty {monitor_key or 'N/A'} flagged warning "
+                            f"{self._low_hits_total} times (threshold={self.uncertain_count}); "
+                            f"last_value={data.get(monitor_key, 'N/A')}"
+                        )
+            return
+
+        # Fallback to thresholds
+        if monitor_key is None:
+            return
+        if monitor_key not in data:
+            return
+        val = float(data[monitor_key])
+
+        if self.high is not None and val >= self.high:
             if self._traj is not None:
                 self._traj.write(ctx.atoms)
-            ctx.state["early_stop_reason"] = f"uncertainty {self.monitor}={val:.6f} >= high({self.high})"
+            ctx.state["early_stop_reason"] = f"uncertainty {monitor_key}={val:.6f} >= high({self.high})"
             return
 
-        # medium: save only
-        if val >= self.low:
+        if self.low is not None and val >= self.low:
             if self._traj is not None:
                 self._traj.write(ctx.atoms)
-
-            # cumulative early-stop on low-band hits
             if self.uncertain_count is not None:
                 self._low_hits_total += 1
                 if self._low_hits_total >= self.uncertain_count:
                     ctx.state["early_stop_reason"] = (
-                        f"uncertainty {self.monitor} >= low({self.low}) "
+                        f"uncertainty {monitor_key} >= low({self.low}) "
                         f"{self._low_hits_total} times (threshold={self.uncertain_count})"
                     )

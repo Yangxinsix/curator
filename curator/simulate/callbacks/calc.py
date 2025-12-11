@@ -1,10 +1,13 @@
 # simlite/callbacks/calculator.py
 from __future__ import annotations
 import logging
-from typing import Optional, Callable, Union
+from typing import Optional, Callable, Union, List, Any
 from ase.calculators.calculator import Calculator
 from ..core.callbacks import Callback
 from ..core.context import SimContext
+from ..core.calculator import MLCalculator
+from curator.utils import load_models
+import torch.nn as nn
 
 class CalculatorAssign(Callback):
     """
@@ -12,8 +15,8 @@ class CalculatorAssign(Callback):
 
     Parameters
     ----------
-    calculator : Calculator | Callable[[], Calculator]
-        Ready-made calculator instance OR a factory returning a new instance.
+    calculator : Calculator | callable | str | list[str] | list[nn.Module]
+        Ready-made calculator, factory, model path(s), or model instance(s). Paths are loaded via load_models -> MLCalculator.
     warmup : bool
         If True, evaluate energy (and optionally forces) once to warm up the calculator.
     require_forces : bool
@@ -25,7 +28,14 @@ class CalculatorAssign(Callback):
     """
     def __init__(
         self,
-        calculator: Union[Calculator, Callable[[], Calculator]],
+        calculator: Union[
+            Calculator,
+            Callable[[], Calculator],
+            str,
+            List[str],
+            nn.Module,
+            List[nn.Module],
+        ],
         warmup: bool = True,
         require_forces: bool = False,
         apply_to_neb_images: bool = False,
@@ -35,10 +45,22 @@ class CalculatorAssign(Callback):
         self.warmup = warmup
         self.require_forces = require_forces
         self.apply_to_neb_images = apply_to_neb_images
-        self.log = logger or logging.getLogger("Simulator")
+        self.log = logger or logging.getLogger(__name__)
 
     def _make_calc(self) -> Calculator:
-        return self._calculator() if callable(self._calculator) else self._calculator
+        # Already a calculator
+        if isinstance(self._calculator, Calculator):
+            return self._calculator
+
+        # Factory returning a calculator
+        if callable(self._calculator) and not isinstance(self._calculator, (str, bytes)):
+            return self._calculator()
+
+        # Model-like: path(s) or module(s)
+        model_like: Any = self._calculator
+        model_list = load_models(model_like)
+        self._calculator = MLCalculator(model=model_list)
+        return self._calculator
 
     def _assign_and_warmup(self, atoms) -> None:
         atoms.calc = self._make_calc()
@@ -53,7 +75,7 @@ class CalculatorAssign(Callback):
     def on_sim_start(self, ctx: SimContext):
         if ctx.atoms is not None:
             self._assign_and_warmup(ctx.atoms)
-            self.log.info("Calcator assigned to atoms.")
+            self.log.debug("Calcator assigned to atoms.")
 
     def on_engine_setup(self, ctx: SimContext):
         if self.apply_to_neb_images and "neb_images" in ctx.state:

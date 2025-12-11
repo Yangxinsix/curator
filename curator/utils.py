@@ -531,6 +531,9 @@ def _dictify_sequence_nodes(config: Optional[DictConfig]) -> set:
     if "task" in config:
         _dictify_field(config.task, "outputs", "output", "task.outputs", converted)
 
+    if "simulator" in config:
+        _dictify_field(config.simulator, "callbacks", "callback", "simulator.callbacks", converted)
+
     return converted
 
 def normalize_config_sequences(config: Optional[DictConfig]) -> None:
@@ -547,6 +550,9 @@ def normalize_config_sequences(config: Optional[DictConfig]) -> None:
 
     if "task" in config:
         _listify_config_field(config.task, "outputs")
+
+    if "simulator" in config:
+        _listify_config_field(config.simulator, "callbacks")
 
 # Ugly workaround for specifying config files outside of the package
 def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_path="configs", config_name="train.yaml"):
