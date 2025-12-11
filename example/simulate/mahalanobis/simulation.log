@@ -1,0 +1,8 @@
+2025-12-11 14:35:18: Running on host: SKY-20190820VTG
+2025-12-11 14:35:18: Seed with <1234>
+2025-12-11 14:35:19: Module repr_callback is not provided. To calculate mahalanobis, the provided dataset will be used to calculate precision matrix afterwards.
+Calculating features from provided dataset <../../LiFePO4.traj>.
+Calculating precision matrix from 2257 structures.
+Processing batch 1/18
+Processing batch 2/18
+Processing batch 3/18

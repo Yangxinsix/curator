@@ -1,0 +1,21 @@
+_target_: curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty
+interval: 1
+variables: basic_energies
+monitor: null
+low: 0.05
+high: 0.5
+save_path: warning_struct.traj
+uncertain_count: null
+uncertainty_backend:
+  _target_: curator.simulate.uncertainty.auto.AutoUncertainty
+  calculator: ${calculator}
+  dataset: ${dataset}
+  maha_kwargs:
+    kernel: local-full-g
+    low_threshold: 0.9
+    high_threshold: 0.99
+    max_structures: 128
+  ensemble_kwargs:
+    uncertainty_keys:
+      - force_sd
+      - energy_sd

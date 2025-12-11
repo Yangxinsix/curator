@@ -1,11 +1,14 @@
 defaults:
-  - simulator: ase_md
-  - optional simulator/simulator_params: ${simulator}_params
+  - simulator: default
   - _self_
 
 cfg: null
 seed: 1234
 run_path: .
 model_path: null
+dataset: null
 device: cuda
 deploy: null
+
+# make calculator visible to callback interpolations
+calculator: ${model_path}

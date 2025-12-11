@@ -1,0 +1,5 @@
+_target_: curator.simulate.callbacks.calc.CalculatorAssign
+calculator: ${model_path}
+warmup: true
+require_forces: false
+apply_to_neb_images: false

@@ -51,7 +51,7 @@ class MDSimulator:
         self.temperature = temperature
         self.monitor = monitor
         self.variables = variables
-        self._logger = logger_instance or logging.getLogger("Simulator")
+        self._logger = logger_instance or logging.getLogger(__name__)
 
         self._calculator_cfg = calculator
         self._dynamics_cfg = dynamics
@@ -167,7 +167,7 @@ class NEBSimulator:
         self._neb_kwargs_cfg = neb_kwargs or {}
         self._opt_kwargs_cfg = opt_kwargs or {}
         self._logger_cfg = logger
-        self._logger = logger_instance or logging.getLogger("Simulator")
+        self._logger = logger_instance or logging.getLogger(__name__)
 
     def _instantiate(self, maybe_cfg: Any, **kwargs):
         if isinstance(maybe_cfg, DictConfig):

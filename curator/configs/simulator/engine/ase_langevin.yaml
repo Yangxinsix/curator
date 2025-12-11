@@ -1,0 +1,5 @@
+_target_: curator.simulate.engines.ase_md.MDEngine
+dynamics_cls: ase.md.langevin.Langevin
+timestep: 0.5
+friction: 0.2
+temperature_K: 300

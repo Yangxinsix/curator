@@ -35,7 +35,7 @@ class MDThermoLogger(Callback):
     ):
         self.header = header
         self.interval = max(1, int(interval))
-        self.log = logger or logging.getLogger("Simulator")
+        self.log = logger or logging.getLogger(__name__)
 
         # Resolve variables
         if isinstance(variables, str) and variables in self.default_combinations:
