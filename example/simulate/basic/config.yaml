@@ -16,14 +16,15 @@ simulator:
     interval: 1
     header: true
   _target_: curator.simulate.core.simulator.Simulator
-  init_traj: ../LiFePO4.traj
+  init_traj: ../../LiFePO4.traj
   start_index: -1
   run_kwargs:
     steps: 100
 cfg: simulate.yaml
 seed: 1234
 run_path: .
-model_path: ../train/model_path/best_model_epoch=119_step=15240_val_total_loss=0.01.ckpt
+model_path: ../../train/model_path/best_model_epoch=119_step=15240_val_total_loss=0.01.ckpt
 dataset: null
 device: cuda
 deploy: null
+calculator: ${model_path}

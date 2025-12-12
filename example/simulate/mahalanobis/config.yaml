@@ -35,7 +35,7 @@ simulator:
   - _target_: curator.simulate.callbacks.early_stop.EarlyStop
   _target_: curator.simulate.core.simulator.Simulator
   init_traj: ../../LiFePO4.traj
-  start_index: -1
+  start_index: 0
   run_kwargs:
     steps: 100
 cfg: simulate.yaml
