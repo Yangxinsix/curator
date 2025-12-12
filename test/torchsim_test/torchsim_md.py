@@ -16,6 +16,7 @@ from curator.interface import CuratorTorchSimAdapter
 from torch_sim import integrate
 from torch_sim.integrators import nve
 from torch_sim.trajectory import TrajectoryReporter
+import time
 
 
 def main():
@@ -52,11 +53,13 @@ def main():
         metadata={"note": "curator+torch-sim demo"},
     )
 
+    start = time.time()
+
     final_state = integrate(
         atoms,
         adapter,
         integrator=nve,
-        n_steps=100,
+        n_steps=1000,
         temperature=300.0,
         timestep=1e-3,
         trajectory_reporter=reporter,
@@ -66,7 +69,7 @@ def main():
     print("Final potential energy (eV):", final_state.energy)
     print("Final forces shape:", final_state.forces.shape)
     print("Trajectory written to: md_report.h5")
-
+    print(f"Time for this simulation: {time.time() - start} s")
 
 if __name__ == "__main__":
     main()

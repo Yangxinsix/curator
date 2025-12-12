@@ -1,0 +1,128 @@
+[2025-12-12 15:09:50,375][curator][DEBUG] - Running on host: cad184d29a10
+[2025-12-12 15:09:50,376][curator][DEBUG] - Seed with <1234>
+[2025-12-12 15:09:50,837][curator.layer._feature][WARNING] - Module repr_callback is not provided. To calculate mahalanobis, the provided dataset will be used to calculate precision matrix afterwards.
+[2025-12-12 15:09:50,840][curator.layer._feature][INFO] - Calculating features from provided dataset <../../LiFePO4.traj>.
+[2025-12-12 15:09:50,841][curator.layer._feature][INFO] - Calculating precision matrix from 2257 structures.
+[2025-12-12 15:09:51,243][curator.layer._feature][INFO] - Processing batch 1/18
+[2025-12-12 15:09:52,535][curator.layer._feature][INFO] - Processing batch 2/18
+[2025-12-12 15:09:53,442][curator.layer._feature][INFO] - Processing batch 3/18
+[2025-12-12 15:09:54,420][curator.layer._feature][INFO] - Processing batch 4/18
+[2025-12-12 15:09:55,121][curator.layer._feature][INFO] - Processing batch 5/18
+[2025-12-12 15:09:55,823][curator.layer._feature][INFO] - Processing batch 6/18
+[2025-12-12 15:09:56,522][curator.layer._feature][INFO] - Processing batch 7/18
+[2025-12-12 15:09:57,254][curator.layer._feature][INFO] - Processing batch 8/18
+[2025-12-12 15:09:58,001][curator.layer._feature][INFO] - Processing batch 9/18
+[2025-12-12 15:09:58,734][curator.layer._feature][INFO] - Processing batch 10/18
+[2025-12-12 15:09:59,440][curator.layer._feature][INFO] - Processing batch 11/18
+[2025-12-12 15:10:00,134][curator.layer._feature][INFO] - Processing batch 12/18
+[2025-12-12 15:10:00,827][curator.layer._feature][INFO] - Processing batch 13/18
+[2025-12-12 15:10:01,539][curator.layer._feature][INFO] - Processing batch 14/18
+[2025-12-12 15:10:02,248][curator.layer._feature][INFO] - Processing batch 15/18
+[2025-12-12 15:10:02,938][curator.layer._feature][INFO] - Processing batch 16/18
+[2025-12-12 15:10:03,626][curator.layer._feature][INFO] - Processing batch 17/18
+[2025-12-12 15:10:04,196][curator.layer._feature][INFO] - Processing batch 18/18
+[2025-12-12 15:10:04,665][curator.simulate.callbacks.calc][DEBUG] - Calcator assigned to atoms.
+[2025-12-12 15:10:04,665][curator.simulate.callbacks.thermo][INFO] -            step           epot           ekin           etot      maha_dist     is_outlier     is_warning
+[2025-12-12 15:10:04,666][curator.simulate.callbacks.thermo][INFO] - uncertainty backend state: <curator.simulate.uncertainty.auto.AutoUncertainty object at 0x7f5e43749610>
+[2025-12-12 15:10:04,695][curator.simulate.callbacks.thermo][INFO] - uncertainty snapshot: {'maha_dist': 10.914889335632324, 'is_outlier': False, 'is_warning': False}
+[2025-12-12 15:10:04,696][curator.simulate.callbacks.thermo][INFO] -               1     -184.13094        0.84544     -183.28549       10.91489        0.00000        0.00000
+[2025-12-12 15:10:04,737][curator.simulate.callbacks.thermo][INFO] -               2     -183.87991        0.75136     -183.12855       10.86500        0.00000        0.00000
+[2025-12-12 15:10:04,777][curator.simulate.callbacks.thermo][INFO] -               3     -183.73685        0.67737     -183.05948       10.99396        0.00000        0.00000
+[2025-12-12 15:10:04,827][curator.simulate.callbacks.thermo][INFO] -               4     -183.76134        0.70859     -183.05275       11.16841        0.00000        0.00000
+[2025-12-12 15:10:04,867][curator.simulate.callbacks.thermo][INFO] -               5     -183.55849        0.60658     -182.95191       11.55881        0.00000        0.00000
+[2025-12-12 15:10:04,907][curator.simulate.callbacks.thermo][INFO] -               6     -183.39374        0.55123     -182.84250       12.05577        0.00000        0.00000
+[2025-12-12 15:10:04,945][curator.simulate.callbacks.thermo][INFO] -               7     -183.45721        0.63797     -182.81925       12.38033        0.00000        0.00000
+[2025-12-12 15:10:04,983][curator.simulate.callbacks.thermo][INFO] -               8     -183.42830        0.79094     -182.63736       12.96225        0.00000        0.00000
+[2025-12-12 15:10:05,022][curator.simulate.callbacks.thermo][INFO] -               9     -183.28146        0.88911     -182.39235       13.83416        0.00000        0.00000
+[2025-12-12 15:10:05,061][curator.simulate.callbacks.thermo][INFO] -              10     -183.21799        0.87104     -182.34695       14.76986        0.00000        0.00000
+[2025-12-12 15:10:05,099][curator.simulate.callbacks.thermo][INFO] -              11     -183.10150        0.83281     -182.26869       15.80052        0.00000        0.00000
+[2025-12-12 15:10:05,137][curator.simulate.callbacks.thermo][INFO] -              12     -182.92021        0.62310     -182.29712       16.45048        0.00000        0.00000
+[2025-12-12 15:10:05,176][curator.simulate.callbacks.thermo][INFO] -              13     -182.99106        0.67833     -182.31273       16.38073        0.00000        0.00000
+[2025-12-12 15:10:05,217][curator.simulate.callbacks.thermo][INFO] -              14     -183.14188        0.78528     -182.35660       15.89443        0.00000        0.00000
+[2025-12-12 15:10:05,255][curator.simulate.callbacks.thermo][INFO] -              15     -183.20976        0.79376     -182.41600       15.35763        0.00000        0.00000
+[2025-12-12 15:10:05,293][curator.simulate.callbacks.thermo][INFO] -              16     -183.26024        0.82340     -182.43684       15.08476        0.00000        0.00000
+[2025-12-12 15:10:05,332][curator.simulate.callbacks.thermo][INFO] -              17     -183.23306        0.77382     -182.45925       15.17249        0.00000        0.00000
+[2025-12-12 15:10:05,370][curator.simulate.callbacks.thermo][INFO] -              18     -183.24033        0.78629     -182.45404       15.23147        0.00000        0.00000
+[2025-12-12 15:10:05,409][curator.simulate.callbacks.thermo][INFO] -              19     -183.28159        0.90061     -182.38098       15.05339        0.00000        0.00000
+[2025-12-12 15:10:05,448][curator.simulate.callbacks.thermo][INFO] -              20     -183.33939        1.01249     -182.32690       15.02024        0.00000        0.00000
+[2025-12-12 15:10:05,488][curator.simulate.callbacks.thermo][INFO] -              21     -183.35506        1.01060     -182.34446       15.06800        0.00000        0.00000
+[2025-12-12 15:10:05,528][curator.simulate.callbacks.thermo][INFO] -              22     -183.29533        1.02568     -182.26965       15.26497        0.00000        0.00000
+[2025-12-12 15:10:05,568][curator.simulate.callbacks.thermo][INFO] -              23     -183.21509        0.99259     -182.22250       15.73144        0.00000        0.00000
+[2025-12-12 15:10:05,609][curator.simulate.callbacks.thermo][INFO] -              24     -183.05475        0.87266     -182.18209       16.34908        0.00000        0.00000
+[2025-12-12 15:10:05,648][curator.simulate.callbacks.thermo][INFO] -              25     -182.97968        0.90297     -182.07670       16.54093        0.00000        0.00000
+[2025-12-12 15:10:05,688][curator.simulate.callbacks.thermo][INFO] -              26     -183.09048        1.10349     -181.98700       16.16596        0.00000        0.00000
+[2025-12-12 15:10:05,727][curator.simulate.callbacks.thermo][INFO] -              27     -183.14322        1.06532     -182.07790       15.75553        0.00000        0.00000
+[2025-12-12 15:10:05,766][curator.simulate.callbacks.thermo][INFO] -              28     -183.19980        1.23250     -181.96730       15.53916        0.00000        0.00000
+[2025-12-12 15:10:05,805][curator.simulate.callbacks.thermo][INFO] -              29     -183.23375        1.14071     -182.09304       15.23957        0.00000        0.00000
+[2025-12-12 15:10:05,845][curator.simulate.callbacks.thermo][INFO] -              30     -183.22090        1.16107     -182.05983       15.03536        0.00000        0.00000
+[2025-12-12 15:10:05,884][curator.simulate.callbacks.thermo][INFO] -              31     -183.11357        1.19953     -181.91404       15.29298        0.00000        0.00000
+[2025-12-12 15:10:05,924][curator.simulate.callbacks.thermo][INFO] -              32     -183.02025        1.20457     -181.81568       15.80621        0.00000        0.00000
+[2025-12-12 15:10:05,963][curator.simulate.callbacks.thermo][INFO] -              33     -182.85965        1.09308     -181.76657       16.51326        0.00000        0.00000
+[2025-12-12 15:10:06,003][curator.simulate.callbacks.thermo][INFO] -              34     -182.90947        1.01142     -181.89805       16.76853        0.00000        0.00000
+[2025-12-12 15:10:06,043][curator.simulate.callbacks.thermo][INFO] -              35     -182.88055        1.11149     -181.76907       17.03070        0.00000        0.00000
+[2025-12-12 15:10:06,083][curator.simulate.callbacks.thermo][INFO] -              36     -182.76233        0.82086     -181.94147       17.34850        0.00000        0.00000
+[2025-12-12 15:10:06,123][curator.simulate.callbacks.thermo][INFO] -              37     -182.83644        0.96598     -181.87046       17.36826        0.00000        0.00000
+[2025-12-12 15:10:06,162][curator.simulate.callbacks.thermo][INFO] -              38     -183.07161        1.04067     -182.03094       16.97098        0.00000        0.00000
+[2025-12-12 15:10:06,201][curator.simulate.callbacks.thermo][INFO] -              39     -183.01244        1.02286     -181.98957       16.86563        0.00000        0.00000
+[2025-12-12 15:10:06,241][curator.simulate.callbacks.thermo][INFO] -              40     -183.01109        0.89298     -182.11811       16.65996        0.00000        0.00000
+[2025-12-12 15:10:06,280][curator.simulate.callbacks.thermo][INFO] -              41     -183.14738        0.98736     -182.16003       16.12549        0.00000        0.00000
+[2025-12-12 15:10:06,320][curator.simulate.callbacks.thermo][INFO] -              42     -183.23050        0.82931     -182.40119       15.51804        0.00000        0.00000
+[2025-12-12 15:10:06,360][curator.simulate.callbacks.thermo][INFO] -              43     -183.26486        0.86785     -182.39702       15.23214        0.00000        0.00000
+[2025-12-12 15:10:06,400][curator.simulate.callbacks.thermo][INFO] -              44     -183.15663        0.88238     -182.27425       15.34870        0.00000        0.00000
+[2025-12-12 15:10:06,442][curator.simulate.callbacks.thermo][INFO] -              45     -183.14331        0.89831     -182.24500       15.38164        0.00000        0.00000
+[2025-12-12 15:10:06,491][curator.simulate.callbacks.thermo][INFO] -              46     -183.25119        1.03667     -182.21452       15.41370        0.00000        0.00000
+[2025-12-12 15:10:06,530][curator.simulate.callbacks.thermo][INFO] -              47     -183.27188        0.97505     -182.29683       15.50975        0.00000        0.00000
+[2025-12-12 15:10:06,570][curator.simulate.callbacks.thermo][INFO] -              48     -183.03983        0.94890     -182.09093       15.66602        0.00000        0.00000
+[2025-12-12 15:10:06,609][curator.simulate.callbacks.thermo][INFO] -              49     -183.12653        1.09061     -182.03591       15.30971        0.00000        0.00000
+[2025-12-12 15:10:06,648][curator.simulate.callbacks.thermo][INFO] -              50     -183.23996        1.05125     -182.18871       14.79481        0.00000        0.00000
+[2025-12-12 15:10:06,687][curator.simulate.callbacks.thermo][INFO] -              51     -183.15672        0.93372     -182.22300       14.31939        0.00000        0.00000
+[2025-12-12 15:10:06,726][curator.simulate.callbacks.thermo][INFO] -              52     -183.17165        0.81366     -182.35799       14.22619        0.00000        0.00000
+[2025-12-12 15:10:06,764][curator.simulate.callbacks.thermo][INFO] -              53     -183.36954        1.11212     -182.25742       14.23059        0.00000        0.00000
+[2025-12-12 15:10:06,801][curator.simulate.callbacks.thermo][INFO] -              54     -183.27634        0.94300     -182.33333       14.81815        0.00000        0.00000
+[2025-12-12 15:10:06,842][curator.simulate.callbacks.thermo][INFO] -              55     -183.02353        0.83638     -182.18714       15.57745        0.00000        0.00000
+[2025-12-12 15:10:06,880][curator.simulate.callbacks.thermo][INFO] -              56     -183.07436        0.70283     -182.37152       15.69581        0.00000        0.00000
+[2025-12-12 15:10:06,919][curator.simulate.callbacks.thermo][INFO] -              57     -183.25395        0.90442     -182.34954       15.53785        0.00000        0.00000
+[2025-12-12 15:10:06,957][curator.simulate.callbacks.thermo][INFO] -              58     -183.32431        0.91047     -182.41384       15.45495        0.00000        0.00000
+[2025-12-12 15:10:06,995][curator.simulate.callbacks.thermo][INFO] -              59     -183.24155        0.84195     -182.39960       15.49002        0.00000        0.00000
+[2025-12-12 15:10:07,034][curator.simulate.callbacks.thermo][INFO] -              60     -183.24265        0.86531     -182.37734       15.27404        0.00000        0.00000
+[2025-12-12 15:10:07,072][curator.simulate.callbacks.thermo][INFO] -              61     -183.19934        0.73986     -182.45948       15.10470        0.00000        0.00000
+[2025-12-12 15:10:07,113][curator.simulate.callbacks.thermo][INFO] -              62     -183.28502        0.90910     -182.37592       14.69073        0.00000        0.00000
+[2025-12-12 15:10:07,152][curator.simulate.callbacks.thermo][INFO] -              63     -183.34241        0.91455     -182.42786       14.16743        0.00000        0.00000
+[2025-12-12 15:10:07,191][curator.simulate.callbacks.thermo][INFO] -              64     -183.38031        0.88225     -182.49806       13.93948        0.00000        0.00000
+[2025-12-12 15:10:07,229][curator.simulate.callbacks.thermo][INFO] -              65     -183.33783        0.79815     -182.53968       14.03817        0.00000        0.00000
+[2025-12-12 15:10:07,269][curator.simulate.callbacks.thermo][INFO] -              66     -183.41028        0.91046     -182.49982       13.99201        0.00000        0.00000
+[2025-12-12 15:10:07,309][curator.simulate.callbacks.thermo][INFO] -              67     -183.38722        0.77558     -182.61164       13.97308        0.00000        0.00000
+[2025-12-12 15:10:07,350][curator.simulate.callbacks.thermo][INFO] -              68     -183.31874        0.65185     -182.66689       13.92119        0.00000        0.00000
+[2025-12-12 15:10:07,390][curator.simulate.callbacks.thermo][INFO] -              69     -183.38863        0.80372     -182.58490       13.77561        0.00000        0.00000
+[2025-12-12 15:10:07,430][curator.simulate.callbacks.thermo][INFO] -              70     -183.51772        0.87904     -182.63868       13.13061        0.00000        0.00000
+[2025-12-12 15:10:07,471][curator.simulate.callbacks.thermo][INFO] -              71     -183.49147        0.78826     -182.70321       12.85975        0.00000        0.00000
+[2025-12-12 15:10:07,511][curator.simulate.callbacks.thermo][INFO] -              72     -183.38541        0.70344     -182.68197       13.13011        0.00000        0.00000
+[2025-12-12 15:10:07,550][curator.simulate.callbacks.thermo][INFO] -              73     -183.49701        0.95867     -182.53834       13.36604        0.00000        0.00000
+[2025-12-12 15:10:07,590][curator.simulate.callbacks.thermo][INFO] -              74     -183.40668        0.99530     -182.41138       13.64456        0.00000        0.00000
+[2025-12-12 15:10:07,630][curator.simulate.callbacks.thermo][INFO] -              75     -183.37163        1.04003     -182.33159       13.91104        0.00000        0.00000
+[2025-12-12 15:10:07,671][curator.simulate.callbacks.thermo][INFO] -              76     -183.37326        1.02617     -182.34709       14.05624        0.00000        0.00000
+[2025-12-12 15:10:07,711][curator.simulate.callbacks.thermo][INFO] -              77     -183.26379        0.88773     -182.37607       14.28011        0.00000        0.00000
+[2025-12-12 15:10:07,752][curator.simulate.callbacks.thermo][INFO] -              78     -183.23917        0.94995     -182.28922       14.31376        0.00000        0.00000
+[2025-12-12 15:10:07,792][curator.simulate.callbacks.thermo][INFO] -              79     -183.32903        1.03049     -182.29853       14.34532        0.00000        0.00000
+[2025-12-12 15:10:07,832][curator.simulate.callbacks.thermo][INFO] -              80     -183.33519        1.04065     -182.29454       14.78228        0.00000        0.00000
+[2025-12-12 15:10:07,871][curator.simulate.callbacks.thermo][INFO] -              81     -183.22620        0.84775     -182.37845       15.69399        0.00000        0.00000
+[2025-12-12 15:10:07,909][curator.simulate.callbacks.thermo][INFO] -              82     -183.07571        0.96092     -182.11479       16.77415        0.00000        0.00000
+[2025-12-12 15:10:07,947][curator.simulate.callbacks.thermo][INFO] -              83     -183.04695        0.99103     -182.05592       17.49736        0.00000        0.00000
+[2025-12-12 15:10:07,984][curator.simulate.callbacks.thermo][INFO] -              84     -183.02271        0.78906     -182.23365       17.73477        0.00000        0.00000
+[2025-12-12 15:10:08,020][curator.simulate.callbacks.thermo][INFO] -              85     -183.01859        0.89992     -182.11866       17.91026        0.00000        0.00000
+[2025-12-12 15:10:08,056][curator.simulate.callbacks.thermo][INFO] -              86     -182.92886        0.76624     -182.16263       18.51617        0.00000        0.00000
+[2025-12-12 15:10:08,096][curator.simulate.callbacks.thermo][INFO] -              87     -182.90065        0.64140     -182.25925       18.81738        0.00000        0.00000
+[2025-12-12 15:10:08,132][curator.simulate.callbacks.thermo][INFO] -              88     -183.03789        0.97497     -182.06292       18.56546        0.00000        0.00000
+[2025-12-12 15:10:08,168][curator.simulate.callbacks.thermo][INFO] -              89     -182.98720        0.79205     -182.19514       18.76360        0.00000        0.00000
+[2025-12-12 15:10:08,204][curator.simulate.callbacks.thermo][INFO] -              90     -182.97704        0.64173     -182.33530       18.89044        0.00000        0.00000
+[2025-12-12 15:10:08,240][curator.simulate.callbacks.thermo][INFO] -              91     -183.13763        0.84080     -182.29684       18.37795        0.00000        0.00000
+[2025-12-12 15:10:08,277][curator.simulate.callbacks.thermo][INFO] -              92     -183.14066        0.79557     -182.34509       17.92326        0.00000        0.00000
+[2025-12-12 15:10:08,313][curator.simulate.callbacks.thermo][INFO] -              93     -183.04863        0.87383     -182.17480       17.87595        0.00000        0.00000
+[2025-12-12 15:10:08,350][curator.simulate.callbacks.thermo][INFO] -              94     -183.11818        0.74995     -182.36823       17.82564        0.00000        0.00000
+[2025-12-12 15:10:08,386][curator.simulate.callbacks.thermo][INFO] -              95     -183.23203        0.87880     -182.35323       17.51834        0.00000        0.00000
+[2025-12-12 15:10:08,422][curator.simulate.callbacks.thermo][INFO] -              96     -183.20898        0.82809     -182.38089       17.04806        0.00000        0.00000
+[2025-12-12 15:10:08,458][curator.simulate.callbacks.thermo][INFO] -              97     -183.15524        0.81560     -182.33965       16.10138        0.00000        0.00000
+[2025-12-12 15:10:08,500][curator.simulate.callbacks.thermo][INFO] -              98     -183.25233        0.94066     -182.31168       14.87045        0.00000        0.00000
+[2025-12-12 15:10:08,537][curator.simulate.callbacks.thermo][INFO] -              99     -183.28992        0.97716     -182.31276       13.83535        0.00000        0.00000
+[2025-12-12 15:10:08,574][curator.simulate.callbacks.thermo][INFO] -             100     -183.27313        0.79853     -182.47461       12.97296        0.00000        0.00000
+[2025-12-12 15:10:08,614][curator.simulate.callbacks.thermo][INFO] -             101     -183.44716        0.91012     -182.53704       12.31070        0.00000        0.00000

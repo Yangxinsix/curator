@@ -1,0 +1,32 @@
+simulator:
+  engine:
+    _target_: curator.simulate.engines.ase_md.MDEngine
+    dynamics_cls: ase.md.langevin.Langevin
+    timestep: 0.5
+    friction: 0.2
+    temperature_K: 300
+  callbacks:
+    calc_assign:
+      _target_: curator.simulate.callbacks.calc.CalculatorAssign
+      calculator: ${model_path}
+      warmup: true
+      require_forces: false
+      apply_to_neb_images: false
+    thermo:
+      _target_: curator.simulate.callbacks.thermo.MDThermoLogger
+      variables: basic_energies
+      interval: 1
+      header: true
+  _target_: curator.simulate.core.simulator.Simulator
+  init_traj: null
+  start_index: null
+  run_kwargs:
+    steps: 100
+cfg: simulate.yaml
+seed: 1234
+run_path: .
+model_path: null
+dataset: null
+device: cuda
+deploy: null
+calculator: ${model_path}

@@ -37,7 +37,7 @@ simulator:
   init_traj: ../../LiFePO4.traj
   start_index: 0
   run_kwargs:
-    steps: 100
+    steps: 1000
 cfg: simulate.yaml
 seed: 1234
 run_path: .
