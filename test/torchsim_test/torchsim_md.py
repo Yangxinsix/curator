@@ -14,7 +14,7 @@ import torch
 from ase.io import Trajectory
 from curator.interface import CuratorTorchSimAdapter
 from torch_sim import integrate
-from torch_sim.integrators import Integrator
+from torch_sim.integrators import nve
 from torch_sim.trajectory import TrajectoryReporter
 
 
@@ -55,7 +55,7 @@ def main():
     final_state = integrate(
         atoms,
         adapter,
-        integrator=Integrator.nve,
+        integrator=nve,
         n_steps=100,
         temperature=300.0,
         timestep=1e-3,
