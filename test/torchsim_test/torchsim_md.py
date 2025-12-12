@@ -13,18 +13,19 @@ Run:
 import torch
 from ase.io import Trajectory
 from curator.interface import CuratorTorchSimAdapter
-from torch_sim import integrate
-from torch_sim.integrators import nve
-from torch_sim.trajectory import TrajectoryReporter
+from curator.simulate.engines.torchsim import TorchSimEngine
+from curator.simulate.callbacks.torchsim import TorchSimThermoLogger
+from curator.simulate.core.simulator import Simulator
 import time
 
 
 def main():
-    atoms = Trajectory("../LiFePO4.traj")[0]
+    atoms = Trajectory("test/LiFePO4.traj")[0]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     adapter = CuratorTorchSimAdapter(
-        "../best_model.ckpt",
+        "test/best_model.ckpt",
+        # match paths relative to repo root when running this script
         compute_neighbor_list=True,
         cutoff=None,  # infer from model if available
         detach=True,
@@ -32,44 +33,18 @@ def main():
         load_compiled=False,
     )
 
-    def make_energy_logger():
-        counter = {"step": -1}
-
-        def _log_energy(state, model):
-            counter["step"] += 1
-            energy = getattr(state, "energy", None)
-            if energy is None and model is not None:
-                energy = model(state)["energy"]
-            val = energy.detach().cpu().view(-1).tolist()
-            print(f"[step {counter['step']}] energy={val}")
-            return energy
-
-        return _log_energy
-
-    reporter = TrajectoryReporter(
-        filenames="md_report.h5",
-        state_frequency=1,
-        prop_calculators={1: {"energy": make_energy_logger()}},
-        metadata={"note": "curator+torch-sim demo"},
-    )
+    engine = TorchSimEngine(model=adapter, integrator="nve", temperature=300.0, timestep=1e-3)
+    thermo = TorchSimThermoLogger(interval=10, variables=["step", "epot", "natoms"])
 
     start = time.time()
+    sim = Simulator(atoms, engine, callbacks=[thermo], start_index=None, logger=None)
+    sim.run(steps=100)
 
-    final_state = integrate(
-        atoms,
-        adapter,
-        integrator=nve,
-        n_steps=1000,
-        temperature=300.0,
-        timestep=1e-3,
-        trajectory_reporter=reporter,
-        pbar=False,
-    )
-
-    print("Final potential energy (eV):", final_state.energy)
-    print("Final forces shape:", final_state.forces.shape)
-    print("Trajectory written to: md_report.h5")
+    state = engine.state
+    print("Final potential energy (eV):", state.energy)
+    print("Final forces shape:", state.forces.shape)
     print(f"Time for this simulation: {time.time() - start} s")
+
 
 if __name__ == "__main__":
     main()
