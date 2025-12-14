@@ -20,6 +20,7 @@ class MLCalculator(Calculator):
         energy_scale: float = 1.0,
         forces_scale: float = 1.0,
         stress_scale: float = 1.0,
+        device=None,
         **kwargs
     ) -> None:
         super().__init__(**kwargs)
@@ -32,7 +33,7 @@ class MLCalculator(Calculator):
             forces_scale (float, optional): forces scale. Defaults to 1.0.
         """
         
-        model_like = load_models(model)
+        model_like = load_models(model, device=device)
         self.model = EnsembleModel(model_like) if len(model_like) > 1 else model_like[0]
         self.model.eval()
         self.model_device = next(self.model.parameters()).device

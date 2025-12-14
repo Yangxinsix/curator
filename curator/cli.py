@@ -2,7 +2,7 @@
 from hydra.utils import instantiate
 import hydra
 from hydra import compose, initialize
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, OmegaConf, open_dict
 import sys, os, json
 from pathlib import Path
 import argparse
@@ -18,12 +18,14 @@ from .utils import (
     upgrade_checkpoint,
     convert_mace_to_curator,
     normalize_config_sequences,
+    prune_config_targets,
 )
 import logging
 import socket
 import contextlib
 from typing import Optional, Union, Dict, List
 from pytorch_lightning import seed_everything
+from curator.simulate.sim_logging import log_simulation_summary
 
 # very ugly solution for solving pytorch lighting and myqueue conflictions
 if "SLURM_NTASKS" in os.environ:
@@ -69,6 +71,8 @@ def train(config: DictConfig) -> None:
         config = read_user_config(config.cfg, config_path="configs", config_name="train")
 
     normalize_config_sequences(config)
+    prune_config_targets(config, logger=log)
+    prune_config_targets(config, logger=log)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -401,6 +405,7 @@ def evaluate(config: DictConfig):
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="evaluate")
+    prune_config_targets(config, logger=log)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -443,6 +448,9 @@ def simulate(config: DictConfig):
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="simulate")
+    else:
+        normalize_config_sequences(config)
+        prune_config_targets(config, logger=log)
     
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -452,7 +460,15 @@ def simulate(config: DictConfig):
     fh = logging.FileHandler(os.path.join(config.run_path, "simulation.log"), mode="w")
     fh.setFormatter(CustomFormatter())
     log.addHandler(fh)
+    # mirror to stdout for live feedback
+    if not any(isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) is sys.stdout for h in log.handlers):
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(CustomFormatter())
+        log.addHandler(sh)
+
+    # Brief simulation summary for easier debugging
     log.debug("Running on host: " + str(socket.gethostname()))
+    log_simulation_summary(log, config)
 
     # Set up the seed
     if "seed" in config:
@@ -486,6 +502,8 @@ def select(config: DictConfig):
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="select")
     
+    prune_config_targets(config, logger=log)
+
     # set up logger
     # set logger
     fh = logging.FileHandler(os.path.join(config.run_path, "selection.log"), mode="w")

@@ -1,0 +1,22 @@
+2025-12-14 17:09:50: Simulation setup:
+  Engine    : curator.simulate.engines.ase_md.MDEngine
+  Model     : /home/xinyang/curator/test/best_model.ckpt
+  Init traj : /home/xinyang/curator/test/LiFePO4.traj
+  Systems   : 1 | single system
+  Device    : cpu
+  Engine params: timestep=0.5
+  Callbacks   : curator.simulate.callbacks.calc.CalculatorAssign, curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty, curator.simulate.callbacks.trajectory.TrajectoryWriter, curator.simulate.callbacks.early_stop.EarlyStop
+2025-12-14 17:09:50: Running on host: SKY-20190820VTG
+2025-12-14 17:09:50: Seed with <1234>
+2025-12-14 17:09:50: Module repr_callback is not provided. To calculate mahalanobis, the provided dataset will be used to calculate precision matrix afterwards.
+Calculating features from provided dataset </home/xinyang/curator/test/torchsim_uncertainty/dataset_small.traj>.
+Calculating precision matrix from 5 structures.
+Processing batch 1/1
+Mahalanobis thresholds derived from dataset: low=7.429046, high=8.432985
+2025-12-14 17:09:51: Calcator assigned to atoms.
+           step           epot           ekin           etot      maha_dist     is_outlier     is_warning
+uncertainty backend state: <curator.simulate.uncertainty.auto.AutoUncertainty object at 0x715a4a8e01a0>
+uncertainty snapshot: {'maha_dist': 6.479798793792725, 'is_outlier': False, 'is_warning': False}
+              1     -184.13094        0.84544     -183.28549        6.47980        0.00000        0.00000
+              2     -183.89728        0.65163     -183.24565       11.53837        1.00000        1.00000
+Early stop requested: uncertainty maha_dist flagged as outlier; value=11.538372993469238

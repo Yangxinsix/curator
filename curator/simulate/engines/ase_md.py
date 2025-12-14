@@ -35,11 +35,26 @@ class MDEngine(BaseEngine):
                 self.atoms = ctx_or_atoms.atoms if isinstance(ctx_or_atoms, SimContext) else ctx_or_atoms
                 if not isinstance(self.atoms, Atoms):
                     raise TypeError("MDEngine.setup expects SimContext or Atoms.")
+                dyn_kwargs = dict(self.kw)
+                timestep = dyn_kwargs.pop("timestep", None)
+                dt = dyn_kwargs.pop("dt", None)
+                friction = dyn_kwargs.get("friction", None)
+                temp_k = dyn_kwargs.get("temperature_K", dyn_kwargs.get("temperature", None))
                 try:
-                    self.dyn = self.dynamics_cls(self.atoms, **self.kw)
+                    self.dyn = self.dynamics_cls(self.atoms, **dyn_kwargs)
                 except TypeError:
-                    # support functools.partial or callables expecting atoms only
-                    self.dyn = self.dynamics_cls(self.atoms)
+                    # Retry with explicit timestep/temperature/friction if provided
+                    if timestep is not None or dt is not None:
+                        tval = timestep if timestep is not None else dt
+                        extra = {}
+                        if temp_k is not None:
+                            extra["temperature_K"] = temp_k
+                        if friction is not None:
+                            extra["friction"] = friction
+                        self.dyn = self.dynamics_cls(self.atoms, tval, **extra)
+                    else:
+                        # support functools.partial or callables expecting atoms only
+                        self.dyn = self.dynamics_cls(self.atoms)
             else:
                 # if dynamics_cls is an object but not a class or callable
                 self.dyn = self.dynamics_cls
@@ -54,4 +69,13 @@ class MDEngine(BaseEngine):
     def run(self, steps: int, **_) -> None:
         if self.dyn is None:
             raise RuntimeError("Call setup() before run().")
-        self.dyn.run(steps)
+        try:
+            self.dyn.run(steps)
+        except StopIteration:
+            # Early stop requested by callbacks; swallow to allow graceful exit
+            return
+        except RuntimeError as exc:
+            # ASE wraps StopIteration into RuntimeError("generator raised StopIteration")
+            if "StopIteration" in str(exc):
+                return
+            raise

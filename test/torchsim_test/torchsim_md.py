@@ -20,11 +20,11 @@ import time
 
 
 def main():
-    atoms = Trajectory("test/LiFePO4.traj")[0]
+    atoms = Trajectory("..//LiFePO4.traj")[0]
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     adapter = CuratorTorchSimAdapter(
-        "test/best_model.ckpt",
+        "../best_model.ckpt",
         # match paths relative to repo root when running this script
         compute_neighbor_list=True,
         cutoff=None,  # infer from model if available

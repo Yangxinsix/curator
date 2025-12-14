@@ -1,0 +1,4 @@
+_target_: curator.simulate.callbacks.trajectory.TrajectoryWriter
+path: ${run_path}/trajectory_sys{i}.traj
+interval: 1
+per_system: true

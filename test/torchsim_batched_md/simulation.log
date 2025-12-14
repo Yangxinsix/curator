@@ -1,0 +1,13 @@
+2025-12-13 16:34:29: Simulation setup:
+  Engine    : curator.simulate.engines.torchsim.TorchSimEngine
+  Model     : /home/xinyang/curator/test/best_model.ckpt
+  Init traj : /home/xinyang/curator/test/LiFePO4.traj
+  Systems   : 2 | frames [0, 1]
+  Device    : cpu
+  Engine params: integrator=nve, temperature=300.0, timestep=0.001
+  Callbacks   : curator.simulate.callbacks.torchsim_logger.TorchSimThermoLogger
+2025-12-13 16:34:29: Running on host: SKY-20190820VTG
+2025-12-13 16:34:29: Seed with <1234>
+           step            sys           epot           ekin           etot            sys           epot           ekin           etot
+              1              0     -184.12386        0.05222     -184.07163              1     -184.11382        0.02757     -184.08625
+              2              0     -184.10266        0.05242     -184.05024              1     -184.09003        0.02767     -184.06235

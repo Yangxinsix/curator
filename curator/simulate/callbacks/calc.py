@@ -40,12 +40,14 @@ class CalculatorAssign(Callback):
         require_forces: bool = False,
         apply_to_neb_images: bool = False,
         logger: Optional[logging.Logger] = None,
+        device: Optional[str] = None,
     ):
         self._calculator = calculator
         self.warmup = warmup
         self.require_forces = require_forces
         self.apply_to_neb_images = apply_to_neb_images
         self.log = logger or logging.getLogger(__name__)
+        self.device = device
 
     def _make_calc(self) -> Calculator:
         # Already a calculator
@@ -58,8 +60,8 @@ class CalculatorAssign(Callback):
 
         # Model-like: path(s) or module(s)
         model_like: Any = self._calculator
-        model_list = load_models(model_like)
-        self._calculator = MLCalculator(model=model_list)
+        model_list = load_models(model_like, device=self.device)
+        self._calculator = MLCalculator(model=model_list, device=self.device)
         return self._calculator
 
     def _assign_and_warmup(self, atoms) -> None:

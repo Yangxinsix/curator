@@ -1,0 +1,61 @@
+simulator:
+  engine:
+    _target_: curator.simulate.engines.torchsim.TorchSimEngine
+    model:
+      _target_: curator.interface.torchsim.CuratorTorchSimAdapter
+      model: ${model_path}
+      cutoff: null
+      compute_neighbor_list: true
+      transforms: null
+      device: ${device}
+      load_compiled: false
+      load_weights_only: false
+      return_cell_displacements: false
+      outputs: null
+      energy_scale: 1.0
+      forces_scale: 1.0
+      stress_scale: 1.0
+      detach: true
+    integrator: nve
+    temperature: 300.0
+    timestep: 0.001
+    integrator_kwargs: {}
+  callbacks:
+  - _target_: curator.simulate.callbacks.calc.CalculatorAssign
+    calculator: ${model_path}
+    warmup: true
+    require_forces: false
+    apply_to_neb_images: false
+    device: ${device}
+  - _target_: curator.simulate.callbacks.trajectory.TrajectoryWriter
+    path: ${run_path}/trajectory_sys{i}.traj
+    interval: 1
+    per_system: true
+  - _target_: curator.simulate.callbacks.torchsim_logger.TorchSimThermoLogger
+    variables: basic_energies
+    interval: 1
+    header: true
+    per_system_logs: true
+    log_dir: ${run_path}
+    monitor: maha_dist
+    low: null
+    high: null
+    uncertainty_backend:
+      _target_: curator.simulate.uncertainty.auto.AutoUncertainty
+      calculator: ${model_path}
+      dataset: ${dataset}
+      device: ${device}
+  - _target_: curator.simulate.callbacks.early_stop.EarlyStop
+  _target_: curator.simulate.core.simulator.Simulator
+  init_traj: /home/xinyang/curator/test/LiFePO4.traj
+  start_index: null
+  run_kwargs:
+    steps: 100
+cfg: torchsim.yaml
+seed: 1234
+run_path: /home/xinyang/curator/test/torchsim_defaults
+model_path: /home/xinyang/curator/test/best_model.ckpt
+dataset: /home/xinyang/curator/test/LiFePO4.traj
+device: cuda
+deploy: null
+calculator: ${model_path}

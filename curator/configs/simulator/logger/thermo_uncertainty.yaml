@@ -1,0 +1,12 @@
+_target_: curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty
+variables: basic_energies
+interval: 1
+header: true
+monitor: maha_dist
+low: null
+high: null
+uncertainty_backend:
+  _target_: curator.simulate.uncertainty.auto.AutoUncertainty
+  calculator: ${model_path}
+  dataset: ${dataset}
+  device: ${device}

@@ -1,0 +1,10 @@
+defaults:
+  - simulator: torchsim
+
+model_path: /home/xinyang/curator/test/best_model.ckpt
+dataset: /home/xinyang/curator/test/LiFePO4.traj
+device: cuda
+run_path: /home/xinyang/curator/test/torchsim_defaults
+
+simulator:
+  init_traj: /home/xinyang/curator/test/LiFePO4.traj

@@ -1,0 +1,14 @@
+_target_: curator.simulate.callbacks.torchsim_logger.TorchSimThermoLogger
+variables: basic_energies
+interval: 1
+header: true
+per_system_logs: true
+log_dir: ${run_path}
+monitor: maha_dist
+low: null
+high: null
+uncertainty_backend:
+  _target_: curator.simulate.uncertainty.auto.AutoUncertainty
+  calculator: ${model_path}
+  dataset: ${dataset}
+  device: ${device}
