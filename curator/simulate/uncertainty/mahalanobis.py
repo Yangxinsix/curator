@@ -9,6 +9,7 @@ from ase.calculators.calculator import Calculator
 
 from curator.data import properties
 from .base import BaseUncertainty
+import logging
 
 
 class MahalanobisUncertainty(BaseUncertainty):
@@ -36,6 +37,8 @@ class MahalanobisUncertainty(BaseUncertainty):
             high_threshold=high_threshold,
             threshold_key=properties.maha_dist,
         )
+
+        self._logger = logging.getLogger(__name__)
 
         if self.calc is not None:
             for module in self.calc.model.output_modules:
@@ -66,6 +69,9 @@ class MahalanobisUncertainty(BaseUncertainty):
                 torch.quantile(high_source, low_threshold).item()
                 if low_threshold < 1.0
                 else torch.max(high_source).item() * low_threshold
+            )
+            self._logger.info(
+                f"Mahalanobis thresholds derived from dataset: low={self.low_threshold:.6f}, high={self.high_threshold:.6f}"
             )
         else:
             self.high_threshold = high_threshold

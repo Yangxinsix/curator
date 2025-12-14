@@ -58,8 +58,11 @@ class ThermoWithUncertainty(MDThermoLogger):
         )
         self._unc_backend = uncertainty_backend
         self.monitor = monitor
-        self.low = float(low)
-        self.high = float(high)
+        # allow logger thresholds to inherit backend thresholds when not specified
+        backend_low = getattr(self._unc_backend, "low_threshold", None) if self._unc_backend else None
+        backend_high = getattr(self._unc_backend, "high_threshold", None) if self._unc_backend else None
+        self.low = float(low) if low is not None else (float(backend_low) if backend_low is not None else None)
+        self.high = float(high) if high is not None else (float(backend_high) if backend_high is not None else None)
         self.save_path = save_path
         self.uncertain_count = uncertain_count
         self._logged_uncertainty = False
@@ -120,8 +123,15 @@ class ThermoWithUncertainty(MDThermoLogger):
         return super().on_sim_end(ctx)
 
     # --- helpers ---
-    def _get_unc_value(self, ctx: SimContext, key: str):
+    def _get_unc_value(self, ctx: SimContext, key: str, idx: Optional[int] = None):
         data = ctx.state.get("uncertainty") or {}
+        if isinstance(data, list):
+            if idx is None:
+                data = data[0] if data else {}
+            elif idx < len(data):
+                data = data[idx]
+            else:
+                data = {}
         try:
             return float(data.get(key, float("nan")))
         except Exception:
@@ -132,13 +142,16 @@ class ThermoWithUncertainty(MDThermoLogger):
             if k not in self.variables:
                 self.variables.append(k)
             if k not in self.variable_funcs:
-                self.variable_funcs[k] = (lambda kk: (lambda ctx: self._get_unc_value(ctx, kk)))(k)
+                # accept optional idx for batched contexts
+                self.variable_funcs[k] = (lambda kk: (lambda ctx, idx=None: self._get_unc_value(ctx, kk, idx)))(k)
 
     def _resolve_monitor_key(self) -> Optional[str]:
         return self._threshold_key or self.monitor
 
     def _apply_band_and_stop(self, ctx: SimContext):
         data = ctx.state.get("uncertainty") or {}
+        sys_idx = ctx.state.get("system_index")
+        prefix = f"[sys{sys_idx}] " if sys_idx is not None else ""
 
         monitor_key = self._resolve_monitor_key()
 
@@ -151,7 +164,7 @@ class ThermoWithUncertainty(MDThermoLogger):
                 if self._traj is not None:
                     self._traj.write(ctx.atoms)
                 ctx.state["early_stop_reason"] = (
-                    f"uncertainty {monitor_key or 'N/A'} flagged as outlier; "
+                    f"{prefix}uncertainty {monitor_key or 'N/A'} flagged as outlier; "
                     f"value={data.get(monitor_key, 'N/A')}"
                 )
                 return
@@ -163,11 +176,11 @@ class ThermoWithUncertainty(MDThermoLogger):
                     self._low_hits_total += 1
                     if self._low_hits_total >= self.uncertain_count:
                         ctx.state["early_stop_reason"] = (
-                            f"uncertainty {monitor_key or 'N/A'} flagged warning "
+                            f"{prefix}uncertainty {monitor_key or 'N/A'} flagged warning "
                             f"{self._low_hits_total} times (threshold={self.uncertain_count}); "
                             f"last_value={data.get(monitor_key, 'N/A')}"
                         )
-            return
+                return
 
         # Fallback to thresholds
         if monitor_key is None:
@@ -179,7 +192,7 @@ class ThermoWithUncertainty(MDThermoLogger):
         if self.high is not None and val >= self.high:
             if self._traj is not None:
                 self._traj.write(ctx.atoms)
-            ctx.state["early_stop_reason"] = f"uncertainty {monitor_key}={val:.6f} >= high({self.high})"
+            ctx.state["early_stop_reason"] = f"{prefix}uncertainty {monitor_key}={val:.6f} >= high({self.high})"
             return
 
         if self.low is not None and val >= self.low:
@@ -189,6 +202,6 @@ class ThermoWithUncertainty(MDThermoLogger):
                 self._low_hits_total += 1
                 if self._low_hits_total >= self.uncertain_count:
                     ctx.state["early_stop_reason"] = (
-                        f"uncertainty {monitor_key} >= low({self.low}) "
+                        f"{prefix}uncertainty {monitor_key} >= low({self.low}) "
                         f"{self._low_hits_total} times (threshold={self.uncertain_count})"
                     )

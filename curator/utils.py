@@ -3,7 +3,8 @@ from e3nn.util.jit import script
 from omegaconf import open_dict, OmegaConf, DictConfig, ListConfig
 from hydra import compose, initialize, initialize_config_dir
 import hydra
-from hydra.utils import instantiate
+from hydra.utils import instantiate, get_class
+import inspect
 from collections import abc
 import logging
 from ase import units
@@ -554,6 +555,53 @@ def normalize_config_sequences(config: Optional[DictConfig]) -> None:
     if "simulator" in config:
         _listify_config_field(config.simulator, "callbacks")
 
+
+def prune_config_targets(config: Optional[DictConfig], logger: Optional[logging.Logger] = None) -> None:
+    """
+    Remove keys from config nodes that specify a _target_ but include arguments
+    not accepted by the target's signature (unless it has **kwargs).
+    Helps prevent stale parameters from other defaults (e.g., switching models/engines).
+    """
+    if config is None:
+        return
+
+    log = logger or logging.getLogger("curator")
+    special_keys = {"_target_", "_partial_", "_recursive_", "_convert_"}
+
+    def _prune(node: DictConfig, path: str = ""):
+        if not isinstance(node, DictConfig):
+            return
+
+        target = node.get("_target_")
+        if target:
+            try:
+                obj = get_class(str(target))
+            except Exception:
+                obj = None
+
+            if obj is not None:
+                sig = inspect.signature(obj.__init__ if inspect.isclass(obj) else obj)
+                params = sig.parameters
+                if any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values()):
+                    allowed = None
+                else:
+                    allowed = {name for name in params if name != "self"}
+
+                if allowed is not None:
+                    allowed.update(special_keys)
+                    unknown = [k for k in node.keys() if k not in allowed]
+                    if unknown:
+                        with open_dict(node):
+                            for k in unknown:
+                                del node[k]
+                        log.debug(f"Pruned keys {unknown} from config node '{path or '<root>'}' for target {target}")
+
+        for k, v in node.items():
+            if isinstance(v, DictConfig):
+                _prune(v, f"{path}.{k}" if path else k)
+
+    _prune(config)
+
 # Ugly workaround for specifying config files outside of the package
 def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_path="configs", config_name="train.yaml"):
     # load cfg
@@ -604,6 +652,7 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     OmegaConf.set_struct(composed_cfg, False)
 
     normalize_config_sequences(composed_cfg)
+    prune_config_targets(composed_cfg)
         
     return composed_cfg
 

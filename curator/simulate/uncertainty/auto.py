@@ -24,7 +24,9 @@ class AutoUncertainty:
         dataset: Optional[Union[str, None]] = None,
         maha_kwargs: Optional[Dict[str, Any]] = None,
         ensemble_kwargs: Optional[Dict[str, Any]] = None,
+        device: Optional[Any] = None,
     ) -> None:
+        self.device = device
         self.calculator = self._resolve_calculator(calculator)
         self.dataset = dataset
         self.maha_kwargs = dict(maha_kwargs or {})
@@ -38,6 +40,7 @@ class AutoUncertainty:
         self._backend = self._select_backend()
         self.threshold_key = getattr(self._backend, "threshold_key", None) if self._backend else None
         self.uncertainty_keys = getattr(self._backend, "uncertainty_keys", ()) if self._backend else ()
+        self.device = device
 
     def _select_backend(self):
         model = getattr(self.calculator, "model", None)
@@ -67,4 +70,4 @@ class AutoUncertainty:
                 raise TypeError(f"Calculator factory must return Calculator, got {type(made)}")
             return made
         # Model-like (path/paths/module/list)
-        return MLCalculator(model=calc_like)
+        return MLCalculator(model=calc_like, device=self.device)

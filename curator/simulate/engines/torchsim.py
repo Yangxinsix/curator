@@ -27,6 +27,7 @@ class TorchSimEngine(BaseEngine):
         timestep: float = 1e-3,
         unit_system: UnitSystem = UnitSystem.metal,
         integrator_kwargs: Optional[dict[str, Any]] = None,
+        **_: Any,
     ):
         super().__init__()
         self.model = model
@@ -78,7 +79,8 @@ class TorchSimEngine(BaseEngine):
             self.ctx.state["sim_state"] = state
             try:
                 # Optional: keep ctx.atoms in sync for legacy callbacks
-                self.ctx.atoms = ts.io.state_to_atoms(state)[0]
+                atoms = ts.io.state_to_atoms(state)
+                self.ctx.atoms = atoms[0] if len(atoms) == 1 else atoms
             except Exception:
                 pass
 

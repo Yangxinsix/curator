@@ -1,0 +1,6 @@
+_target_: curator.simulate.uncertainty.auto.AutoUncertainty
+calculator: ${calculator}
+dataset: ${dataset}
+maha_kwargs: {}
+ensemble_kwargs: {}
+device: ${device}

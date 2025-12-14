@@ -9,6 +9,7 @@ from curator.data import (
     AseDataReader,
     NeighborListTransform,
     TorchNeighborList,
+    BatchNeighborList,
     Transform,
     properties,
 )
@@ -91,11 +92,17 @@ class CuratorTorchSimAdapter(ModelInterface):
                 if hasattr(t, "requires_grad") and self._compute_forces:
                     t.requires_grad = True
             if not any(isinstance(t, NeighborListTransform) for t in self.transforms):
+                # BatchNeighborList handles both single and multi-system inputs
                 self.transforms.append(
-                    TorchNeighborList(
+                    BatchNeighborList(
                         cutoff=self.cutoff,
                         requires_grad=self._compute_forces,
-                        return_cell_displacements=return_cell_displacements,
+                        return_distance=False,
+                        neighbor_list=TorchNeighborList(
+                            cutoff=self.cutoff,
+                            requires_grad=self._compute_forces,
+                            return_cell_displacements=return_cell_displacements,
+                        ),
                     )
                 )
 
@@ -221,15 +228,18 @@ class CuratorTorchSimAdapter(ModelInterface):
     def _prepare_from_state(self, state: SimState) -> Dict[str, torch.Tensor]:
         # TorchSim stores cell as column vectors; CURATOR expects row vectors.
         cell_tensor = state.cell
-        if cell_tensor.ndim == 3 and cell_tensor.shape[0] == 1:
-            cell_tensor = cell_tensor[0]
-        cell_row = cell_tensor.mT if cell_tensor.ndim == 2 else cell_tensor.T
+        if cell_tensor.ndim == 3:
+            cell_row = cell_tensor.transpose(-2, -1)
+        else:
+            cell_row = cell_tensor.mT
+        if cell_row.ndim == 3:
+            cell_row = cell_row.reshape(-1, 3)
         mapping = {
             properties.positions: state.positions.requires_grad_() if self._compute_forces else state.positions,
             properties.Z: state.atomic_numbers,
             properties.cell: cell_row,
             properties.image_idx: state.system_idx,
-            properties.n_atoms: torch.tensor([state.n_atoms], device=state.device),
+            properties.n_atoms: state.n_atoms_per_system if hasattr(state, "n_atoms_per_system") else torch.tensor([state.n_atoms], device=state.device),
         }
 
         data = {k: v for k, v in mapping.items() if v is not None}

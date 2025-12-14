@@ -35,7 +35,10 @@ class MDThermoLogger(Callback):
     ):
         self.header = header
         self.interval = max(1, int(interval))
-        self.log = logger or logging.getLogger(__name__)
+        # Default to project logger so messages reach simulation.log/console.
+        self.log = logger or logging.getLogger("curator")
+        if self.log.level == logging.NOTSET:
+            self.log.setLevel(logging.INFO)
 
         # Resolve variables
         if isinstance(variables, str) and variables in self.default_combinations:
@@ -63,6 +66,16 @@ class MDThermoLogger(Callback):
         if custom_functions:
             self.variable_funcs.update(custom_functions)
 
+    def _format_value(self, val: Any) -> str:
+        """Pretty-print thermo values consistently."""
+        if isinstance(val, float):
+            return f"{val:15.5f}"
+        if isinstance(val, (list, tuple, np.ndarray)):
+            arr = np.asarray(val).reshape(-1)
+            show = ",".join(f"{x:.3f}" for x in arr[:6])
+            return f"{show:>15}"
+        return f"{str(val):>15}"
+
     # ---- lifecycle hooks ----
     def on_sim_start(self, ctx: SimContext):
         if self.header:
@@ -77,21 +90,13 @@ class MDThermoLogger(Callback):
         for var in self.variables:
             func = self.variable_funcs.get(var)
             if func is None:
-                values.append(f"{'N/A':>15}")
+                values.append(self._format_value("N/A"))
                 continue
             try:
                 val = func(ctx)
             except Exception:
                 val = "N/A"
-            if isinstance(val, float):
-                values.append(f"{val:15.5f}")
-            elif isinstance(val, (list, tuple, np.ndarray)):
-                # compact representation for arrays (e.g., stress)
-                arr = np.asarray(val).reshape(-1)
-                show = ",".join(f"{x:.3f}" for x in arr[:6])
-                values.append(f"{show:>15}")
-            else:
-                values.append(f"{str(val):>15}")
+            values.append(self._format_value(val))
         self.log.info("".join(values))
 
     # ---- variable getters (consume ctx directly) ----

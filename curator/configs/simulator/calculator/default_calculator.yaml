@@ -1,5 +1,7 @@
-_target_: curator.simulate.calculator.MLCalculator
+_target_: curator.simulate.core.calculator.MLCalculator
 _partial_: true
+model: ${model_path}
+device: ${device}
 transforms: []
 energy_scale: 1.0
 forces_scale: 1.0
