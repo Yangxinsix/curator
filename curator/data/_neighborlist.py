@@ -38,7 +38,9 @@ class NeighborListTransform(Transform):
         else:
             edge_info = self._simple_neighbor_list(data[properties.positions])
         data.update(edge_info)
-        data[properties.n_pairs] = torch.tensor([data[properties.edge_idx].shape[0]])
+        # keep tensors on the same device/dtype without Python scalar breaks
+        edge_count = data[properties.edge_idx].shape[0]
+        data[properties.n_pairs] = torch.as_tensor([edge_count], device=data[properties.edge_idx].device, dtype=torch.long)
         
         if self.requires_grad:
             data[properties.edge_diff].requires_grad_()
@@ -129,7 +131,7 @@ class TorchNeighborList(NeighborListTransform):
         corner = torch.min(padded_cpos, dim=0)[0]                 # the cell at the corner
         padded_cpos -= corner
         c_pos_shap = torch.max(padded_cpos, dim=0)[0] + 1         # c_pos starts from 0
-        num_cells = int(torch.prod(c_pos_shap).item())
+        num_cells = torch.prod(c_pos_shap).to(torch.long)
         count_vec = torch.ones_like(c_pos_shap)
         count_vec[0] = c_pos_shap[1] * c_pos_shap[2]
         count_vec[1] = c_pos_shap[2]
@@ -149,9 +151,9 @@ class TorchNeighborList(NeighborListTransform):
         # construct a C x N matrix to store the cell atom list, this is the most expensive part.
         padded_cind_sorted, padded_cind_args = torch.sort(padded_cind, stable=True)
         cell_ind, indices, cell_atom_num = torch.unique_consecutive(padded_cind_sorted, return_inverse=True, return_counts=True)
-        max_cell_anum = int(cell_atom_num.max().item())
+        max_cell_anum = cell_atom_num.max()
         global_cell_ind = torch.zeros(
-            (num_cells, max_cell_anum, 2),
+            (int(num_cells), int(max_cell_anum), 2),
             dtype=c_pos_shap.dtype, 
             device=c_pos_shap.device,
         )

@@ -20,7 +20,8 @@ class GradientOutput(torch.nn.Module):
         self.compute_edge_forces_only = compute_edge_forces_only
         self.grad_on_positions = grad_on_positions
         self.update_callback = update_callback
-        self.model_outputs = model_outputs
+        # TorchScript needs an explicitly typed list
+        self.model_outputs: List[str] = list(model_outputs)
         if self.compute_edge_forces and properties.edge_forces not in self.model_outputs:
             self.model_outputs.append(properties.edge_forces)
 
@@ -41,20 +42,24 @@ class GradientOutput(torch.nn.Module):
     ) -> properties.Type:
         
         if self.grad_on_edge_diff:
-            energy = data[properties.energy]
-            edge_diff = data[properties.edge_diff]
-            forces_dim = int(torch.sum(data[properties.n_atoms]))
+            # Clone to avoid TorchScript complaining about in-place ops on views.
+            energy = data[properties.energy].clone()
+            edge_diff = data[properties.edge_diff].clone()
+            forces_dim = int(data[properties.n_atoms].sum())
             edge_idx = data[properties.edge_idx]
             if 'forces' in self.model_outputs:
                 grad_outputs : List[Optional[torch.Tensor]] = [torch.ones_like(energy)]    # for model deploy
-                dE_ddiff = torch.autograd.grad(
+                grad_edge = torch.autograd.grad(
                     [energy,],
                     [edge_diff,],
                     grad_outputs=grad_outputs,
+                    allow_unused=True,
                     retain_graph=training,
                     create_graph=training,
                 )
-                dE_ddiff = torch.zeros_like(data[properties.positions]) if dE_ddiff is None else dE_ddiff[0]   # for torch.jit.script
+                dE_ddiff = grad_edge[0] if grad_edge else None
+                if dE_ddiff is None:
+                    dE_ddiff = torch.zeros_like(edge_diff)
                 assert dE_ddiff is not None
                 if self.compute_edge_forces:
                     data[properties.edge_forces] = dE_ddiff  # Match LAMMPS sign convention
@@ -106,6 +111,7 @@ class GradientOutput(torch.nn.Module):
                     [energy,],
                     grad_inputs,
                     grad_outputs=grad_outputs,
+                    allow_unused=True,
                     retain_graph=training,
                     create_graph=training,
                 )
