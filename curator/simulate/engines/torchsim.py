@@ -3,9 +3,17 @@ from __future__ import annotations
 from typing import Any, Optional, Union
 
 import torch
-import torch_sim as ts
-from torch_sim.integrators import INTEGRATOR_REGISTRY, Integrator
-from torch_sim.units import UnitSystem
+try:
+    import torch_sim as ts
+    from torch_sim.integrators import INTEGRATOR_REGISTRY, Integrator
+    from torch_sim.units import UnitSystem
+    _HAS_TORCHSIM = True
+except ImportError:  # optional dependency
+    ts = None
+    INTEGRATOR_REGISTRY = {}
+    Integrator = None  # type: ignore
+    UnitSystem = None  # type: ignore
+    _HAS_TORCHSIM = False
 
 from ..core.engine import BaseEngine
 from ..core.context import SimContext
@@ -22,19 +30,21 @@ class TorchSimEngine(BaseEngine):
         self,
         model: Any,
         *,
-        integrator: Union[Integrator, str] = Integrator.nve,
+        integrator: Union["Integrator", str] = "nve",
         temperature: float = 300.0,
         timestep: float = 1e-3,
-        unit_system: UnitSystem = UnitSystem.metal,
+        unit_system: "UnitSystem" = None,
         integrator_kwargs: Optional[dict[str, Any]] = None,
         **_: Any,
     ):
+        if not _HAS_TORCHSIM:
+            raise ImportError("torch-sim is not installed. Install `torch-sim` to use TorchSimEngine.")
         super().__init__()
         self.model = model
-        self.integrator = Integrator[integrator] if isinstance(integrator, str) else integrator
+        self.integrator = Integrator[integrator] if _HAS_TORCHSIM and isinstance(integrator, str) else integrator
         self.temperature = temperature
         self.timestep = timestep
-        self.unit_system = unit_system
+        self.unit_system = unit_system if unit_system is not None else (UnitSystem.metal if _HAS_TORCHSIM else None)
         self.integrator_kwargs = integrator_kwargs or {}
 
         self.state = None
