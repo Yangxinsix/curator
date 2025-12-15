@@ -5,7 +5,12 @@ import logging
 import os
 from typing import Any, Dict, List, Optional, Union, Callable
 import torch
-import torch_sim as ts
+try:
+    import torch_sim as ts
+    _HAS_TORCHSIM = True
+except ImportError:  # optional dependency
+    ts = None
+    _HAS_TORCHSIM = False
 from ase.io import Trajectory
 
 from .thermo_uncertainty import ThermoWithUncertainty
@@ -36,6 +41,8 @@ class TorchSimThermoLogger(ThermoWithUncertainty):
         save_path: Optional[str] = None,
         uncertain_count: Optional[int] = None,
     ):
+        if not _HAS_TORCHSIM:
+            raise ImportError("torch-sim is required for TorchSimThermoLogger. Install `torch-sim` to use this logger.")
         super().__init__(
             variables=variables,
             header=header,

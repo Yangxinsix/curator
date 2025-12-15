@@ -16,8 +16,14 @@ from curator.data import (
 from curator.layer import find_layer_by_name_recursive
 from curator.model import EnsembleModel
 from curator.utils import load_models
-from torch_sim.models.interface import ModelInterface
-from torch_sim.state import SimState
+try:
+    from torch_sim.models.interface import ModelInterface
+    from torch_sim.state import SimState
+    _HAS_TORCHSIM = True
+except ImportError:  # optional dependency
+    ModelInterface = object  # type: ignore
+    SimState = Any  # type: ignore
+    _HAS_TORCHSIM = False
 
 try:
     from ase import Atoms
@@ -57,6 +63,8 @@ class CuratorTorchSimAdapter(ModelInterface):
         detach: bool = True,
         dtype: Optional[torch.dtype] = None,
     ) -> None:
+        if not _HAS_TORCHSIM:
+            raise ImportError("torch-sim is required for CuratorTorchSimAdapter. Install `torch-sim` to use this feature.")
         super().__init__()
         # TorchSim interface metadata
         resolved_device = self._resolve_device(device)
