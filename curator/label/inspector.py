@@ -18,7 +18,7 @@ class VASPInspector(Inspector):
     
     def is_converged(self) -> bool:
         steps = int(subprocess.getoutput('grep LOOP OUTCAR | wc -l')) 
-        return steps <= self.nelm
+        return steps < self.nelm
 
     def post_process(self) -> bool:
         converged = self.is_converged()

@@ -34,11 +34,9 @@ class FeatureExtractor(nn.Module):
         layer = find_layer_by_name_recursive(self.model, self.target_layer)
         assert layer is not None, f"Target layer {self.target_layer} is not found!"
         
-        # if use MACE then extract the last layer. will be deprecated in the future
-        rep = getattr(self.model, "representation", None)
-        if rep is not None and rep.__class__.__name__ == "MACE":
-            if isinstance(layer, (nn.ModuleList, nn.Sequential, list, tuple)):
-                layer = layer[-1]
+        from curator.model import MACE
+        if isinstance(self.model.representation, MACE):
+            layer = layer[-1]
 
         for child in layer.children():
             if isinstance(child, (nn.Linear, o3.Linear)):
@@ -77,13 +75,9 @@ class RandomProjections:
         device = next(model.parameters()).device
         if self.num_features > 0:
             layer = find_layer_by_name_recursive(model, target_layer)
-
-            # check if using MACE
-            rep = getattr(model, "representation", None)
-            if rep is not None and rep.__class__.__name__ == "MACE":
-                if isinstance(layer, (nn.ModuleList, nn.Sequential, list, tuple)):
-                    layer = layer[-1]
-
+            from curator.model import MACE
+            if isinstance(model.representation, MACE):
+                layer = layer[-1]
             # Input feature projection matrices (in_features + 1 for bias term), output gradient projection matrices
             for l in layer.children():
                 if isinstance(l, nn.Linear):
@@ -106,7 +100,6 @@ class FeatureStatistics:
         dataset: torch.utils.data.Dataset,
         n_random_features: int=500,
         random_projections: Optional[List[RandomProjections]] = None,
-        target_layer: str='readout_mlp',
         batch_size: int=8,
         device: Optional[str]=None,
         debug: bool=False,
@@ -114,9 +107,8 @@ class FeatureStatistics:
         self.models = models
         self.batch_size = batch_size
         self.dataset = dataset
-        self.target_layer = target_layer
         if random_projections is None:
-            self.random_projections = [RandomProjections(model, n_random_features, target_layer=target_layer) for model in self.models]
+            self.random_projections = [RandomProjections(model, n_random_features) for model in self.models]
         else:
             self.random_projections = random_projections
         self.device = device or next(models[0].parameters()).device
@@ -254,7 +246,7 @@ class FeatureStatistics:
             # )
             global_g = []
             for i, model in enumerate(self.models):
-                feat_extract = FeatureExtractor(model, target_layer=self.target_layer)
+                feat_extract = FeatureExtractor(model)
                 model_g = []
                 for b, batch in enumerate(dataset):
                     batch = {k: v.to(self.device) for k, v in batch.items()}

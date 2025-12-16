@@ -5,7 +5,6 @@ from hydra import compose, initialize
 from omegaconf import DictConfig, OmegaConf, open_dict
 import sys, os, json
 from pathlib import Path
-import argparse
 
 import pytorch_lightning.callbacks
 import pytorch_lightning.loggers
@@ -230,46 +229,6 @@ def tmp_train(config: DictConfig):
         metadata = {"cutoff": str(model_compiled.representation.cutoff).encode("ascii")}
         model_compiled.save(f"{config.run_path}/compiled_model.pt", _extra_files=metadata)
         log.info(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
-
-def _deploy_parse_args(argv: Optional[List[str]] = None):
-    parser = argparse.ArgumentParser(
-        description="Script for deploy curator models",
-        fromfile_prefix_chars="+",
-    )
-    parser.add_argument(
-        "model_path",
-        metavar="INPUT_FILE",
-        type=str,
-        nargs="+",
-        help="Path(s) to model to be compiled",
-    )
-    parser.add_argument(
-        "--target_path",
-        type=str,
-        default="compiled_model.pt",
-        help="Path to save compiled model",
-    )
-    parser.add_argument(
-        "--load_weights_only",
-        action="store_true",
-        help="Load trained weights while initializing the model",
-    )
-    parser.add_argument(
-        "--cfg_path",
-        type=str,
-        help="Configuration file that defines model parameters (optional)",
-    )
-    return parser.parse_args(argv)
-
-def deploy_main(argv: Optional[List[str]] = None):
-    args = _deploy_parse_args(argv)
-    return deploy(
-        model_path=args.model_path,
-        target_path=args.target_path,
-        load_weights_only=args.load_weights_only,
-        cfg_path=args.cfg_path,
-        return_model=False,
-    )
 
 # Deploy the model and save a compiled model
 def deploy(

@@ -1,5 +1,5 @@
 defaults:
-  - annotator: default_annotator
+  - annotator: vasp_annotator
   - optional annotator/calc_params: ${annotator/calculator}_params
   - _self_
 
