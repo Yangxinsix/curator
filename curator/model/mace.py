@@ -1,4 +1,5 @@
 import torch
+import warnings
 from torch import nn
 from e3nn import o3
 from e3nn.nn import Activation
@@ -22,7 +23,7 @@ from curator.layer import (
     RealAgnosticInteractionBlock,
     EquivariantProductBasisBlock,
 )
-from curator.layer._cuequivariance_wrapper import set_use_cueq
+from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE, set_use_cueq
 from curator.data import properties
 from typing import List, Optional, Dict, Union, Callable, Type
 
@@ -92,6 +93,12 @@ class MACE(nn.Module):
 
         # use cuequivariance globally
         set_use_cueq(use_cueq)
+        if use_cueq and not IS_CUET_AVAILABLE:
+            warnings.warn(
+                "Requested use_cueq=True but cuequivariance is not available; "
+                "falling back to e3nn kernels.",
+                RuntimeWarning,
+            )
 
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions
