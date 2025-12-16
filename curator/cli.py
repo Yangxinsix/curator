@@ -6,6 +6,10 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 import sys, os, json
 from pathlib import Path
 import argparse
+try:
+    import argcomplete
+except ImportError:  # pragma: no cover
+    argcomplete = None
 
 import pytorch_lightning.callbacks
 import pytorch_lightning.loggers
@@ -279,6 +283,8 @@ def _deploy_parse_args(argv: Optional[List[str]] = None):
         default=None,
         help="Element symbols ordered as in the LAMMPS pair_style; required when --lammps-mliap is set",
     )
+    if argcomplete:
+        argcomplete.autocomplete(parser)
     return parser.parse_args(argv)
 
 def deploy_main(argv: Optional[List[str]] = None):
@@ -323,12 +329,12 @@ def _convert_parse_args(argv: Optional[List[str]] = None):
         help="Update an old CURATOR checkpoint by rebuilding the stored model.",
     )
     parser.add_argument(
-        "--to-cueq",
+        "--e3nn-to-cueq",
         action="store_true",
         help="Convert a Curator e3nn model checkpoint to cuequivariance backend.",
     )
     parser.add_argument(
-        "--to-e3nn",
+        "--cueq-to-e3nn",
         action="store_true",
         help="Convert a Curator cuequivariance model checkpoint back to e3nn backend.",
     )
@@ -342,6 +348,8 @@ def _convert_parse_args(argv: Optional[List[str]] = None):
         action="store_true",
         help="Convert a Curator MACE checkpoint back to an original MACE checkpoint.",
     )
+    if argcomplete:
+        argcomplete.autocomplete(parser)
 
     return parser.parse_args(argv)
 
@@ -357,12 +365,12 @@ def convert_main(argv: Optional[List[str]] = None):
             output_path=args.output,
             device=device,
         )
-    elif args.to_cueq or args.to_e3nn:
+    elif args.e3nn_to_cueq or args.cueq_to_e3nn:
         import torch
         from curator.utils import load_models, convert_e3nn_to_cueq, convert_cueq_to_e3nn
         from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
 
-        if args.to_e3nn and (not torch.cuda.is_available() or not IS_CUET_AVAILABLE):
+        if args.cueq_to_e3nn and (not torch.cuda.is_available() or not IS_CUET_AVAILABLE):
             raise RuntimeError(
                 "Converting from cueq to e3nn requires cuequivariance with CUDA. "
                 "Please run on a CUDA-enabled environment with cuequivariance installed."
@@ -377,7 +385,7 @@ def convert_main(argv: Optional[List[str]] = None):
                 "with cuequivariance installed."
             ) from e
         except Exception as e:
-            if args.to_e3nn:
+            if args.cueq_to_e3nn:
                 raise RuntimeError(
                     "Failed to load cueq checkpoint. Ensure cuequivariance is installed and CUDA is available."
                 ) from e
@@ -386,9 +394,9 @@ def convert_main(argv: Optional[List[str]] = None):
             raise ValueError("Cueq/e3nn conversion supports single-model checkpoints only.")
         model = models[0]
 
-        if args.to_cueq and args.to_e3nn:
-            raise ValueError("Choose only one of --to-cueq or --to-e3nn.")
-        if args.to_cueq:
+        if args.e3nn_to_cueq and args.cueq_to_e3nn:
+            raise ValueError("Choose only one of --e3nn-to-cueq or --cueq-to-e3nn.")
+        if args.e3nn_to_cueq:
             converted = convert_e3nn_to_cueq(model)
             suffix = "_cueq"
         else:

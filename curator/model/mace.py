@@ -57,7 +57,6 @@ class MACE(nn.Module):
         num_features: Optional[int] = None,
         num_basis: int = 8,
         power: int = 6,
-        gate: Union[str, Callable] = 'silu',
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
         **kwargs,
@@ -80,7 +79,6 @@ class MACE(nn.Module):
             num_features (Optional[int], optional): Number of features. Defaults to None.
             num_basis (int, optional): Number of radial basis. Defaults to 8.
             power (int, optional): Power of radial basis. Defaults to 6.
-            gate (Union[str, Callable], optional): Activation function for gate. Defaults to 'silu'.
             num_heads (int, optional): Number of readout heads. When >1, per-head atomic
                 energies are exposed at properties.atomic_energy_heads and averaged for
                 properties.atomic_energy.
