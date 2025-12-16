@@ -9,8 +9,7 @@ from curator.utils import convert_curator_to_mace, convert_mace_to_curator, load
 
 def _predict(model, inputs):
     model.eval()
-    with torch.no_grad():
-        out = model({k: v.clone() for k, v in inputs.items()})
+    out = model({k: v.clone() for k, v in inputs.items()})
     return out["energy"], out["forces"]
 
 
@@ -19,8 +18,8 @@ def test_curator_to_mace_roundtrip(tmp_path):
         import mace  # noqa: F401
     except Exception:
         pytest.skip("mace package with cuequivariance dependencies not available.")
-    device = torch.device("cpu")
-    curator_path = "test/mace_convert/mace_e3nn.pth"
+    device = torch.device("cuda")
+    curator_path = "mace_e3nn.pth"
 
     # convert curator -> mace -> curator
     mace_path = tmp_path / "roundtrip_mace.pth"
@@ -36,7 +35,7 @@ def test_curator_to_mace_roundtrip(tmp_path):
 
     cutoff = float(find_layer_by_name_recursive(orig, "cutoff"))
     reader = AseDataReader(cutoff, compute_neighbor_list=True)
-    atoms = read("test/LiFePO4.traj", index=0)
+    atoms = read("../LiFePO4.traj", index=0)
     inputs = reader(atoms)
 
     e0, f0 = _predict(orig, inputs)
