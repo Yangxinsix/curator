@@ -1,4 +1,5 @@
 import torch
+import warnings
 from torch import nn
 from e3nn import o3
 from e3nn.util.jit import compile_mode
@@ -15,7 +16,7 @@ from curator.layer import (
     SphericalHarmonicEdgeAttrs,
     InteractionLayer,
 )
-from curator.layer._cuequivariance_wrapper import set_use_cueq
+from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE, set_use_cueq
 
 from typing import OrderedDict, Dict, List, Optional, Union, Callable, Type
 from functools import partial
@@ -77,6 +78,12 @@ class Nequip(torch.nn.Module):
         self.species = species
         
         set_use_cueq(use_cueq)
+        if use_cueq and not IS_CUET_AVAILABLE:
+            warnings.warn(
+                "Requested use_cueq=True but cuequivariance is not available; "
+                "falling back to e3nn kernels.",
+                RuntimeWarning,
+            )
         
         if num_elements is None:
             num_elements = len(species) if species is not None else 119
