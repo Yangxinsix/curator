@@ -160,6 +160,12 @@ class AseDataReader(DataReader):
             atoms_data[properties.virial] = - stress * atoms.get_volume()
         except (AttributeError, RuntimeError):
             pass
+
+        try:
+            atomic_charge = torch.tensor(atoms.get_initial_charges(), dtype=self.default_dtype)
+            atoms_data[properties.atomic_charge] = atomic_charge
+        except (AttributeError, RuntimeError):
+            pass
         
         if atoms.info.get('virial') is not None:
             virial = atoms.info.get('virial')

@@ -433,7 +433,7 @@ def find_best_model(run_path: Union[str, Path]) -> Tuple[Path, Optional[float]]:
     """Return best ckpt path under a run directory or the path itself if it is a .ckpt."""
 
     run_path = Path(run_path)
-    if run_path.suffix == '.ckpt':
+    if Path(run_path).suffix == '.ckpt' or Path(run_path).suffix == '.pt' or Path(run_path).suffix == '.pth':
         return run_path, None
 
     cands = list(run_path.glob("best_model_*.ckpt"))
