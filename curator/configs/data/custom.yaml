@@ -1,4 +1,4 @@
-_target_: curator.data.AtomsDataModule
+_target_: curator.data.datamodule.DataModuleFactory
 _convert_: partial
 datapath: null
 train_path: null

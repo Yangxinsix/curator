@@ -1,0 +1,4 @@
+data:
+  datapath:
+    water: /home/xinyang/dataset_1593.xyz
+    lifp: /home/xinyang/curator/test/LiFePO4.traj

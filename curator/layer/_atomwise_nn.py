@@ -73,6 +73,8 @@ class AtomwiseNN(nn.Module):
         use_e3nn: bool = False,
         activation: Union[Callable, nn.Module, str, List[Callable], List[nn.Module], List[str]] = 'silu',
         output_keys: Union[List[str], List[Dict]] = ["energy"],
+        domains: Optional[List[Union[str, int]]] = None,  # optional domain-specific heads
+        domain_key: Optional[str] = None,  # key in data dict that holds domain id
         *args,
         **kwargs,
     ):
@@ -87,6 +89,8 @@ class AtomwiseNN(nn.Module):
         self.out_features = out_features
         self.use_e3nn = use_e3nn
         self.n_hidden_layers = n_hidden_layers
+        self.domain_key = domain_key
+        self.domains = [str(d) for d in domains] if domains is not None else []
 
         # Setup neuron sizes
         n_neurons = [in_features]
@@ -108,10 +112,11 @@ class AtomwiseNN(nn.Module):
         else:
             acts = [activation_fn[activation] if isinstance(activation, str) else activation for _ in range(self.n_hidden_layers)] + [None]
 
-        self.readout_mlp = nn.Sequential(*[
-            Dense(n_neurons[i], n_neurons[i + 1], acts[i], use_e3nn=use_e3nn)
-            for i in range(self.n_hidden_layers + 1)
-        ])
+        self._n_neurons = n_neurons
+        self._acts = acts
+
+        self.readout_mlp = self._make_readout()
+        self.domain_heads = nn.ModuleDict({name: self._make_readout() for name in self.domains})
 
         n_out = out_features if isinstance(out_features, int) else out_features.dim
 
@@ -176,8 +181,9 @@ class AtomwiseNN(nn.Module):
             )
         ]
 
-    def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> torch.Tensor:
-        return self.readout_mlp(input)
+    def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None, domain: Optional[str] = None) -> torch.Tensor:
+        head = self._select_head(domain)
+        return head(input)
 
     def _parse_outputs(self, out: torch.Tensor, index: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         out = out.split(self.split_size, dim=1)
@@ -209,11 +215,33 @@ class AtomwiseNN(nn.Module):
         input = data[properties.node_feat]
         index = data[properties.image_idx]
         
-        out = self._compute(input)
+        domain = self._get_domain(data)
+        out = self._compute(input, index=index, domain=domain)
         output_dict = self._parse_outputs(out, index)
         data.update(output_dict)
 
         return data
+
+    def _make_readout(self) -> nn.Sequential:
+        return nn.Sequential(*[
+            Dense(self._n_neurons[i], self._n_neurons[i + 1], self._acts[i], use_e3nn=self.use_e3nn)
+            for i in range(self.n_hidden_layers + 1)
+        ])
+
+    def _select_head(self, domain: Optional[str]) -> nn.Module:
+        if domain is not None and domain in self.domain_heads:
+            return self.domain_heads[domain]
+        return self.readout_mlp
+
+    def _get_domain(self, data: properties.Type) -> Optional[str]:
+        if self.domain_key is None or self.domain_key not in data:
+            return None
+        dom = data[self.domain_key]
+        if torch.is_tensor(dom):
+            if dom.numel() == 0:
+                return None
+            dom = dom.view(-1)[0].item()
+        return str(dom)
 
 class MACEAtomwiseNN(AtomwiseNN):
     """Atomwise feed-forward neural networks for MACE
@@ -270,11 +298,29 @@ class MACEAtomwiseNN(AtomwiseNN):
         self.readouts.append(self.readout_mlp)
         self.in_features_list.append(self.hidden_irreps[0].dim)
 
-    def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
+        # domain-specific readouts (if domains provided)
+        self.domain_readouts = nn.ModuleDict({
+            name: self._build_mace_readouts() for name in self.domains
+        })
+
+    def _build_mace_readouts(self) -> nn.ModuleList:
+        readouts = nn.ModuleList()
+        for _ in range(self.num_interactions - 1):
+            readouts.append(Dense(self.hidden_irreps, self.out_features, activation=None, use_e3nn=True))
+        readouts.append(self._make_readout())
+        return readouts
+
+    def _select_mace_readouts(self, domain: Optional[str]) -> nn.ModuleList:
+        if domain is not None and domain in self.domain_readouts:
+            return self.domain_readouts[domain]
+        return self.readouts
+
+    def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None, domain: Optional[str] = None) -> properties.Type:
         # split node features to list then calculate contributions from different parts
         node_feat_list = torch.split(input, self.in_features_list, dim=-1)
+        readouts = self._select_mace_readouts(domain)
         out_list = []
-        for readout, node_feat in zip(self.readouts, node_feat_list):
+        for readout, node_feat in zip(readouts, node_feat_list):
             out_list.append(readout(node_feat))
     
         out = torch.sum(torch.stack(out_list, dim=0), dim=0)

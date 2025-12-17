@@ -9,6 +9,7 @@ from . import properties
 from ase.data import chemical_symbols, atomic_numbers
 import json
 import logging
+from torch.utils.data import ConcatDataset
 
 
 logger = logging.getLogger(__name__)
@@ -355,16 +356,128 @@ class AtomsDataModule(pl.LightningDataModule):
         return self.mean, self.std
     
     def __repr__(self):
-        path_info = [f"train_path={self.train_path}, " if self.train_path is not None else "", f"val_path={self.val_path}" if self.val_path is not None else "", f", test_path={self.test_path}" if self.test_path is not None else ""]
-        path_info = "".join(path_info)
-        path_info += "\n" if path_info != "" else ""
-        path_info += f"datapath={self.datapath}\n" if self.datapath is not None else ""
-        if self._train_dataset is not None:
-            data_info = f"Dataset size={self.datalen or self.num_train + self.num_val + self.num_test}, training dataset size={self.num_train}, validation dataset size={self.num_val}, test dataset size={self.num_test}.\n"
-        else:
-            data_info = ""
-        scale_info = f"scale={self.std}, shift={self.mean}, atomwise_normalization={self.atomwise_normalization}, scale_forces={self.scale_forces}\n" if self.normalization else ""
-        species_info = f"species={self.species}\n" if self.species is not None else ""
-        e0_info = f"atomic_energies={self.atomic_energies}" if isinstance(self.atomic_energies, Dict) else ""
-        neigh_info = f"avg_num_neighbors={self.avg_num_neighbors}\n" if self.avg_num_neighbors is not None else ""
-        return f"{self.__class__.__name__}(" + path_info + data_info + scale_info + species_info + e0_info + neigh_info + ")"
+        return self._format_table()
+
+    def __str__(self):
+        # Avoid Lightning's default __str__ which inspects dataloaders.
+        return self.__repr__()
+
+    def _format_table(self) -> str:
+        train_size = len(self._train_dataset) if self._train_dataset is not None else (self.num_train if isinstance(self.num_train, (int, float)) else 0)
+        val_size = len(self._val_dataset) if self._val_dataset is not None else (self.num_val if isinstance(self.num_val, (int, float)) else 0)
+        test_size = len(self._test_dataset) if self._test_dataset is not None else (self.num_test if isinstance(self.num_test, (int, float)) else 0)
+        path = self.datapath or self.train_path or self.val_path or self.test_path or "N/A"
+
+        headers = ["Train", "Val", "Test", "Batch", "Cutoff", "Path"]
+        row = [str(train_size), str(val_size), str(test_size), str(self.batch_size), str(self.cutoff), str(path)]
+
+        widths = [max(len(headers[i]), len(row[i])) for i in range(len(headers))]
+
+        def fmt(values):
+            return " | ".join(v.ljust(widths[i]) for i, v in enumerate(values))
+
+        line = "-+-".join("-" * w for w in widths)
+        table = "\n".join([fmt(headers), line, fmt(row)])
+        return f"{self.__class__.__name__}(\n{table}\n)"
+
+
+def build_datamodule(datapath=None, **kwargs):
+    """
+    Factory that returns a single AtomsDataModule or a MultiDomainDataModule
+    when ``datapath`` is provided as a dict. Domain entries can override any
+    AtomsDataModule argument; unspecified fields fall back to the shared kwargs.
+    """
+    if isinstance(datapath, dict):
+        domain_modules = {}
+        shared_kwargs = {k: v for k, v in kwargs.items() if k != "datapath"}
+        for domain, domain_cfg in datapath.items():
+            domain_kwargs = dict(shared_kwargs)
+            if isinstance(domain_cfg, dict):
+                domain_kwargs.update({k: v for k, v in domain_cfg.items() if k != "datapath"})
+                domain_kwargs["datapath"] = domain_cfg.get("datapath", None)
+            else:
+                domain_kwargs["datapath"] = domain_cfg
+            domain_modules[domain] = AtomsDataModule(**domain_kwargs)
+        return MultiDomainDataModule(domain_modules)
+    return AtomsDataModule(datapath=datapath, **kwargs)
+
+class DataModuleFactory:
+    """
+    Thin wrapper to let Hydra instantiate a factory. Hydra expects `_target_`
+    to resolve to a class; overriding `__new__` returns the actual datamodule.
+    """
+
+    def __new__(cls, datapath=None, **kwargs):
+        return build_datamodule(datapath=datapath, **kwargs)
+
+class MultiDomainDataModule(pl.LightningDataModule):
+    """
+    Utility wrapper that combines train datasets across domains while keeping
+    domain-specific validation and test loaders.
+    """
+
+    def __init__(
+        self,
+        domain_modules: Dict[str, AtomsDataModule],
+        train_batch_size: Optional[int] = None,
+        train_num_workers: Optional[int] = None,
+        train_shuffle: Optional[bool] = None,
+        train_pin_memory: Optional[bool] = None,
+    ) -> None:
+        super().__init__()
+        self.domain_modules = domain_modules
+        self._train_batch_size = train_batch_size
+        self._train_num_workers = train_num_workers
+        self._train_shuffle = train_shuffle
+        self._train_pin_memory = train_pin_memory
+
+        self._train_dataset = None
+        self._val_loaders = None
+        self._test_loaders = None
+
+    def setup(self, stage: Optional[str] = None) -> None:
+        for name, dm in self.domain_modules.items():
+            logger.debug(f"Building data module for: {name}")
+            dm.setup(stage)
+
+        train_datasets = [dm.train_dataset for dm in self.domain_modules.values() if dm.train_dataset is not None]
+        self._train_dataset = ConcatDataset(train_datasets) if len(train_datasets) > 0 else None
+
+        # Build per-domain val/test loaders now so their samplers remain per-domain.
+        self._val_loaders = [
+            dl for dm in self.domain_modules.values() if (dl := dm.val_dataloader()) is not None
+        ]
+        self._test_loaders = [
+            dl for dm in self.domain_modules.values() if (dl := dm.test_dataloader()) is not None
+        ]
+
+    def train_dataloader(self) -> Optional[torch.utils.data.DataLoader]:
+        if self._train_dataset is None:
+            return None
+        # Use the first domain module as the template for collate/pinning if not overridden.
+        template_dm = next(iter(self.domain_modules.values()))
+        return torch.utils.data.DataLoader(
+            self._train_dataset,
+            batch_size=self._train_batch_size or template_dm.batch_size,
+            collate_fn=template_dm._collate_fn,
+            num_workers=self._train_num_workers if self._train_num_workers is not None else template_dm._num_workers,
+            shuffle=self._train_shuffle if self._train_shuffle is not None else template_dm.shuffle,
+            pin_memory=self._train_pin_memory if self._train_pin_memory is not None else template_dm._pin_memory,
+        )
+
+    def val_dataloader(self):
+        return self._val_loaders
+
+    def test_dataloader(self):
+        return self._test_loaders
+
+    def __repr__(self):
+        domain_info = ", ".join(self.domain_modules.keys())
+        n_train = sum(len(dm.train_dataset) for dm in self.domain_modules.values() if dm.train_dataset is not None)
+        n_val = [len(dm.val_dataset) for dm in self.domain_modules.values() if dm.val_dataset is not None]
+        n_test = [len(dm.test_dataset) for dm in self.domain_modules.values() if dm.test_dataset is not None]
+        return f"{self.__class__.__name__}(domains=[{domain_info}], train_size={n_train}, val_sizes={n_val}, test_sizes={n_test})"
+
+    def __str__(self):
+        # Avoid Lightning's default __str__ which inspects dataloaders.
+        return self.__repr__()
