@@ -8,6 +8,7 @@ from e3nn.nn import Activation
 from curator.data.properties import activation_fn
 from curator.data import properties
 from ._cuequivariance_wrapper import Linear
+from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE, set_use_cueq
 import warnings
 try:
     from torch_scatter import scatter_add, scatter_mean
@@ -73,10 +74,20 @@ class AtomwiseNN(nn.Module):
         use_e3nn: bool = False,
         activation: Union[Callable, nn.Module, str, List[Callable], List[nn.Module], List[str]] = 'silu',
         output_keys: Union[List[str], List[Dict]] = ["energy"],
+        use_cueq: bool = False,
         *args,
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+
+        # Must set use_cueq before importing Linear, because hydra first instantiates this class and then instantiate the MACE model
+        set_use_cueq(use_cueq)
+        if use_cueq and not IS_CUET_AVAILABLE:
+            warnings.warn(
+                "Requested use_cueq=True but cuequivariance is not available; "
+                "falling back to e3nn kernels.",
+                RuntimeWarning,
+            )
 
         if isinstance(in_features, str):
             in_features = o3.Irreps(in_features)
