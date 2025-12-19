@@ -106,8 +106,14 @@ def _build_mace_from_curator(curator_model):
     from curator.layer import GlobalRescaleShift
     from curator.model import NeuralNetworkPotential, MACE
     """Best-effort recreation of a mace.modules.models.ScaleShiftMACE from a Curator MACE model."""
-    from mace.modules import models as mace_models
-    from mace.modules import blocks as mace_blocks
+    try:
+        from mace.modules import models as mace_models
+        from mace.modules import blocks as mace_blocks
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(
+            "Failed to import mace modules; converting to original MACE requires mace "
+            "and its cuequivariance dependencies (typically CUDA-enabled)."
+        ) from exc
 
     if isinstance(curator_model, NeuralNetworkPotential):
         repr_model = curator_model.representation
@@ -603,7 +609,12 @@ def prune_config_targets(config: Optional[DictConfig], logger: Optional[logging.
     _prune(config)
 
 # Ugly workaround for specifying config files outside of the package
-def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_path="configs", config_name="train.yaml"):
+def read_user_config(
+    cfg: Union[DictConfig, PosixPath, str, None]=None,
+    config_path="configs",
+    config_name="train.yaml",
+    overrides: Optional[Union[str, List[str]]] = None,
+):
     # load cfg
     if isinstance(cfg, DictConfig):
         user_cfg = cfg.copy()
@@ -615,6 +626,21 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     converted_fields = set()
     if isinstance(user_cfg, DictConfig):
         converted_fields = _dictify_sequence_nodes(user_cfg)
+
+    config_path_obj = Path(config_path)
+    use_config_dir = config_path_obj.is_absolute()
+    if not use_config_dir:
+        pkg_base = Path(__file__).resolve().parent
+        candidate = (pkg_base / config_path_obj).resolve()
+        if candidate.exists():
+            config_path_obj = candidate
+            use_config_dir = True
+        else:
+            candidate = (Path.cwd() / config_path_obj).resolve()
+            if candidate.exists():
+                config_path_obj = candidate
+                use_config_dir = True
+    config_path = str(config_path_obj)
 
     override_list = []
     if "defaults" in user_cfg:
@@ -643,9 +669,18 @@ def read_user_config(cfg: Union[DictConfig, PosixPath, str, None]=None, config_p
     finally:
         override_list.extend(cli_overrides)
 
+    if overrides is not None:
+        if isinstance(overrides, str):
+            overrides = [overrides]
+        override_list.extend(overrides)
+
     # reload hyperparameters         
     hydra.core.global_hydra.GlobalHydra.instance().clear()
-    with initialize(version_base=None, config_path=config_path):
+    if use_config_dir:
+        context = initialize_config_dir(version_base=None, config_dir=config_path)
+    else:
+        context = initialize(version_base=None, config_path=config_path)
+    with context:
         composed_cfg = compose(config_name=config_name, overrides=override_list)
     
     # Allow write access to unknown fields
@@ -910,12 +945,26 @@ def get_representation_config(model):
     rep = model.representation
     if model.representation.__class__.__name__ == 'MACE':
         species = list(rep.embeddings.onehot_embedding.type_mapper.symbol_to_type.keys())
-        try:
-            correlation = (
-                len(rep.products[0].symmetric_contractions.contractions[0].weights) + 1
-            )
-        except AttributeError:
-            correlation = rep.products[0].symmetric_contractions.contraction_degree
+        correlation = None
+        sc = rep.products[0].symmetric_contractions
+        # cueq wrapper may expose only weight tensor
+        if hasattr(sc, "contractions") and len(sc.contractions) > 0 and hasattr(sc.contractions[0], "weights"):
+            correlation = len(sc.contractions[0].weights) + 1
+        elif hasattr(sc, "contraction_degree"):
+            correlation = sc.contraction_degree
+        elif hasattr(sc, "weight"):
+            # weight shape: (mul, sum_{k<=lmax}(3 blocks)) -> infer kmax assuming 3 terms per k
+            total = sc.weight.shape[1]
+            # correlation counts per k: 3 entries per k (weights_max, weights.0, weights.1)
+            # solve for kmax where 3 * (kmax+1) == total blocks
+            if total % 3 == 0:
+                kmax = total // 3 - 1
+                correlation = kmax + 1
+        elif hasattr(sc, "sc"):
+            if hasattr(sc.sc, "contraction_degree"):
+                correlation = sc.sc.contraction_degree
+        if correlation is None:
+            raise AttributeError("Unable to infer correlation from symmetric_contractions.")
 
         try:
             gate = rep.readout.readout_mlp[0].activation.acts[0].f
@@ -1001,7 +1050,7 @@ def transfer_symmetric_contractions(
             ],
             dim=1,
         )
-        target_dict[f"products.{i}.symmetric_contractions.weight"] = wm
+        target_dict[f"products.{i}.symmetric_contractions.sc.weight"] = wm
 
 def get_transfer_keys(num_layers: int) -> List[str]:
     """Get list of keys that need to be transferred"""
@@ -1021,6 +1070,38 @@ def get_transfer_keys(num_layers: int) -> List[str]:
             f"products.{j}.linear.weight",
         ]
     ]
+
+def _squeeze_if_compatible(src: torch.Tensor, target_shape: torch.Size) -> torch.Tensor:
+    """Helper to squeeze a leading singleton dim if that matches the target shape."""
+    if src.shape != target_shape and src.dim() == len(target_shape) + 1 and src.shape[0] == 1:
+        return src.squeeze(0)
+    return src
+
+
+def transfer_symmetric_contractions_back(
+    source_dict: Dict[str, torch.Tensor],
+    target_dict: Dict[str, torch.Tensor],
+    max_L: int,
+    correlation: int,
+    num_layers: int,
+):
+    """Transfer symmetric contraction weights from cueq back to e3nn layout."""
+    kmax_pairs = get_kmax_pairs(max_L, correlation, num_layers)
+
+    for i, kmax in kmax_pairs:
+        key = f"products.{i}.symmetric_contractions.sc.weight"
+        if key not in source_dict:
+            continue
+        weight = source_dict[key]
+        offset = 0
+        for k in range(kmax + 1):
+            for suffix in ["_max", ".0", ".1"]:
+                tgt_key = f"products.{i}.symmetric_contractions.contractions.{k}.weights{suffix}"
+                if tgt_key not in target_dict:
+                    continue
+                width = target_dict[tgt_key].shape[1]
+                target_dict[tgt_key] = weight[:, offset : offset + width]
+                offset += width
 
 def load_e3nn_weights(source_model, target_model):
     """Load weights from an e3nn model to cuequivariance model"""
@@ -1048,7 +1129,7 @@ def load_e3nn_weights(source_model, target_model):
             len(source_model.representation.products[0].symmetric_contractions.contractions[0].weights) + 1
         )
     except AttributeError:
-        correlation = source_model.representation.products[0].symmetric_contractions.contraction_degree
+        correlation = source_model.representation.products[0].symmetric_contractions.sc.contraction_degree
     transfer_symmetric_contractions(source_dict, target_dict, lmax, correlation, num_layers)
 
     transferred_keys = set(transfer_keys)
@@ -1069,6 +1150,49 @@ def load_e3nn_weights(source_model, target_model):
 
     target_model.representation.load_state_dict(target_dict)
 
+def load_cueq_weights(source_model, target_model):
+    """Load weights from a cueq model to an e3nn model."""
+    source_dict = source_model.representation.state_dict()
+    target_dict = target_model.representation.state_dict()
+
+    num_layers = len(target_model.representation.interactions)
+    transfer_keys = get_transfer_keys(num_layers)
+    for key in transfer_keys:
+        if key in source_dict and key in target_dict:
+            src_val = source_dict[key]
+            src_val = _squeeze_if_compatible(src_val, target_dict[key].shape)
+            target_dict[key] = src_val
+        elif key not in source_dict:
+            logging.warning(f"Key {key} not found in source cueq model")
+
+    # squeeze linear/skip weights if needed
+    for key in list(source_dict.keys()):
+        if any(x in key for x in ["linear", "skip_tp"]) and "weight" in key and key in target_dict:
+            target_dict[key] = _squeeze_if_compatible(source_dict[key], target_dict[key].shape)
+
+    lmax = getattr(source_model.representation, "lmax", None)
+    try:
+        correlation = (
+            len(source_model.representation.products[0].symmetric_contractions.contractions[0].weights) + 1
+        )
+    except Exception:
+        correlation = source_model.representation.products[0].symmetric_contractions.sc.contraction_degree
+    if lmax is not None:
+        transfer_symmetric_contractions_back(source_dict, target_dict, lmax, correlation, num_layers)
+
+    transferred_keys = set(transfer_keys)
+    remaining_keys = (
+        set(source_dict.keys()) & set(target_dict.keys()) - transferred_keys
+    )
+    remaining_keys = {k for k in remaining_keys if "symmetric_contraction" not in k}
+    for key in remaining_keys:
+        src_val = _squeeze_if_compatible(source_dict[key], target_dict[key].shape)
+        if src_val.shape == target_dict[key].shape:
+            target_dict[key] = src_val
+
+    target_model.representation.load_state_dict(target_dict)
+
+
 def convert_e3nn_to_cueq(model):
     rep_config = get_representation_config(model)
     rep_config["use_cueq"] = True
@@ -1084,6 +1208,23 @@ def convert_e3nn_to_cueq(model):
     load_e3nn_weights(model, cueq_model)
 
     return cueq_model
+
+
+def convert_cueq_to_e3nn(model):
+    rep_config = get_representation_config(model)
+    rep_config["use_cueq"] = False
+    e3nn_rep = model.representation.__class__(**rep_config)
+
+    e3nn_model = model.__class__(
+        input_modules=list(model.input_modules),
+        output_modules=list(model.output_modules),
+        representation=e3nn_rep,
+        model_outputs=model.model_outputs,
+    )
+
+    load_cueq_weights(model, e3nn_model)
+
+    return e3nn_model
 
 def update_model(model):
     import warnings

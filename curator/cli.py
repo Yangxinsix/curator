@@ -6,6 +6,10 @@ from omegaconf import DictConfig, OmegaConf, open_dict
 import sys, os, json
 from pathlib import Path
 import argparse
+try:
+    import argcomplete
+except ImportError:  # pragma: no cover
+    argcomplete = None
 
 import pytorch_lightning.callbacks
 import pytorch_lightning.loggers
@@ -267,6 +271,20 @@ def _deploy_parse_args(argv: Optional[List[str]] = None):
         type=str,
         help="Configuration file that defines model parameters (optional)",
     )
+    parser.add_argument(
+        "--lammps",
+        action="store_true",
+        help="Export a LAMMPS MLIAP-ready model instead of torchscript",
+    )
+    parser.add_argument(
+        "--element-types",
+        type=str,
+        nargs="+",
+        default=None,
+        help="Element symbols ordered as in the LAMMPS pair_style; required when --lammps-mliap is set",
+    )
+    if argcomplete:
+        argcomplete.autocomplete(parser)
     return parser.parse_args(argv)
 
 def deploy_main(argv: Optional[List[str]] = None):
@@ -277,6 +295,8 @@ def deploy_main(argv: Optional[List[str]] = None):
         load_weights_only=args.load_weights_only,
         cfg_path=args.cfg_path,
         return_model=False,
+        lammps_mliap=args.lammps,
+        element_types=args.element_types,
     )
 
 def _convert_parse_args(argv: Optional[List[str]] = None):
@@ -308,6 +328,28 @@ def _convert_parse_args(argv: Optional[List[str]] = None):
         action="store_true",
         help="Update an old CURATOR checkpoint by rebuilding the stored model.",
     )
+    parser.add_argument(
+        "--e3nn-to-cueq",
+        action="store_true",
+        help="Convert a Curator e3nn model checkpoint to cuequivariance backend.",
+    )
+    parser.add_argument(
+        "--cueq-to-e3nn",
+        action="store_true",
+        help="Convert a Curator cuequivariance model checkpoint back to e3nn backend.",
+    )
+    parser.add_argument(
+        "--mace-to-curator",
+        action="store_true",
+        help="Convert an original MACE checkpoint to a Curator MACE checkpoint.",
+    )
+    parser.add_argument(
+        "--curator-to-mace",
+        action="store_true",
+        help="Convert a Curator MACE checkpoint back to an original MACE checkpoint.",
+    )
+    if argcomplete:
+        argcomplete.autocomplete(parser)
 
     return parser.parse_args(argv)
 
@@ -323,6 +365,71 @@ def convert_main(argv: Optional[List[str]] = None):
             output_path=args.output,
             device=device,
         )
+    elif args.e3nn_to_cueq or args.cueq_to_e3nn:
+        import torch
+        from curator.utils import load_models, convert_e3nn_to_cueq, convert_cueq_to_e3nn
+        from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
+
+        if args.cueq_to_e3nn and (not torch.cuda.is_available() or not IS_CUET_AVAILABLE):
+            raise RuntimeError(
+                "Converting from cueq to e3nn requires cuequivariance with CUDA. "
+                "Please run on a CUDA-enabled environment with cuequivariance installed."
+            )
+
+        try:
+            models = load_models(args.ckpt_path, device=torch.device(device), load_compiled=False)
+        except PermissionError as e:
+            raise RuntimeError(
+                "Failed to load cueq checkpoint due to permission/CUDA issues. "
+                "cuequivariance typically requires CUDA; please run on a CUDA-enabled setup "
+                "with cuequivariance installed."
+            ) from e
+        except Exception as e:
+            if args.cueq_to_e3nn:
+                raise RuntimeError(
+                    "Failed to load cueq checkpoint. Ensure cuequivariance is installed and CUDA is available."
+                ) from e
+            raise
+        if len(models) != 1:
+            raise ValueError("Cueq/e3nn conversion supports single-model checkpoints only.")
+        model = models[0]
+
+        if args.e3nn_to_cueq and args.cueq_to_e3nn:
+            raise ValueError("Choose only one of --e3nn-to-cueq or --cueq-to-e3nn.")
+        if args.e3nn_to_cueq:
+            converted = convert_e3nn_to_cueq(model)
+            suffix = "_cueq"
+        else:
+            converted = convert_cueq_to_e3nn(model)
+            suffix = "_e3nn"
+
+        ckpt_path = Path(args.ckpt_path)
+        output_path = args.output
+        if output_path is None:
+            output_path = ckpt_path.with_name(f"{ckpt_path.stem}{suffix}{ckpt_path.suffix}")
+        torch.save(converted, output_path)
+        target = output_path
+    elif args.mace_to_curator or args.curator_to_mace:
+        import torch
+        from curator.utils import convert_mace_to_curator, convert_curator_to_mace
+
+        ckpt_path = Path(args.ckpt_path)
+        output_path = args.output
+        if output_path is None:
+            suffix = "_mace" if args.curator_to_mace else "_converted"
+            output_path = ckpt_path.with_name(f"{ckpt_path.stem}{suffix}{ckpt_path.suffix}")
+        if args.curator_to_mace:
+            target = convert_curator_to_mace(
+                curator_path=ckpt_path,
+                output_path=output_path,
+                device=torch.device(device),
+            )
+        else:
+            target = convert_mace_to_curator(
+                mace_path=ckpt_path,
+                output_path=output_path,
+                device=torch.device(device),
+            )
     else:
         import torch
 
@@ -382,6 +489,8 @@ def deploy(
         model = models[0]
 
     if lammps_mliap:
+        if not element_types:
+            raise ValueError("element_types must be provided when exporting LAMMPS MLIAP models.")
         from curator.simulate.lammps_mliap_interface import LAMMPS_MLIAP
         lmp_model = LAMMPS_MLIAP(model, element_types)
         if target_path == 'compiled_model.pt':

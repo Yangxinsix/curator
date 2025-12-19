@@ -15,8 +15,11 @@ try:
 
     IS_CUET_AVAILABLE = True
 
-
-except ImportError:
+except Exception as e:  # noqa: BLE001
+    warnings.warn(
+        f"cuequivariance could not be loaded ({e!r}); cueq acceleration disabled.",
+        RuntimeWarning,
+    )
     IS_CUET_AVAILABLE = False
 
 if IS_CUET_AVAILABLE:
