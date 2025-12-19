@@ -6,6 +6,8 @@ import sys
 import time
 from contextlib import contextmanager
 from typing import Dict, Tuple, Optional, List, Union
+from curator.data import properties
+from curator.layer import GradientOutput, GlobalRescaleShift
 from curator.model.base import NeuralNetworkPotential, LitNNP
 
 import torch
@@ -73,27 +75,30 @@ class LAMMPS_MLIAP(MLIAPUnified):
         self.initialized = False
         self.step = 0
 
-        self.model = model['model'] if model.__class__.__name__ == 'LitNNP' else model
-        self._convert_model(model)
+        self.model = model.model if isinstance(model, LitNNP) else model
+        self._convert_model(self.model)
         
     @staticmethod
     def _convert_model(model):
-        model.model_outputs = ['atomic_energy', 'edge_forces']
+        model.model_outputs = [properties.atomic_energy, properties.edge_forces]
 
         # output atomic energy
         for i, key in enumerate(model.representation.readout.model_outputs):
-            if key == 'energy':
+            if key == properties.energy:
                 model.representation.readout.per_atom_flags[i] = True
-                model.representation.readout.per_atom_keys[i] = 'atomic_energy'
+                model.representation.readout.per_atom_keys[i] = properties.atomic_energy
 
         # output edge forces
-        model.output_modules.gradient_output.compute_edge_forces = True
-        model.output_modules.gradient_output.compute_edge_forces_only = True
-
-        if 'global_scale_shift' in model.output_modules:
-            model.output_modules.global_scale_shift.atomwise_shift = True
-            model.output_modules.global_scale_shift.scale_keys = ['atomic_energy', 'edge_forces']
-            model.output_modules.global_scale_shift.shift_keys = ['atomic_energy']
+        for m in model.output_modules:
+            if isinstance(m, GradientOutput):
+                m.compute_edge_forces = True
+                m.compute_edge_forces_only = True
+                m.model_outputs = [properties.forces, properties.edge_forces]
+            elif isinstance(m, GlobalRescaleShift):
+                m.atomwise_shift = True
+                m.scale_keys = [properties.atomic_energy, properties.edge_forces]
+                m.shift_keys = [properties.atomic_energy]
+                m.model_outputs = [properties.atomic_energy, properties.edge_forces]
         
         model.eval()
 

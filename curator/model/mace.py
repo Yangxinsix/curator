@@ -1,4 +1,5 @@
 import torch
+import warnings
 from torch import nn
 from e3nn import o3
 from e3nn.nn import Activation
@@ -22,7 +23,7 @@ from curator.layer import (
     RealAgnosticInteractionBlock,
     EquivariantProductBasisBlock,
 )
-from curator.layer._cuequivariance_wrapper import set_use_cueq
+from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE, set_use_cueq
 from curator.data import properties
 from typing import List, Optional, Dict, Union, Callable, Type
 
@@ -56,7 +57,6 @@ class MACE(nn.Module):
         num_features: Optional[int] = None,
         num_basis: int = 8,
         power: int = 6,
-        gate: Union[str, Callable] = 'silu',
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
         **kwargs,
@@ -79,7 +79,6 @@ class MACE(nn.Module):
             num_features (Optional[int], optional): Number of features. Defaults to None.
             num_basis (int, optional): Number of radial basis. Defaults to 8.
             power (int, optional): Power of radial basis. Defaults to 6.
-            gate (Union[str, Callable], optional): Activation function for gate. Defaults to 'silu'.
             num_heads (int, optional): Number of readout heads. When >1, per-head atomic
                 energies are exposed at properties.atomic_energy_heads and averaged for
                 properties.atomic_energy.
@@ -92,6 +91,12 @@ class MACE(nn.Module):
 
         # use cuequivariance globally
         set_use_cueq(use_cueq)
+        if use_cueq and not IS_CUET_AVAILABLE:
+            warnings.warn(
+                "Requested use_cueq=True but cuequivariance is not available; "
+                "falling back to e3nn kernels.",
+                RuntimeWarning,
+            )
 
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions
