@@ -1,277 +1,290 @@
-2025-10-01 16:46:21: Running on host: XSH-20240927AHO
-2025-10-01 16:46:21: Seed with <3407>
-2025-10-01 16:46:21: Instantiating datamodule <curator.data.AtomsDataModule> from dataset ../../LiFePO4.traj
-AtomsDataModule(datapath=../../LiFePO4.traj
-Dataset size=2257, training dataset size=2031, validation dataset size=225, test dataset size=0.
-scale=None, shift=None, atomwise_normalization=True, scale_forces=True
-species=auto
-avg_num_neighbors=auto
+2025-12-24 19:10:04: Running on host: CHINAMI-2MP6P5O
+2025-12-24 19:10:04: Seed with <3407>
+2025-12-24 19:10:04: Instantiating datamodule <curator.data.AtomsDataModule> from dataset ../../LiFePO4.traj
+AtomsDataModule(
+Train | Val | Test | Batch | Cutoff | Path              
+------+-----+------+-------+--------+-------------------
+2031  | 225 | 0    | 16    | 5.0    | ../../LiFePO4.traj
 )
-2025-10-01 16:46:22: Training model for elements: ['Li', 'O', 'P', 'Fe'].
-2025-10-01 16:46:24: Instantiating task <curator.model.LitNNP>
-2025-10-01 16:46:24: Energy loss weight: 1 Forces loss weight: 100
-2025-10-01 16:46:24: Instantiating model <class 'curator.model.base.NeuralNetworkPotential'> with GNN representation <class 'curator.model.mace.MACE'>
-2025-10-01 16:46:24: Instantiating trainer <pytorch_lightning.Trainer>
-2025-10-01 16:46:28: The average number of neighbors is calculated to be: 40.123
-2025-10-01 16:46:29: Training model for elements: ['Li', 'O', 'P', 'Fe'].
-2025-10-01 16:46:30: Using reference energies for elements: {'Li': -2.4021177291870117, 'O': -9.608469009399414, 'P': -2.4021172523498535, 'Fe': -2.4021172523498535}.
-2025-10-01 16:46:29: Forces will be scaled by forces_rms: 1.231.
-2025-10-01 16:46:29: Atomwise model outputs will be normalized.
-2025-10-01 16:46:29: Model output properties will be scaled by 1.231, shifted by -0.000.
-2025-10-01 16:46:29: Using reference energies for elements: {'Li': -2.4021177291870117, 'O': -9.608469009399414, 'P': -2.4021172523498535, 'Fe': -2.4021172523498535}.
+2025-12-24 19:10:04: Instantiating task <curator.model.LitNNP>
+2025-12-24 19:10:04: Energy loss weight: 1 Forces loss weight: 100
+2025-12-24 19:10:04: Instantiating model <class 'curator.model.base.NeuralNetworkPotential'> with GNN representation <class 'curator.model.painn.Painn'>
+2025-12-24 19:10:04: Instantiating trainer <pytorch_lightning.Trainer>
+2025-12-24 19:10:04: Using reference energies for elements: None.
+2025-12-24 19:10:05: Forces will be scaled by forces_rms: 1.231.
+2025-12-24 19:10:05: Atomwise model outputs will be normalized.
+2025-12-24 19:10:05: Model output properties will be scaled by 1.231, shifted by -6.520.
+2025-12-24 19:10:05: Using reference energies for elements: None.
 NeuralNetworkPotential(
-  (representation): MACE(
-    (embeddings): ModuleDict(
-      (onehot_embedding): OneHotAtomEncoding(
-        (type_mapper): TypeMapper(symbol_to_type={'Li': 0, 'O': 1, 'P': 2, 'Fe': 3}
-      )
-      (radial_basis): RadialBasisEdgeEncoding(
-        (basis): BesselBasis(cutoff=5.0, num_basis=8, prefactor=0.6324555320336759, trainable=False)
-        (cutoff_fn): PolynomialCutoff(cutoff=5.0, power=6.0)
-      )
-      (sphere_harmonics): SphericalHarmonicEdgeAttrs(
-        (sh): SphericalHarmonics()
-      )
-      (chemical_embedding): AtomwiseLinear(
-        (linear): Linear(4x0e -> 32x0e | 128 weights)
-      )
-    )
-    (interactions): ModuleList(
-      (0): RealAgnosticInteractionBlock(
-        (linear_up): Linear(32x0e -> 32x0e | 1024 weights)
-        (conv_tp): TensorProduct(32x0e x 1x0e+1x1o+1x2e+1x3o -> 32x0e+32x1o+32x2e+32x3o | 128 paths | 128 weights)
-        (conv_tp_weights): FullyConnectedNet[8, 64, 64, 64, 128]
-        (linear): Linear(32x0e+32x1o+32x2e+32x3o -> 32x0e+32x1o+32x2e+32x3o | 4096 weights)
-        (skip_tp): FullyConnectedTensorProduct(32x0e+32x1o+32x2e+32x3o x 4x0e -> 32x0e+32x1o+32x2e+32x3o | 16384 paths | 16384 weights)
-        (reshape): reshape_irreps()
-      )
-      (1-2): 2 x RealAgnosticResidualInteractionBlock(
-        (linear_up): Linear(32x0e+32x1o+32x2e+32x3o -> 32x0e+32x1o+32x2e+32x3o | 4096 weights)
-        (conv_tp): TensorProduct(32x0e+32x1o+32x2e+32x3o x 1x0e+1x1o+1x2e+1x3o -> 128x0e+192x1o+224x2e+192x3o | 736 paths | 736 weights)
-        (conv_tp_weights): FullyConnectedNet[8, 64, 64, 64, 736]
-        (linear): Linear(128x0e+192x1o+224x2e+192x3o -> 32x0e+32x1o+32x2e+32x3o | 23552 weights)
-        (skip_tp): FullyConnectedTensorProduct(32x0e+32x1o+32x2e+32x3o x 4x0e -> 32x0e+32x1o+32x2e+32x3o | 16384 paths | 16384 weights)
-        (reshape): reshape_irreps()
-      )
-      (3): RealAgnosticResidualInteractionBlock(
-        (linear_up): Linear(32x0e+32x1o+32x2e+32x3o -> 32x0e+32x1o+32x2e+32x3o | 4096 weights)
-        (conv_tp): TensorProduct(32x0e+32x1o+32x2e+32x3o x 1x0e+1x1o+1x2e+1x3o -> 128x0e+192x1o+224x2e+192x3o | 736 paths | 736 weights)
-        (conv_tp_weights): FullyConnectedNet[8, 64, 64, 64, 736]
-        (linear): Linear(128x0e+192x1o+224x2e+192x3o -> 32x0e+32x1o+32x2e+32x3o | 23552 weights)
-        (skip_tp): FullyConnectedTensorProduct(32x0e+32x1o+32x2e+32x3o x 4x0e -> 32x0e | 4096 paths | 4096 weights)
-        (reshape): reshape_irreps()
-      )
-    )
-    (products): ModuleList(
-      (0-2): 3 x EquivariantProductBasisBlock(
-        (symmetric_contractions): SymmetricContraction(
-          (contractions): ModuleList(
-            (0): Contraction(
-              (contractions_weighting): ModuleList(
-                (0-1): 2 x GraphModule()
-              )
-              (contractions_features): ModuleList(
-                (0-1): 2 x GraphModule()
-              )
-              (weights): ParameterList(
-                  (0): Parameter containing: [torch.float32 of size 4x4x32]
-                  (1): Parameter containing: [torch.float32 of size 4x1x32]
-              )
-              (graph_opt_main): GraphModule()
-            )
-            (1): Contraction(
-              (contractions_weighting): ModuleList(
-                (0-1): 2 x GraphModule()
-              )
-              (contractions_features): ModuleList(
-                (0-1): 2 x GraphModule()
-              )
-              (weights): ParameterList(
-                  (0): Parameter containing: [torch.float32 of size 4x6x32]
-                  (1): Parameter containing: [torch.float32 of size 4x1x32]
-              )
-              (graph_opt_main): GraphModule()
-            )
-            (2): Contraction(
-              (contractions_weighting): ModuleList(
-                (0-1): 2 x GraphModule()
-              )
-              (contractions_features): ModuleList(
-                (0-1): 2 x GraphModule()
-              )
-              (weights): ParameterList(
-                  (0): Parameter containing: [torch.float32 of size 4x7x32]
-                  (1): Parameter containing: [torch.float32 of size 4x1x32]
-              )
-              (graph_opt_main): GraphModule()
-            )
-            (3): Contraction(
-              (contractions_weighting): ModuleList(
-                (0-1): 2 x GraphModule()
-              )
-              (contractions_features): ModuleList(
-                (0-1): 2 x GraphModule()
-              )
-              (weights): ParameterList(
-                  (0): Parameter containing: [torch.float32 of size 4x6x32]
-                  (1): Parameter containing: [torch.float32 of size 4x1x32]
-              )
-              (graph_opt_main): GraphModule()
-            )
-          )
+  (representation): Painn(
+    (atom_embedding): Embedding(119, 128)
+    (message_layers): ModuleList(
+      (0-2): 3 x PainnMessage(
+        (cutoff_fn): CosineCutoff()
+        (radial_basis): SineBasis()
+        (scalar_message_mlp): Sequential(
+          (0): Linear(in_features=128, out_features=128, bias=True)
+          (1): SiLU()
+          (2): Linear(in_features=128, out_features=384, bias=True)
         )
-        (linear): Linear(32x0e+32x1o+32x2e+32x3o -> 32x0e+32x1o+32x2e+32x3o | 4096 weights)
-      )
-      (3): EquivariantProductBasisBlock(
-        (symmetric_contractions): SymmetricContraction(
-          (contractions): ModuleList(
-            (0): Contraction(
-              (contractions_weighting): ModuleList(
-                (0-1): 2 x GraphModule()
-              )
-              (contractions_features): ModuleList(
-                (0-1): 2 x GraphModule()
-              )
-              (weights): ParameterList(
-                  (0): Parameter containing: [torch.float32 of size 4x4x32]
-                  (1): Parameter containing: [torch.float32 of size 4x1x32]
-              )
-              (graph_opt_main): GraphModule()
-            )
-          )
-        )
-        (linear): Linear(32x0e -> 32x0e | 1024 weights)
+        (filter_layer): Linear(in_features=20, out_features=384, bias=True)
       )
     )
-    (readout_mlp): ModuleList(
-      (0-2): 3 x Linear(32x0e+32x1o+32x2e+32x3o -> 1x0e | 32 weights)
-      (3): AtomwiseNonLinear(
-        (linear_1): Linear(32x0e -> 16x0e | 512 weights)
-        (non_linearity): Activation [x] (16x0e -> 16x0e)
-        (linear_2): Linear(16x0e -> 1x0e | 16 weights)
+    (update_layers): ModuleList(
+      (0-2): 3 x PainnUpdate(
+        (update_U): Linear(in_features=128, out_features=128, bias=True)
+        (update_V): Linear(in_features=128, out_features=128, bias=True)
+        (update_mlp): Sequential(
+          (0): Linear(in_features=256, out_features=128, bias=True)
+          (1): SiLU()
+          (2): Linear(in_features=128, out_features=384, bias=True)
+        )
+      )
+    )
+    (readout): AtomwiseNN(
+      (readout_mlp): Sequential(
+        (0): Dense(
+          (linear): Linear(in_features=128, out_features=128, bias=True)
+          (activation): SiLU()
+        )
+        (1): Dense(
+          (linear): Linear(in_features=128, out_features=1, bias=True)
+          (activation): Identity()
+        )
       )
     )
   )
-  (input_modules): ModuleList(
+  (input_modules): CallbackModuleList(
     (0): PairwiseDistance(compute_neighbor_list=True, compute_distance_from_R=False, compute_forces=True)
   )
   (output_modules): CallbackModuleList(
-    (0): AtomwiseReduce()
-    (1): GradientOutput(grad_on_edge_diff=True, grad_on_positions=False, model_outputs=['forces'])
-    (2): GlobalRescaleShift(scale_by=tensor([1.2307]), shift_by=tensor([-9.0185e-07]), shift_by_E0=True, atomic_energies={'Li': tensor(-2.4021), 'O': tensor(-9.6085), 'P': tensor(-2.4021), 'Fe': tensor(-2.4021)}, scale_keys=['energy', 'forces'], shift_keys=['energy'], atomwise_normalization=True)
+    (0): GradientOutput(grad_on_edge_diff=True, grad_on_positions=False, model_outputs=['forces'])
+    (1): GlobalRescaleShift(scale_by=tensor([1.2307]), shift_by=tensor([-6.5200]), shift_by_E0=False, atomic_energies={}, scale_keys=['energy', 'forces'], shift_keys=['energy'], atomwise_normalization=True)
   )
 )
-2025-10-01 16:46:29: Model parameters: 431,984
+2025-12-24 19:10:05: Model parameters: 600,577
 
 
-2025-10-01 16:46:29: Validating
+2025-12-24 19:10:05: Validating
 # epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
-      0          0             173            2.03             171            1.75            1.76            1.02            1.61
-      0         10             137           0.722             136            1.01            1.05           0.879            1.44
-      0         20            39.8           0.488            39.3            0.83            0.86           0.529           0.771
-      0         30            82.1           0.421            81.6            0.77           0.799           0.725            1.11
-      0         40            39.4           0.708            38.7            1.01            1.04           0.504           0.766
-      0         50             181             1.3             180            1.03             1.4            1.09            1.65
-      0         60            66.2           0.447            65.7           0.735           0.823           0.604           0.998
-      0         70            64.5            0.22            64.3           0.574           0.577           0.665           0.987
-      0         80             137            1.56             136            1.32            1.54           0.897            1.43
-      0         90            50.7            0.41            50.3           0.652           0.788           0.576           0.873
-      0        100             172            1.63             171            1.22            1.57            1.01            1.61
-      0        110            58.5           0.361            58.2           0.525           0.739           0.598           0.939
+      0          0             135            7.93             127            3.28            3.47           0.877            1.39
+      0         10            95.6            12.2            83.3            4.26            4.31           0.697            1.12
+      0         20             145            8.23             137            3.31            3.53           0.897            1.44
 
 
-2025-10-01 16:46:41: Epoch summary:
+2025-12-24 19:10:08: Epoch summary:
 Validation  # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
-                  0            95.4            0.66              95            0.84            0.91           0.725            1.15
+                  0             118              10             110            3.75            3.88           0.784            1.27
 
 
-2025-10-01 16:46:41: Start training model
+2025-12-24 19:10:08: Start training model
 LightningAdamW (
 Parameter Group 0
-    amsgrad: True
+    amsgrad: False
     betas: [0.9, 0.999]
     capturable: False
+    decoupled_weight_decay: True
     differentiable: False
     eps: 1e-08
     foreach: None
     fused: None
-    lr: 0.005
+    lr: 0.0005
     maximize: False
-    name: input_modules
-    weight_decay: 0.0
-
-Parameter Group 1
-    amsgrad: True
-    betas: [0.9, 0.999]
-    capturable: False
-    differentiable: False
-    eps: 1e-08
-    foreach: None
-    fused: None
-    lr: 0.005
-    maximize: False
-    name: decay_params
-    weight_decay: 0.0
-
-Parameter Group 2
-    amsgrad: True
-    betas: [0.9, 0.999]
-    capturable: False
-    differentiable: False
-    eps: 1e-08
-    foreach: None
-    fused: None
-    lr: 0.005
-    maximize: False
-    name: no_decay_params
-    weight_decay: 0.0
-
-Parameter Group 3
-    amsgrad: True
-    betas: [0.9, 0.999]
-    capturable: False
-    differentiable: False
-    eps: 1e-08
-    foreach: None
-    fused: None
-    lr: 0.005
-    maximize: False
-    name: products
-    weight_decay: 0.0
-
-Parameter Group 4
-    amsgrad: True
-    betas: [0.9, 0.999]
-    capturable: False
-    differentiable: False
-    eps: 1e-08
-    foreach: None
-    fused: None
-    lr: 0.005
-    maximize: False
-    name: readout_mlp
-    weight_decay: 0.0
-
-Parameter Group 5
-    amsgrad: True
-    betas: [0.9, 0.999]
-    capturable: False
-    differentiable: False
-    eps: 1e-08
-    foreach: None
-    fused: None
-    lr: 0.005
-    maximize: False
-    name: output_modules
-    weight_decay: 0.0
+    weight_decay: 0.01
 )
 
 
-2025-10-01 16:46:41: Training
+2025-12-24 19:10:08: Training
 # epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
-      0          0            66.1           0.701            65.4           0.959            1.03           0.605           0.995
-      0         10            98.2           0.943            97.3           0.992             1.2           0.737            1.21
-      0         20            67.8            5.89            61.9            2.85            2.99           0.503           0.969
-      0         30            63.2              20            43.3            5.45             5.5           0.545            0.81
-      0         40            35.2            3.23              32            2.16            2.21            0.51           0.696
-      0         50            20.8           0.526            20.2           0.667           0.893           0.398           0.554
+      0          0             119             9.1             110            3.59            3.71           0.828            1.29
+      0         10            23.5            1.97            21.6             1.7            1.73           0.418           0.571
+      0         20              16           0.105            15.9           0.362           0.399           0.362           0.491
+      0         30             8.1           0.166            7.93           0.452           0.502           0.249           0.347
+      0         40             6.3           0.391            5.91           0.756           0.769           0.224           0.299
+      0         50            7.86          0.0278            7.84           0.168           0.205            0.24           0.344
+      0         60            6.74          0.0791            6.66           0.217           0.346           0.226           0.318
+      0         70            3.51          0.0633            3.44            0.29            0.31           0.163           0.228
+      0         80            3.14           0.368            2.77           0.743           0.746           0.148           0.205
+      0         90            2.36            0.48            1.88           0.849           0.853           0.125           0.169
+      0        100             2.3           0.388            1.91           0.759           0.766           0.124            0.17
+      0        110             1.7           0.278            1.42           0.647           0.649           0.108           0.147
+      0        120            1.39           0.104            1.28           0.393           0.398           0.106           0.139
+
+
+2025-12-24 19:12:51: Validating
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      0          0             2.2         0.00963            2.19           0.089           0.121           0.126           0.182
+      0         10           0.956         0.00283           0.953          0.0539          0.0655          0.0909            0.12
+      0         20            1.56         0.00672            1.56          0.0764           0.101           0.112           0.153
+
+
+2025-12-24 19:12:52: Epoch summary:
+Validation  # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  0             1.5         0.00731             1.5          0.0766          0.0979           0.107           0.149
+Train       # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  0            10.6           0.829            9.74           0.842           0.871           0.227           0.325
+
+
+2025-12-24 19:12:53: Training
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      1          0             1.6           0.425            1.18             0.8           0.803           0.098           0.133
+      1         10            1.81           0.433            1.38           0.808            0.81           0.105           0.145
+      1         20            1.66            0.26             1.4           0.618           0.628           0.102           0.146
+      1         30            1.57           0.328            1.24           0.702           0.705           0.101           0.137
+      1         40            1.48            0.59           0.893           0.944           0.945           0.086           0.116
+      1         50            1.87          0.0109            1.86           0.117           0.128           0.128           0.168
+      1         60             1.6           0.317            1.29            0.69           0.693           0.101            0.14
+      1         70            1.43          0.0118            1.42           0.129           0.134           0.102           0.147
+      1         80            0.81         0.00183           0.808          0.0438          0.0526          0.0843           0.111
+      1         90            1.16           0.112            1.05           0.408           0.412          0.0948           0.126
+      1        100           0.987         0.00516           0.982          0.0775          0.0884          0.0908           0.122
+      1        110            1.06           0.424           0.638             0.8           0.801          0.0755          0.0983
+      1        120           0.827          0.0279           0.799             0.2           0.205          0.0821            0.11
+
+
+2025-12-24 19:13:04: Validating
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      1          0           0.956         0.00127           0.954          0.0285          0.0438          0.0867            0.12
+      1         10           0.435         0.00104           0.434          0.0345          0.0397          0.0606          0.0811
+      1         20           0.717         0.00153           0.716          0.0352          0.0482          0.0763           0.104
+
+
+2025-12-24 19:13:05: Epoch summary:
+Validation  # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  1           0.626          0.0016           0.631          0.0355          0.0462          0.0713          0.0966
+Train       # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  1            1.39            0.19             1.2           0.459           0.465          0.0978           0.133
+
+
+2025-12-24 19:13:05: Training
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      2          0            1.18           0.166            1.01           0.498           0.501          0.0914           0.124
+      2         10           0.708          0.0674            0.64           0.315            0.32          0.0724          0.0985
+      2         20            0.63          0.0663           0.563           0.314           0.317          0.0691          0.0924
+      2         30           0.656           0.203           0.453           0.554           0.555          0.0619          0.0828
+      2         40           0.977           0.211           0.766           0.564           0.565          0.0785           0.108
+      2         50           0.795           0.128           0.667           0.439           0.441          0.0738           0.101
+      2         60           0.655           0.172           0.483           0.509            0.51          0.0618          0.0855
+      2         70           0.567           0.114           0.453           0.413           0.415           0.063          0.0828
+      2         80           0.506          0.0882           0.417           0.364           0.366          0.0613          0.0795
+      2         90           0.678           0.156           0.522           0.485           0.486          0.0669           0.089
+      2        100           0.625           0.144           0.481           0.466           0.467          0.0652          0.0854
+      2        110           0.606           0.177           0.429           0.516           0.518          0.0604          0.0806
+      2        120           0.467           0.139           0.327           0.459            0.46          0.0531          0.0704
+
+
+2025-12-24 19:13:17: Validating
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      2          0           0.528        0.000631           0.527          0.0275          0.0309          0.0675          0.0894
+      2         10           0.283        0.000397           0.283          0.0185          0.0245          0.0487          0.0655
+      2         20           0.467        0.000708           0.466          0.0273          0.0327          0.0617           0.084
+
+
+2025-12-24 19:13:18: Epoch summary:
+Validation  # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  2           0.394        0.000712           0.397          0.0244          0.0313          0.0572          0.0767
+Train       # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  2            0.73           0.205           0.525           0.544           0.545          0.0657          0.0886
+
+
+2025-12-24 19:13:18: Training
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      3          0           0.553           0.202           0.351           0.552           0.553          0.0554           0.073
+      3         10           0.499          0.0147           0.485           0.143           0.149          0.0635          0.0857
+      3         20           0.577          0.0113           0.566            0.12           0.131          0.0702          0.0926
+      3         30            1.52           0.013            1.51           0.112            0.14          0.0993           0.151
+      3         40           0.766          0.0871           0.678           0.356           0.363          0.0737           0.101
+      3         50           0.474          0.0517           0.423           0.277            0.28          0.0616            0.08
+      3         60           0.947           0.122           0.825           0.426            0.43           0.085           0.112
+      3         70           0.585         0.00089           0.584           0.032          0.0367          0.0723           0.094
+      3         80           0.937           0.146            0.79           0.466           0.471          0.0771           0.109
+      3         90           0.604           0.262           0.342            0.63            0.63          0.0527          0.0719
+      3        100           0.615            0.24           0.375           0.602           0.603          0.0552          0.0753
+      3        110           0.528          0.0724           0.456            0.33           0.331          0.0607          0.0831
+      3        120           0.436          0.0851            0.35           0.358           0.359          0.0553          0.0728
+
+
+2025-12-24 19:13:29: Validating
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      3          0           0.389        0.000657           0.389          0.0246          0.0315          0.0584          0.0767
+      3         10           0.212        0.000231           0.212          0.0175          0.0187          0.0425          0.0566
+      3         20           0.382         0.00057           0.381          0.0201          0.0294          0.0564           0.076
+
+
+2025-12-24 19:13:31: Epoch summary:
+Validation  # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  3           0.298        0.000494             0.3          0.0204          0.0261          0.0499          0.0666
+Train       # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  3           0.699          0.0972           0.601           0.331           0.335          0.0683          0.0926
+
+
+2025-12-24 19:13:31: Training
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      4          0           0.495           0.144           0.351           0.467           0.467          0.0549          0.0729
+      4         10           0.458            0.17           0.288           0.507           0.508          0.0497           0.066
+      4         20           0.375           0.106           0.269             0.4             0.4          0.0472          0.0638
+      4         30           0.478           0.143           0.336           0.465           0.465          0.0523          0.0713
+      4         40           0.332          0.0495           0.283           0.272           0.274          0.0497          0.0654
+      4         50             0.3          0.0434           0.257           0.254           0.256          0.0473          0.0623
+      4         60             0.4           0.121           0.278           0.428           0.429           0.048          0.0649
+      4         70           0.369           0.123           0.245           0.431           0.432          0.0455           0.061
+      4         80           0.379           0.122           0.256            0.43            0.43          0.0488          0.0623
+      4         90           0.361          0.0781           0.283           0.343           0.344          0.0494          0.0654
+      4        100           0.349             0.1           0.249           0.389            0.39          0.0464          0.0614
+      4        110           0.387           0.149           0.238           0.475           0.476          0.0457            0.06
+      4        120           0.358           0.103           0.255           0.394           0.395          0.0479          0.0621
+
+
+2025-12-24 19:13:42: Validating
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      4          0           0.282        0.000956           0.281          0.0292           0.038          0.0495          0.0653
+      4         10           0.161        0.000219           0.161           0.017          0.0182          0.0375          0.0494
+      4         20           0.289         0.00046           0.288          0.0184          0.0264          0.0493          0.0661
+
+
+2025-12-24 19:13:43: Epoch summary:
+Validation  # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  4           0.224        0.000475           0.225          0.0209          0.0259          0.0436          0.0578
+Train       # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  4           0.404           0.125           0.279           0.427           0.428          0.0488          0.0648
+
+
+2025-12-24 19:13:43: Training
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      5          0            0.31          0.0964           0.213           0.381           0.382          0.0449          0.0568
+      5         10           0.417             0.2           0.217           0.549            0.55          0.0431          0.0573
+      5         20           0.549            0.16           0.388           0.492           0.493          0.0584          0.0767
+      5         30           0.597          0.0092           0.588            0.11           0.118          0.0731          0.0943
+      5         40           0.417         0.00519           0.412          0.0838          0.0886           0.059           0.079
+      5         50           0.364         0.00179           0.362          0.0482          0.0521          0.0567           0.074
+      5         60           0.295         0.00282           0.292          0.0618          0.0654          0.0505          0.0666
+      5         70           0.329          0.0219           0.307           0.181           0.182          0.0507          0.0682
+      5         80           0.493          0.0238            0.47           0.187            0.19          0.0628          0.0843
+      5         90           0.372          0.0367           0.336           0.233           0.236           0.053          0.0713
+      5        100           0.555           0.101           0.454            0.39           0.392          0.0632          0.0829
+      5        110           0.304          0.0221           0.282           0.182           0.183          0.0495          0.0653
+      5        120           0.329          0.0483           0.281            0.27            0.27          0.0508          0.0652
+
+
+2025-12-24 19:13:55: Validating
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      5          0            0.23        0.000641           0.229          0.0247          0.0312          0.0442           0.059
+      5         10           0.132        0.000167           0.132          0.0135          0.0159          0.0342          0.0447
+      5         20           0.237         0.00027           0.237          0.0138          0.0202          0.0446          0.0599
+
+
+2025-12-24 19:13:56: Epoch summary:
+Validation  # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  5           0.184        0.000296           0.185          0.0161          0.0203          0.0398          0.0525
+Train       # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  5           0.415           0.046           0.369           0.208           0.212          0.0559          0.0739
+
+
+2025-12-24 19:13:56: Training
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      6          0           0.268          0.0994           0.168           0.388           0.388          0.0382          0.0505
+      6         10           0.282          0.0743           0.208           0.334           0.335           0.042          0.0561
+      6         20           0.264          0.0988           0.165           0.386           0.387          0.0391            0.05
+      6         30           0.194          0.0838            0.11           0.356           0.356          0.0316          0.0408
+      6         40           0.242          0.0339           0.209           0.225           0.226          0.0428          0.0562
+      6         50           0.275          0.0651            0.21           0.314           0.314          0.0432          0.0564

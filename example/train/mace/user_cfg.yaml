@@ -1,4 +1,7 @@
 model:
   representation:
-    num_interactions: 4
+    num_interactions: 3
+
+data:
+  datapath: ../../LiFePO4.traj
     
