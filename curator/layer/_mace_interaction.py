@@ -163,6 +163,17 @@ class RealAgnosticInteractionBlock(Interaction):
             if avg_num_neigh is not None:
                 self.avg_num_neighbors = torch.tensor([avg_num_neigh])
 
+    def setup_from_datamodule(self, datamodule):
+        return self.datamodule(datamodule)
+
+    def setup_from_context(self, ctx):
+        if not self._initialized and ctx.avg_num_neighbors is not None:
+            self.avg_num_neighbors = torch.tensor([ctx.avg_num_neighbors])
+
+    def setup_from_context(self, ctx):
+        if not self._initialized and ctx.avg_num_neighbors is not None:
+            self.avg_num_neighbors = torch.tensor([ctx.avg_num_neighbors])
+
 
 @compile_mode("script")
 class RealAgnosticResidualInteractionBlock(Interaction):

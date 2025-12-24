@@ -1,6 +1,6 @@
 from ._atomic_linear import AtomwiseLinear, AtomwiseNonLinear
 from ._atomwise_reduce import AtomwiseReduce
-from ._atomwise_nn import AtomwiseNN, MACEAtomwiseNN
+from ._atomwise_nn import AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from ._convnet import ConvNetLayer
 from ._charge_equilibration import ChargeEquilibration
 from ._ewald import EwaldSummation
@@ -19,7 +19,7 @@ from ._symmetric_contraction import Contraction, SymmetricContraction
 from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift
 from ._strain import Strain
 from ._feature import FeatureExtractor, FeatureCalculator, RandomProjections
-from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN
+from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from .cutoff import CosineCutoff, PolynomialCutoff
 from .nonlinearities import ShiftedSoftPlus
 from .radial_basis import (
@@ -43,6 +43,8 @@ __all__ = [
     AtomwiseReduce,
     AtomwiseNN,
     MACEAtomwiseNN,
+    MultiDomainAtomwiseNN,
+    MultiDomainMACEAtomwiseNN,
     ConvNetLayer,
     ChargeEquilibration,
     EwaldSummation,
@@ -78,5 +80,7 @@ __all__ = [
     RandomProjections,
     MACEAtomwiseNN,
     AtomwiseNN,
+    MultiDomainAtomwiseNN,
+    MultiDomainMACEAtomwiseNN,
     Dense,
 ]

@@ -6,3 +6,6 @@ defaults:
   - /model/output_modules@output_modules.global_rescale_shift: global_rescale_shift
 _convert_: all
 _target_: curator.model.NeuralNetworkPotential
+heads:
+  _target_: curator.data.properties.HeadConfigFactory
+  heads: [energy]

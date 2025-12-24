@@ -1,7 +1,8 @@
 "keys to access properties of structures"
 
-from typing import Final, Dict, Set
+from typing import Final, Dict, Set, List, Optional, Union
 import torch
+from dataclasses import dataclass
 
 Type = Dict[str, torch.Tensor]
 
@@ -17,6 +18,8 @@ n_types : Final[str] = "_n_types"              # read from config file, useful f
 atomic_types: Final[str] = "_atomic_types"     # map chemical symbols to numbers
 symbols: Final[str] = "symbols"
 image_idx: Final[str] = "_image_index"             # image index of atoms in a batch
+domain: Final[str] = "_domain"                     # domain id per-structure (batch dimension)
+domain_atom: Final[str] = "_domain_atom"           # domain id per-atom (node dimension)
 
 # neighbor list related properties
 edge_idx: Final[str] = "_edge_index"             # index of i (center atoms), j (neighboring atoms)
@@ -143,3 +146,90 @@ activation_fn = {
 }
 
 # output modules
+
+# --------------------------------------------------------------------------- #
+# Head configuration (shared across models/readouts/rescale)
+# --------------------------------------------------------------------------- #
+@dataclass
+class HeadConfig:
+    key: str  # property key in curator.data.properties
+    dim: int = 1
+    is_atomwise: bool = False  # whether the readout is per-atom before reduction
+    reduction: Optional[str] = "sum"  # "sum", "mean", or None
+    atomwise_key: Optional[str] = None  # optional key for per-atom output, e.g. atomic_energy
+    write_atomwise: bool = False  # whether to write per-atom output to data
+    scale_by: Union[float, Dict[str, float], None] = None
+    shift_by: Union[float, Dict[str, float], None] = None
+    atomwise_shift: bool = False  # whether the shift applies on per-atom values
+    atomwise_normalization: bool = True  # if shifting structure-level value, multiply by n_atoms
+    domains: Optional[List[Union[str, int]]] = None  # optional domain whitelist for this head
+    per_species_shift: Union[Dict[int, float], Dict[str, float], str, None] = None  # dict, "auto", or None
+
+
+HEAD_PRESETS: Dict[str, HeadConfig] = {
+    "energy": HeadConfig(
+        key=energy,
+        is_atomwise=True,
+        reduction="sum",
+        atomwise_key=atomic_energy,
+        write_atomwise=False,
+        dim=1,
+    ),
+    "forces": HeadConfig(
+        key=forces,
+        is_atomwise=True,
+        reduction=None,
+        dim=3,
+        write_atomwise=True,
+    ),
+    "atomic_energy": HeadConfig(
+        key=atomic_energy,
+        is_atomwise=True,
+        reduction=None,
+        dim=1,
+        write_atomwise=True,
+    ),
+    "total_charge": HeadConfig(
+        key=total_charge,
+        is_atomwise=False,
+        reduction=None,
+        dim=1,
+    ),
+    "atomic_charge": HeadConfig(
+        key=atomic_charge,
+        is_atomwise=True,
+        reduction=None,
+        dim=1,
+        write_atomwise=True,
+    ),
+}
+
+
+def resolve_heads(heads: List[Union[str, HeadConfig, Dict]]) -> List[HeadConfig]:
+    """
+    Convert a list of string/dict/HeadConfig into a list of HeadConfig.
+
+    Strings are looked up in HEAD_PRESETS; dicts are passed to HeadConfig(**dict).
+    """
+    resolved: List[HeadConfig] = []
+    for h in heads:
+        if isinstance(h, HeadConfig):
+            resolved.append(h)
+        elif isinstance(h, str):
+            if h not in HEAD_PRESETS:
+                raise KeyError(f"Unknown head preset '{h}'. Available: {list(HEAD_PRESETS.keys())}")
+            resolved.append(HEAD_PRESETS[h])
+        elif isinstance(h, dict):
+            resolved.append(HeadConfig(**h))
+        else:
+            raise TypeError(f"Unsupported head spec type: {type(h)}")
+    return resolved
+
+
+class HeadConfigFactory:
+    """
+    Thin factory to let Hydra instantiate head configs from strings/dicts.
+    """
+
+    def __new__(cls, heads: List[Union[str, Dict, HeadConfig]]):
+        return resolve_heads(heads)

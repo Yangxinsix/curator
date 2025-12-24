@@ -14,3 +14,4 @@ num_basis: 8
 power: 6
 gate: silu
 use_cueq: False
+heads: ${model.heads}

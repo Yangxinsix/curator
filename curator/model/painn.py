@@ -11,9 +11,10 @@ from curator.layer import (
     PainnUpdate,
     AtomwiseNN,
 )
+from curator.model.base import Representation
 
 
-class Painn(nn.Module):
+class Painn(Representation):
     """Painn without edge updating"""
     def __init__(
         self, 
@@ -24,6 +25,8 @@ class Painn(nn.Module):
         cutoff_fn: Optional[nn.Module]=None,
         radial_basis: Optional[nn.Module]=None,
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
+        heads: Optional[list] = None,
+        domain_key: Optional[str] = None,
         **kwargs,
     ):
         """Painn without edge updating
@@ -36,7 +39,7 @@ class Painn(nn.Module):
             cutoff_fn (Optional[nn.Module], optional): Cutoff function. Defaults to None.
             radial_basis (Optional[nn.Module], optional): Radial basis. Defaults to None.
         """
-        super().__init__()
+        super().__init__(heads=heads, domain_key=domain_key)
         
         num_embedding = 119   # number of all elements
         self.cutoff = cutoff
@@ -62,10 +65,12 @@ class Painn(nn.Module):
         )
         
         # Setup readout function
-        if isinstance(readout, AtomwiseNN):
-            self.readout = readout
-        else:
-            self.readout = readout(num_features)
+        self.readout = self._instantiate_readout(
+            readout,
+            heads=self.heads,
+            domain_key=self.domain_key,
+            in_features=self.num_features,
+        )
 
     def forward(
         self, 
@@ -75,16 +80,13 @@ class Painn(nn.Module):
         n_ghost: Optional[int] = None,
     ) -> properties.Type:
         # add mask for local interaction part
-        edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
-        mask = edge_dist < self.cutoff
-        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
-
+        edge_cache = self._apply_cutoff_mask(data, self.cutoff)
         node_scalar = self.atom_embedding(data[properties.Z])
         total_atoms = node_scalar.shape[0]
         node_vector = torch.zeros(
             (total_atoms, self.num_features * 3),
-            device=edge_diff.device,
-            dtype=edge_diff.dtype,
+            device=data[properties.edge_diff].device,
+            dtype=data[properties.edge_diff].dtype,
         )
         node_feat = torch.cat([node_scalar, node_vector], dim=-1)
         data[properties.node_embedding] = node_scalar        # store node embedding for some modules (charge equilibration)
@@ -92,9 +94,9 @@ class Painn(nn.Module):
         for message_layer, update_layer in zip(self.message_layers, self.update_layers):
             node_feat = message_layer(
                 node_feat,
-                edge_idx,
-                edge_dist,
-                edge_diff,
+                data[properties.edge_idx],
+                data[properties.edge_dist],
+                data[properties.edge_diff],
                 lammps_data=lammps_data,
                 n_local=n_local,
                 n_ghost=n_ghost,
@@ -105,6 +107,5 @@ class Painn(nn.Module):
         data = self.readout(data)
 
         # restore neighbor list
-        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx, edge_diff, edge_dist
-
+        self._restore_cutoff_mask(data, edge_cache)
         return data

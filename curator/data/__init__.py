@@ -13,6 +13,8 @@ from ._neighborlist import (
     NeighborListTransform,
 )
 from .dataset import AseDataset, NumpyDataset, cat_tensors, collate_atomsdata
+from .atoms_data import AtomsData
+from .collate_atoms_data import collate_atoms_data
 from .datamodule import AtomsDataModule
 from ._type_mapper import TypeMapper
 from ._transform import Transform, UnitTransform
@@ -41,8 +43,10 @@ __all__ = [
     NeighborListTransform,
     AseDataset,
     NumpyDataset,
+    AtomsData,
     cat_tensors,
     collate_atomsdata,
+    collate_atoms_data,
     read_trajectory,
     TypeMapper,
     Transform,

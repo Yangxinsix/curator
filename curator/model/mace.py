@@ -1,12 +1,10 @@
 import torch
-import warnings
 from torch import nn
 from e3nn import o3
 from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
 from functools import partial
 
-from functools import partial
 from curator.layer import (
     OneHotAtomEncoding,
     AtomwiseLinear,
@@ -23,9 +21,10 @@ from curator.layer import (
     RealAgnosticInteractionBlock,
     EquivariantProductBasisBlock,
 )
-from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE, set_use_cueq
+from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
 from curator.data import properties
 from typing import List, Optional, Dict, Union, Callable, Type
+from curator.model.base import Representation
 
 activation_fn = {
     "silu": torch.nn.SiLU(),
@@ -35,7 +34,7 @@ activation_fn = {
 }
 
 @compile_mode('script')
-class MACE(nn.Module):
+class MACE(Representation):
     """MACE model."""
     def __init__(
         self,
@@ -59,6 +58,8 @@ class MACE(nn.Module):
         power: int = 6,
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
+        heads: Optional[list] = None,
+        domain_key: Optional[str] = None,
         **kwargs,
     ) -> None:
         """MACE model.
@@ -83,20 +84,14 @@ class MACE(nn.Module):
                 energies are exposed at properties.atomic_energy_heads and averaged for
                 properties.atomic_energy.
         """
-        super().__init__()
+        super().__init__(heads=heads, domain_key=domain_key)
         
         self.cutoff = cutoff
         self.parity = parity
         self.species = species
 
         # use cuequivariance globally
-        set_use_cueq(use_cueq)
-        if use_cueq and not IS_CUET_AVAILABLE:
-            warnings.warn(
-                "Requested use_cueq=True but cuequivariance is not available; "
-                "falling back to e3nn kernels.",
-                RuntimeWarning,
-            )
+        self._enable_cueq(use_cueq)
 
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions
@@ -207,18 +202,17 @@ class MACE(nn.Module):
             self.products.append(prod)
 
             # Setup readout function
-            if isinstance(readout, AtomwiseNN):
-                self.readout = readout
-            else:
-                self.readout = readout(num_interactions=num_interactions, hidden_irreps=self.hidden_irreps)
+        self.readout = self._instantiate_readout(
+            readout,
+            heads=self.heads,
+            domain_key=self.domain_key,
+            num_interactions=num_interactions,
+            hidden_irreps=self.hidden_irreps,
+        )
             
     def forward(self, data: properties.Type) -> properties.Type:
         # add mask for local interaction part
-        edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
-        mask = edge_dist < self.cutoff
-        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
-
-        
+        edge_cache = self._apply_cutoff_mask(data, self.cutoff)
         for m in self.embeddings.values():
             data = m(data)
         
@@ -251,6 +245,5 @@ class MACE(nn.Module):
         data = self.readout(data)
 
         # restore neighbor list
-        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx, edge_diff, edge_dist
-        
+        self._restore_cutoff_mask(data, edge_cache)
         return data

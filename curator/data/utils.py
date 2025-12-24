@@ -1,4 +1,5 @@
 from . import properties
+from .atoms_data import get_sample_atoms, get_sample_target
 from typing import List, Dict, Tuple, Union, Optional
 from ase.data import atomic_names, atomic_numbers
 import torch
@@ -52,9 +53,11 @@ def compute_average_E0(
     B = torch.zeros((len_train,))
     
     for i in range(len_train):
-        B[i] = dataset[i][properties.energy]
+        sample = dataset[i]
+        B[i] = get_sample_target(sample, properties.energy)
         for j, z in enumerate(numbers):
-            A[i, j] = torch.count_nonzero(dataset[i][properties.Z] == z)
+            atoms = get_sample_atoms(sample)
+            A[i, j] = torch.count_nonzero(atoms[properties.Z] == z)
     atomic_energies_dict = {z: 0.0 for z in numbers}
     try:
         E0s = torch.linalg.lstsq(A, B, rcond=None)[0]

@@ -1,1 +1,2 @@
 _target_: curator.layer.GlobalRescaleShift
+heads: ${model.heads}

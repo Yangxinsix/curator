@@ -1,18 +1,48 @@
 import pytorch_lightning as pl
 import torch
 from typing import Union, Optional, List, Dict, Callable, Tuple
+from dataclasses import dataclass, field
 from ._transform import Transform
 from ._neighborlist import NeighborListTransform, TorchNeighborList
 from .dataset import collate_atomsdata, AseDataset
+from .atoms_data import AtomsData, get_sample_atoms, get_sample_target
 import math
 from . import properties
 from ase.data import chemical_symbols, atomic_numbers
 import json
 import logging
-from torch.utils.data import ConcatDataset
+from torch.utils.data import ConcatDataset, Dataset
 
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class DataContext:
+    species: List[str] = field(default_factory=list)
+    avg_num_neighbors: Optional[float] = None
+    head_scale_shift: Dict[str, Dict[str, float]] = field(default_factory=dict)  # {head: {"mean": m, "std": s}}
+    head_species_shift: Dict[str, Dict[int, float]] = field(default_factory=dict)  # {head: {Z: shift}}
+
+class _DomainTaggedDataset(Dataset):
+    def __init__(self, dataset: Dataset, domain_id: int, task: Optional[str] = None):
+        self.dataset = dataset
+        self.domain_id = int(domain_id)
+        self.task = task
+
+    def __len__(self) -> int:
+        return len(self.dataset)
+
+    def __getitem__(self, idx):
+        sample = self.dataset[idx]
+        if isinstance(sample, AtomsData):
+            sample.atoms[properties.domain] = torch.tensor([self.domain_id], dtype=torch.long)
+            if self.task is not None:
+                sample.task = self.task
+        elif isinstance(sample, dict):
+            sample = sample.copy()
+            sample[properties.domain] = torch.tensor([self.domain_id], dtype=torch.long)
+        return sample
 
 class AtomsDataModule(pl.LightningDataModule):
     def __init__(
@@ -47,6 +77,7 @@ class AtomsDataModule(pl.LightningDataModule):
         shift_by: Union[float, List[float], None] = None,
         scale_forces: bool = False,             # scale forces by forces_rms
         default_dtype: torch.dtype = torch.get_default_dtype(),
+        head_reference_by_species: Optional[Dict[str, Dict[Union[int, str], float]]] = None,
     ) -> None:
         super().__init__()
         
@@ -100,6 +131,8 @@ class AtomsDataModule(pl.LightningDataModule):
         self.atomic_energies = atomic_energies
         self.mean = shift_by
         self.std = scale_by
+        self.head_reference_by_species = head_reference_by_species or {}
+        self._scale_shift_cache: Dict[str, Tuple[float, float]] = {}
         
     def setup(self, stage: Optional[str] = None) -> None:
         if self._train_dataset is None:
@@ -147,12 +180,14 @@ class AtomsDataModule(pl.LightningDataModule):
             logger.info(self)
     
     def setup_dataset(self, data_type: str, datapath: str) -> None:
+        task = data_type.lower()
         if data_type == 'Ase':
             dataset = AseDataset(
                 datapath,
                 cutoff=self.cutoff,
                 compute_neighbor_list=self.compute_neighbor_list,
                 transforms=self.transforms,
+                task=task,
             )
         elif data_type == 'Numpy':
             from .dataset import NumpyDataset
@@ -161,10 +196,11 @@ class AtomsDataModule(pl.LightningDataModule):
                 cutoff=self.cutoff,
                 compute_neighbor_list=self.compute_neighbor_list,
                 transforms=self.transforms,
+                task=task,
             )
         elif data_type == 'Bamboo':
             from .dataset import BambooDataset
-            dataset = BambooDataset(datapath)
+            dataset = BambooDataset(datapath, task=task)
         elif data_type == 'Sqlite3':
             from .sql_database import Sqlite3Dataset
             dataset = Sqlite3Dataset(
@@ -172,6 +208,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 cutoff=self.cutoff,
                 compute_neighbor_list=self.compute_neighbor_list,
                 transforms=self.transforms,
+                task=task,
             )
         return dataset
 
@@ -257,7 +294,8 @@ class AtomsDataModule(pl.LightningDataModule):
         if self.species == "auto" or force_process:
             numbers = []
             for sample in self.train_dataset:
-                numbers.append(torch.unique(sample[properties.Z]))
+                atoms = get_sample_atoms(sample)
+                numbers.append(torch.unique(atoms[properties.Z]))
             numbers = torch.unique(torch.cat(numbers))
             self.species = [chemical_symbols[int(n)] for n in numbers]
         logger.debug(f"Training model for elements: {self.species}.")
@@ -268,92 +306,240 @@ class AtomsDataModule(pl.LightningDataModule):
             n_atoms = 0
             n_neighbors = 0
             for sample in self.train_dataset:
-                n_atoms += sample[properties.n_atoms].sum()
+                atoms = get_sample_atoms(sample)
+                n_atoms += atoms[properties.n_atoms].sum()
                 # TODO: add compute_neighbor_list here if neighbors are not computed
                 if not self.compute_neighbor_list and not any(isinstance(t, NeighborListTransform) for t in self.transforms):
                     torch_nl = TorchNeighborList(cutoff=self.cutoff, wrap_atoms=True, requires_grad=False, return_distance=False)
-                    sample = torch_nl(sample)
-                n_neighbors += sample[properties.n_pairs].sum()
+                    atoms = torch_nl(atoms)
+                n_neighbors += atoms[properties.n_pairs].sum()
             self.avg_num_neighbors = n_neighbors.sum() / n_atoms.item()
             logger.debug(f"The average number of neighbors is calculated to be: {self.avg_num_neighbors:.3f}")
         return self.avg_num_neighbors
     
-    def _get_average_E0(self) -> Optional[Dict[int, float]]:
+    def _get_head_per_species_shift(
+        self,
+        property_key: str,
+        is_atomwise: Optional[bool] = None,
+    ) -> Optional[Dict[int, float]]:
         """
-        Function to compute the average interaction energy of each chemical element
-        returns dictionary of E0s
-        """
-        if self.atomic_energies == "auto":
-            numbers = [atomic_numbers[s] for s in self._get_species(force_process=True)]
-            num_elements = len(numbers)
-            len_train = len(self.train_dataset)
-            A = torch.zeros((len_train, num_elements))
-            B = torch.zeros((len_train,))
-            
-            for i, sample in enumerate(self.train_dataset):
-                B[i] = sample[properties.energy]
-                for j, z in enumerate(numbers):
-                    A[i, j] = torch.count_nonzero(sample[properties.Z] == z)
-            atomic_energies_dict = {z: 0.0 for z in numbers}
-            
-            try:
-                E0s = torch.linalg.lstsq(A, B, rcond=None)[0]
-                for i, z in enumerate(numbers):
-                    atomic_energies_dict[z] = E0s[i].item()
-                    
-            except torch.linalg.LinAlgError:
-                print(
-                    "Failed to compute E0s using least squares regression, using the same for all atoms"
-                )
-            self.atomic_energies = atomic_energies_dict
-            
-        if isinstance(self.atomic_energies, Dict):
-            for k in list(self.atomic_energies.keys()):
-                if isinstance(k, int):
-                    self.atomic_energies[chemical_symbols[k]] = self.atomic_energies.pop(k)
+        Compute per-species shift for a property (dict of atomic_number -> value).
 
-        logger.debug(f"Using reference energies for elements: {self.atomic_energies}.")
-        return self.atomic_energies
+        - For structure-level additive properties, solve a least-squares system
+          on atom counts (energy-style).
+        - For atomwise properties, average per-atom values per species.
+
+        Returns None when the property is missing or cannot be reduced to a
+        scalar per species.
+        """
+        numbers = [atomic_numbers[s] for s in self._get_species(force_process=True)]
+        if len(numbers) == 0:
+            return None
+
+        def _normalize_keys(d: Dict[int, float]) -> Dict[int, float]:
+            out = {}
+            for k, v in d.items():
+                idx = atomic_numbers[k] if isinstance(k, str) else k
+                out[idx] = v
+            return out
+
+        # user-provided override per head
+        if property_key in self.head_reference_by_species:
+            shifts = _normalize_keys(self.head_reference_by_species[property_key])
+            logger.debug(f"Using user-specified per-species shift for '{property_key}': {shifts}.")
+            return shifts
+
+        # user-provided atomic_energies acts as a default per-species shift for energy
+        if property_key == properties.energy and isinstance(self.atomic_energies, Dict):
+            return _normalize_keys(self.atomic_energies)
+
+        # auto-compute only when explicitly requested by the caller
+        if property_key == properties.energy and self.atomic_energies == "auto":
+            is_atomwise = False if is_atomwise is None else is_atomwise
+        if is_atomwise is None:
+            is_atomwise = False
+
+        if is_atomwise:
+            sums = torch.zeros(len(numbers), dtype=self.default_dtype)
+            counts = torch.zeros(len(numbers), dtype=torch.float)
+            for sample in self.train_dataset:
+                atoms = get_sample_atoms(sample)
+                values = get_sample_target(sample, property_key)
+                if values is None or properties.Z not in atoms:
+                    continue
+                if values.ndim > 1:
+                    # Only scalar atomwise shifts are supported
+                    logger.debug(f"Skip per-species shift for '{property_key}' with ndim={values.ndim}.")
+                    return None
+                z = atoms[properties.Z]
+                for idx, z_val in enumerate(numbers):
+                    mask = z == z_val
+                    if mask.any():
+                        sums[idx] += values[mask].sum()
+                        counts[idx] += mask.sum()
+            shifts = {}
+            for idx, z_val in enumerate(numbers):
+                if counts[idx] > 0:
+                    shifts[z_val] = (sums[idx] / counts[idx]).item()
+            if shifts:
+                logger.debug(f"Computed per-species shift for atomwise '{property_key}': {shifts}.")
+                return shifts
+            return None
+
+        # structure-level additive property: solve least squares on counts
+        len_train = len(self.train_dataset)
+        A = torch.zeros((len_train, len(numbers)), dtype=self.default_dtype)
+        B = torch.zeros((len_train,), dtype=self.default_dtype)
+        row = 0
+        for sample in self.train_dataset:
+            atoms = get_sample_atoms(sample)
+            value = get_sample_target(sample, property_key)
+            if value is None or properties.Z not in atoms:
+                continue
+            if value.ndim > 0:
+                logger.debug(f"Skip per-species shift for '{property_key}' with shape {tuple(value.shape)}.")
+                continue
+            B[row] = value
+            for j, z in enumerate(numbers):
+                A[row, j] = torch.count_nonzero(atoms[properties.Z] == z)
+            row += 1
+
+        if row == 0:
+            return None
+        A = A[:row]
+        B = B[:row]
+        try:
+            coeffs = torch.linalg.lstsq(A, B, rcond=None)[0]
+        except torch.linalg.LinAlgError:
+            logger.warning(f"Failed to compute per-species shift for '{property_key}' via lstsq; using zeros.")
+            coeffs = torch.zeros_like(A[0])
+        shifts = {z: coeffs[i].item() for i, z in enumerate(numbers)}
+        logger.debug(f"Computed per-species shift for '{property_key}': {shifts}.")
+        return shifts
     
     def _get_scale_shift(
         self,
+        property_key: str = properties.energy,
+        atomwise_normalization: Optional[bool] = None,
+        per_species_shift: Optional[Dict[int, float]] = None,
     ) -> Tuple[float, float]:
-        if self.mean is None:
-            if self.normalization:
-                atomic_energies = self._get_average_E0()
-                if atomic_energies is not None:
-                    reference_energies = torch.zeros((119,), dtype=self.default_dtype)
-                    for k, v in atomic_energies.items():
-                        reference_energies[atomic_numbers[k] if isinstance(k, str) else k] = v
+        """
+        Compute (shift, scale) statistics for a given property key. Generic: no special-casing beyond optional per-species shift.
+        """
+        if property_key in self._scale_shift_cache:
+            return self._scale_shift_cache[property_key]
 
-                energies = []
-                if self.scale_forces:
-                    forces = []
-                for sample in self.train_dataset:
-                    e = sample[properties.energy]
-                    if atomic_energies is not None:
-                        node_e0 = reference_energies[sample[properties.Z]]
-                        e0 = node_e0.sum()
-                        e = e - e0
-                    if self.atomwise_normalization:
-                        e /= sample[properties.n_atoms]
-                    energies.append(e)
-                    if self.scale_forces:
-                        forces.append(sample[properties.forces])
-                energies = torch.cat(energies)
-                mean = torch.mean(energies).item()
-                std = torch.std(energies).item()
-                if self.scale_forces:
-                    forces = torch.cat(forces)
-                    std = torch.sqrt(torch.mean(forces * forces)).item()
-                    logger.debug(f"Forces will be scaled by forces_rms: {std:.3f}.")
-            else:
-                mean, std = 0.0, 1.0
-            self.mean, self.std = mean, std
-        if self.atomwise_normalization:
-            logger.debug("Atomwise model outputs will be normalized.")
-        logger.debug(f"Model output properties will be scaled by {self.std:.3f}, shifted by {self.mean:.3f}.")
-        return self.mean, self.std
+        if not self.normalization:
+            self._scale_shift_cache[property_key] = (0.0, 1.0)
+            return self._scale_shift_cache[property_key]
+
+        use_atomwise_norm = self.atomwise_normalization if atomwise_normalization is None else atomwise_normalization
+
+        # optional per-species shift subtraction if available (must be provided explicitly)
+        per_species_tensor = None
+        if per_species_shift is not None:
+            per_species_tensor = torch.zeros((119,), dtype=self.default_dtype)
+            for k, v in per_species_shift.items():
+                per_species_tensor[atomic_numbers[k] if isinstance(k, str) else k] = v
+
+        values = []
+        for sample in self.train_dataset:
+            atoms = get_sample_atoms(sample)
+            v = get_sample_target(sample, property_key)
+            if v is None:
+                continue
+            if per_species_tensor is not None and properties.Z in atoms:
+                node_shift = per_species_tensor[atoms[properties.Z]]
+                if v.shape[:1] == node_shift.shape[:1]:
+                    v = v - node_shift
+                else:
+                    v = v - node_shift.sum()
+            if use_atomwise_norm and properties.n_atoms in atoms and ((not isinstance(v, torch.Tensor)) or v.ndim == 0):
+                v = v / atoms[properties.n_atoms]
+            values.append(v)
+
+        if len(values) == 0:
+            raise KeyError(f"Property '{property_key}' not found in training dataset samples.")
+
+        vals = torch.cat(values) if values[0].numel() > 1 else torch.stack(values).reshape(-1)
+        mean = torch.mean(vals).item()
+        std = torch.std(vals).item()
+
+        self._scale_shift_cache[property_key] = (mean, std if std != 0.0 else 1.0)
+        msg = (
+            f"Property '{property_key}' stats: shift={self._scale_shift_cache[property_key][0]:.3f}, "
+            f"scale={self._scale_shift_cache[property_key][1]:.3f}"
+        )
+        if per_species_shift is not None:
+            msg += " (using per-species shift for computation)."
+        logger.debug(msg)
+        return self._scale_shift_cache[property_key]
+
+    def _get_force_rms(self) -> float:
+        """
+        Compute RMS for forces if needed separately.
+        """
+        forces = []
+        for sample in self.train_dataset:
+            v = get_sample_target(sample, properties.forces)
+            if v is not None:
+                forces.append(v)
+        if not forces:
+            raise KeyError("Property 'forces' not found in training dataset samples.")
+        forces = torch.cat(forces)
+        rms = torch.sqrt(torch.mean(forces * forces)).item()
+        logger.debug(f"Forces will be scaled by forces_rms: {rms:.3f}.")
+        return rms
+
+    def build_context(self, heads: List) -> "DataContext":
+        # heads may be HeadConfig or dict-like with key field
+        ctx = DataContext()
+        ctx.species = self._get_species() or []
+        ctx.avg_num_neighbors = self._get_avg_num_neighbors()
+        for h in heads:
+            key = getattr(h, "key", None) or getattr(h, "name", None) or (h.get("key") if isinstance(h, dict) else None)
+            if key is None:
+                continue
+            domains = getattr(h, "domains", None) if not isinstance(h, dict) else h.get("domains")
+            if domains is not None and "default" not in domains and len(domains) > 0:
+                # if head is restricted to specific domains and this datamodule is not named, still compute stats;
+                # filtering per-domain happens when contexts are consumed.
+                pass
+            atomwise_norm = getattr(h, "atomwise_normalization", None) if not isinstance(h, dict) else h.get("atomwise_normalization", None)
+
+            # determine per-species shift request
+            per_species_cfg = getattr(h, "per_species_shift", None) if not isinstance(h, dict) else h.get("per_species_shift", None)
+            is_atomwise = getattr(h, "is_atomwise", None) if not isinstance(h, dict) else h.get("is_atomwise", None)
+            per_species_vals = None
+            if isinstance(per_species_cfg, dict):
+                per_species_vals = {atomic_numbers[k] if isinstance(k, str) else k: v for k, v in per_species_cfg.items()}
+            elif isinstance(per_species_cfg, str) and per_species_cfg == "auto":
+                try:
+                    per_species_vals = self._get_head_per_species_shift(key, is_atomwise=is_atomwise)
+                except Exception:
+                    per_species_vals = None
+            elif per_species_cfg is None:
+                # fall back to datamodule-level manual config
+                try:
+                    per_species_vals = self.head_reference_by_species.get(key, None)
+                    if per_species_vals is not None:
+                        per_species_vals = {atomic_numbers[k] if isinstance(k, str) else k: v for k, v in per_species_vals.items()}
+                except Exception:
+                    per_species_vals = None
+
+            try:
+                mean, std = self._get_scale_shift(
+                    property_key=key,
+                    atomwise_normalization=atomwise_norm,
+                    per_species_shift=per_species_vals,
+                )
+                ctx.head_scale_shift[key] = {"mean": mean, "std": std}
+            except Exception:
+                pass
+
+            if per_species_vals is not None:
+                ctx.head_species_shift[key] = per_species_vals
+        return ctx
     
     def __repr__(self):
         return self._format_table()
@@ -426,6 +612,8 @@ class MultiDomainDataModule(pl.LightningDataModule):
     ) -> None:
         super().__init__()
         self.domain_modules = domain_modules
+        self.domain_to_id = {name: i for i, name in enumerate(self.domain_modules.keys())}
+        self.id_to_domain = {i: name for name, i in self.domain_to_id.items()}
         self._train_batch_size = train_batch_size
         self._train_num_workers = train_num_workers
         self._train_shuffle = train_shuffle
@@ -439,22 +627,26 @@ class MultiDomainDataModule(pl.LightningDataModule):
         for name, dm in self.domain_modules.items():
             logger.debug(f"Building data module for: {name}")
             dm.setup(stage)
+            domain_id = self.domain_to_id[name]
+            if dm._train_dataset is not None:
+                dm._train_dataset = _DomainTaggedDataset(dm._train_dataset, domain_id, task=name)
+            if dm._val_dataset is not None:
+                dm._val_dataset = _DomainTaggedDataset(dm._val_dataset, domain_id, task=name)
+            if dm._test_dataset is not None:
+                dm._test_dataset = _DomainTaggedDataset(dm._test_dataset, domain_id, task=name)
+            dm._train_dataloader = None
+            dm._val_dataloader = None
+            dm._test_dataloader = None
 
         train_datasets = [dm.train_dataset for dm in self.domain_modules.values() if dm.train_dataset is not None]
         self._train_dataset = ConcatDataset(train_datasets) if len(train_datasets) > 0 else None
 
-        # Build per-domain val/test loaders now so their samplers remain per-domain.
-        self._val_loaders = [
-            dl for dm in self.domain_modules.values() if (dl := dm.val_dataloader()) is not None
-        ]
-        self._test_loaders = [
-            dl for dm in self.domain_modules.values() if (dl := dm.test_dataloader()) is not None
-        ]
+        self._val_loaders = [dl for dm in self.domain_modules.values() if (dl := dm.val_dataloader()) is not None]
+        self._test_loaders = [dl for dm in self.domain_modules.values() if (dl := dm.test_dataloader()) is not None]
 
     def train_dataloader(self) -> Optional[torch.utils.data.DataLoader]:
         if self._train_dataset is None:
             return None
-        # Use the first domain module as the template for collate/pinning if not overridden.
         template_dm = next(iter(self.domain_modules.values()))
         return torch.utils.data.DataLoader(
             self._train_dataset,
@@ -479,5 +671,22 @@ class MultiDomainDataModule(pl.LightningDataModule):
         return f"{self.__class__.__name__}(domains=[{domain_info}], train_size={n_train}, val_sizes={n_val}, test_sizes={n_test})"
 
     def __str__(self):
-        # Avoid Lightning's default __str__ which inspects dataloaders.
         return self.__repr__()
+
+    def build_contexts(self, heads: List) -> Dict[str, DataContext]:
+        contexts: Dict[str, DataContext] = {}
+        species_union = set()
+        avg_neighbors = []
+        for name, dm in self.domain_modules.items():
+            ctx = dm.build_context(heads)
+            contexts[str(self.domain_to_id[name])] = ctx
+            species_union.update(ctx.species or [])
+            if ctx.avg_num_neighbors is not None:
+                avg_neighbors.append(ctx.avg_num_neighbors)
+        # global context (union species, mean of avg_neighbors if available)
+        global_ctx = DataContext()
+        global_ctx.species = sorted(list(species_union))
+        if avg_neighbors:
+            global_ctx.avg_num_neighbors = max(avg_neighbors)
+        contexts["global"] = global_ctx
+        return contexts

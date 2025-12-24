@@ -2,7 +2,8 @@ import torch
 import re
 from torch import nn
 import torch.nn.functional as F
-from typing import List, Optional, Dict, Type, Any, Union
+from typing import List, Optional, Dict, Type, Any, Union, Callable
+from functools import partial
 from curator.data import properties
 from curator.train.model_output import ModelOutput
 from pytorch_lightning.utilities.types import STEP_OUTPUT
@@ -12,12 +13,91 @@ from pytorch_lightning import LightningDataModule
 from omegaconf import DictConfig
 import logging
 from collections import OrderedDict, defaultdict
+import inspect
 try:
     from torch_scatter import scatter_add, scatter_mean
 except ImportError:
     from curator.utils import scatter_add, scatter_mean
 
 logger = logging.getLogger(__name__)    # console output
+class Representation(nn.Module):
+    """
+    Shared mixin/base to standardize handling of head configs and readout instantiation
+    across representations (MACE/Nequip/PAINN).
+    """
+
+    def __init__(self, heads: Optional[list] = None, domain_key: Optional[str] = None) -> None:
+        super().__init__()
+        self.heads = heads or []
+        self.domain_key = domain_key
+
+    def _instantiate_readout(
+        self,
+        readout: Union[nn.Module, Type[nn.Module], Callable],
+        heads: Optional[list] = None,
+        domain_key: Optional[str] = None,
+        **kwargs,
+    ) -> nn.Module:
+        """Instantiate readout, passing heads/domain_key when supported."""
+        if isinstance(readout, nn.Module):
+            # assume already configured
+            return readout
+
+        call = readout
+        if isinstance(readout, partial):
+            call = readout.func
+
+        sig = inspect.signature(call)
+
+        def maybe(name, value):
+            return {name: value} if name in sig.parameters and value is not None else {}
+
+        init_kwargs = dict(kwargs)
+        init_kwargs.update(maybe("heads", heads))
+        init_kwargs.update(maybe("domain_key", domain_key))
+
+        return readout(**init_kwargs)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _enable_cueq(use_cueq: bool):
+        """Helper to enable cuequivariance with a single warning path."""
+        if not use_cueq:
+            return
+        from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE, set_use_cueq
+        import warnings
+
+        set_use_cueq(use_cueq)
+        if use_cueq and not IS_CUET_AVAILABLE:
+            warnings.warn(
+                "Requested use_cueq=True but cuequivariance is not available; falling back to e3nn kernels.",
+                RuntimeWarning,
+            )
+
+    @staticmethod
+    def _apply_cutoff_mask(data: properties.Type, cutoff: float):
+        """Apply edge cutoff mask in-place. Returns original (edge_idx, edge_diff, edge_dist) for optional downstream use."""
+        try:
+            edge_idx = data[properties.edge_idx]
+            edge_diff = data[properties.edge_diff]
+            edge_dist = data[properties.edge_dist]
+        except KeyError:
+            return None
+        mask = edge_dist < cutoff
+        data[properties.edge_idx] = edge_idx[mask]
+        data[properties.edge_diff] = edge_diff[mask]
+        data[properties.edge_dist] = edge_dist[mask]
+        return (edge_idx, edge_diff, edge_dist)
+
+    @staticmethod
+    def _restore_cutoff_mask(data: properties.Type, cache):
+        """Restore edges previously masked by _apply_cutoff_mask."""
+        if cache is None:
+            return
+        edge_idx, edge_diff, edge_dist = cache
+        data[properties.edge_idx] = edge_idx
+        data[properties.edge_diff] = edge_diff
+        data[properties.edge_dist] = edge_dist
+
 class NeuralNetworkPotential(nn.Module):
     """ Base class for neural network potentials."""
     def __init__(
@@ -26,6 +106,7 @@ class NeuralNetworkPotential(nn.Module):
         input_modules: List[nn.Module] = None,
         output_modules: List[nn.Module] = None,
         model_outputs: List[str] = [],
+        heads: Optional[list] = None,
     ) -> None:
         """ Base class for neural network potentials.
         
@@ -40,6 +121,7 @@ class NeuralNetworkPotential(nn.Module):
         self.model_outputs = model_outputs
         self.input_modules = CallbackModuleList(input_modules, on_register_callback=None)
         self.output_modules = CallbackModuleList(output_modules, on_register_callback=self.register_callbacks)
+        self.heads = heads
         self._initialized: bool = False
         self.collect_outputs()
         self.register_callbacks()
@@ -58,7 +140,9 @@ class NeuralNetworkPotential(nn.Module):
 
     def initialize_modules(self, datamodule: LightningDataModule) -> None:
         for module in self.modules():
-            if hasattr(module, "datamodule"):
+            if hasattr(module, "setup_from_datamodule"):
+                module.setup_from_datamodule(datamodule)
+            elif hasattr(module, "datamodule"):
                 module.datamodule(datamodule)
         self._initialized = True
     

@@ -10,3 +10,4 @@ radial_basis:
   _target_: curator.layer.SineBasis
   cutoff: ${..cutoff}
   num_basis: ${model.representation.num_basis}
+heads: ${model.heads}
