@@ -1,12 +1,12 @@
 # @package _global_
 task:
   optimizer:
-    amsgrad: True
-    lr: 0.005
-    weight_decay: 0.0
+    amsgrad: True          # use AMSGrad variant for stability
+    lr: 0.005              # recommended initial learning rate
+    weight_decay: 0.0      # no weight decay by default
 
 data:
-  batch_size: 5
-  species: auto
-  atomic_energies: auto
-  avg_num_neighbors: auto
+  batch_size: 5            # smaller batches recommended for NequIP
+  species: auto            # infer species list from dataset
+  atomic_energies: auto    # estimate reference energies automatically
+  avg_num_neighbors: auto  # estimate neighbor statistics from data

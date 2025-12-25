@@ -1,0 +1,35 @@
+2025-12-25 03:12:21: Running on host: XSH-20240927AHO
+2025-12-25 03:12:21: Simulation setup:
+  Engine    : curator.simulate.engines.ase_md.MDEngine
+  Model     : ../test/best_model.ckpt
+  Init traj : ../test/LiFePO4.traj
+  Systems   : 1 | single system
+  Device    : cuda
+  Engine params: timestep=0.5
+  Callbacks   : curator.simulate.callbacks.calc.CalculatorAssign, curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty, curator.simulate.callbacks.trajectory.TrajectoryWriter, curator.simulate.callbacks.early_stop.EarlyStop
+2025-12-25 03:12:21: Seed with <1234>
+Loaded single system: natoms=28, Fe:4, Li:4, O:16, P:4
+2025-12-25 03:12:22: Calcator assigned to atoms.
+           step           epot           ekin           etot
+uncertainty snapshot: None
+              5     -183.51717        1.03607     -182.48109
+             10     -182.96889        0.76187     -182.20702
+             15     -183.07196        1.15474     -181.91722
+             20     -182.95511        1.03196     -181.92315
+             25     -183.11647        0.99337     -182.12310
+             30     -183.35866        0.94472     -182.41394
+             35     -183.32098        1.01990     -182.30109
+             40     -183.32324        0.92526     -182.39798
+             45     -183.52388        0.95955     -182.56433
+             50     -183.38458        0.97902     -182.40556
+             55     -183.13745        0.94150     -182.19596
+             60     -183.21187        1.20810     -182.00377
+             65     -182.83533        1.03409     -181.80124
+             70     -183.20236        1.24574     -181.95663
+             75     -182.77560        1.02245     -181.75315
+             80     -182.97589        1.32095     -181.65494
+             85     -183.00323        1.28369     -181.71954
+             90     -183.08185        0.94384     -182.13801
+             95     -183.30309        1.05668     -182.24641
+            100     -183.33360        0.87211     -182.46149
+Timing summary (s): load=0.0007, callbacks_start=0.5495, engine_setup=0.0002, attach=0.0000, simulate=1.9312, callbacks_end=0.0003, total=2.4820

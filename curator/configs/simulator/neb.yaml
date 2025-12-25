@@ -1,28 +1,28 @@
 defaults:
-  - calculator: default_calculator
+  - calculator: default_calculator        # calculator used for all NEB images
   - _self_
 
-_target_: curator.simulate.simulator.NEBSimulator
+_target_: curator.simulate.simulator.NEBSimulator  # NEB simulation runner
 
-initial_image: null                # path to initial structure
-final_image: null                  # path to final structure
-num_images: 3                      # number of intermediate images
-fmax: 0.05                         # NEB convergence threshold (eV/Å)
-max_steps: 200                     # maximum optimizer steps
-print_step: 10                     # logging interval
-start_index: 0
+initial_image: null                      # path to initial structure
+final_image: null                        # path to final structure
+num_images: 3                            # number of intermediate images
+fmax: 0.05                               # NEB convergence threshold (eV/Å)
+max_steps: 200                           # maximum optimizer steps
+print_step: 10                           # logging interval
+start_index: 0                           # index offset for logging/saving
 
 optimizer:
-  _target_: hydra.utils.get_class
-  path: ase.optimize.fire.FIRE
+  _target_: hydra.utils.get_class        # optimizer factory for NEB relaxation
+  path: ase.optimize.fire.FIRE           # optimizer class path
 
-interpolator: null                 # optional ASE interpolator
+interpolator: null                       # optional ASE interpolator
 neb_kwargs:
-  allow_shared_calculator: true    # reuse calculator across images
-opt_kwargs: {}
+  allow_shared_calculator: true          # reuse calculator across images
+opt_kwargs: {}                           # additional optimizer kwargs
 
 logger:
-  _target_: curator.simulate.callbacks.thermo.MDThermoLogger
+  _target_: curator.simulate.callbacks.thermo.MDThermoLogger  # NEB logger
   variables:
     - step
     - epot

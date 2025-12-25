@@ -1,0 +1,72 @@
+2025-12-25 04:14:28: Running on host: XSH-20240927AHO
+2025-12-25 04:14:28: Simulation setup:
+  Engine    : curator.simulate.engines.ase_md.MDEngine
+  Model     : ../test/best_model.ckpt
+  Init traj : ../test/LiFePO4.traj
+  Systems   : 1 | single system
+  Device    : cuda
+  Engine params: timestep=0.5
+  Callbacks   :
+    - curator.simulate.callbacks.calc.CalculatorAssign
+    - curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty
+    - curator.simulate.callbacks.early_stop.EarlyStop
+2025-12-25 04:14:28: Seed with <1234>
+2025-12-25 04:14:28: Module repr_callback is not provided. To calculate mahalanobis, the provided dataset will be used to calculate precision matrix afterwards.
+Calculating features from provided dataset <../test/LiFePO4.traj>.
+Calculating precision matrix from 2257 structures.
+Processing batch 1/18
+Processing batch 2/18
+Processing batch 3/18
+Processing batch 4/18
+Processing batch 5/18
+Processing batch 6/18
+Processing batch 7/18
+Processing batch 8/18
+Processing batch 9/18
+Processing batch 10/18
+Processing batch 11/18
+Processing batch 12/18
+Processing batch 13/18
+Processing batch 14/18
+Processing batch 15/18
+Processing batch 16/18
+Processing batch 17/18
+Processing batch 18/18
+Mahalanobis thresholds derived from dataset: low=20.302536, high=23.031364
+Loaded single system: natoms=28, Fe:4, Li:4, O:16, P:4
+2025-12-25 04:14:42: Calcator assigned to atoms.
+           step           epot           ekin           etot      maha_dist     is_outlier     is_warning
+uncertainty backend state: <curator.simulate.uncertainty.auto.AutoUncertainty object at 0x768b83b79370>
+uncertainty snapshot: {'maha_dist': 10.91500186920166, 'is_outlier': False, 'is_warning': False}
+              1     -184.13094        0.84544     -183.28549       10.91500        0.00000        0.00000
+              2     -183.87990        0.75136     -183.12853       10.86511        0.00000        0.00000
+              3     -183.73685        0.67737     -183.05948       10.99410        0.00000        0.00000
+              4     -183.76134        0.70859     -183.05275       11.16860        0.00000        0.00000
+              5     -183.55849        0.60658     -182.95191       11.55896        0.00000        0.00000
+              6     -183.39374        0.55123     -182.84250       12.05592        0.00000        0.00000
+              7     -183.45721        0.63797     -182.81925       12.38050        0.00000        0.00000
+              8     -183.42830        0.79094     -182.63736       12.96242        0.00000        0.00000
+              9     -183.28146        0.88911     -182.39235       13.83431        0.00000        0.00000
+             10     -183.21799        0.87104     -182.34695       14.76995        0.00000        0.00000
+             11     -183.10150        0.83281     -182.26869       15.80055        0.00000        0.00000
+             12     -182.92021        0.62310     -182.29712       16.45042        0.00000        0.00000
+             13     -182.99106        0.67833     -182.31273       16.38070        0.00000        0.00000
+             14     -183.14188        0.78527     -182.35660       15.89441        0.00000        0.00000
+             15     -183.20976        0.79376     -182.41600       15.35764        0.00000        0.00000
+             16     -183.26024        0.82340     -182.43684       15.08475        0.00000        0.00000
+             17     -183.23308        0.77382     -182.45926       15.17246        0.00000        0.00000
+             18     -183.24033        0.78629     -182.45404       15.23150        0.00000        0.00000
+             19     -183.28159        0.90061     -182.38098       15.05349        0.00000        0.00000
+             20     -183.33939        1.01249     -182.32690       15.02035        0.00000        0.00000
+             21     -183.35504        1.01060     -182.34444       15.06808        0.00000        0.00000
+             22     -183.29533        1.02568     -182.26966       15.26503        0.00000        0.00000
+             23     -183.21509        0.99259     -182.22249       15.73136        0.00000        0.00000
+             24     -183.05475        0.87266     -182.18209       16.34891        0.00000        0.00000
+             25     -182.97968        0.90297     -182.07670       16.54065        0.00000        0.00000
+             26     -183.09048        1.10349     -181.98700       16.16563        0.00000        0.00000
+             27     -183.14322        1.06532     -182.07790       15.75530        0.00000        0.00000
+             28     -183.19980        1.23250     -181.96730       15.53897        0.00000        0.00000
+             29     -183.23375        1.14070     -182.09305       15.23943        0.00000        0.00000
+             30     -183.22090        1.16107     -182.05983       15.03535        0.00000        0.00000
+             31     -183.11357        1.19952     -181.91405       15.29311        0.00000        0.00000
+Timing summary (s): load=0.0013, callbacks_start=0.2054, engine_setup=0.0002, attach=0.0000, simulate=1.0503, callbacks_end=0.0001, total=1.2579

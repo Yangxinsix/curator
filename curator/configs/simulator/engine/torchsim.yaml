@@ -1,24 +1,24 @@
-_target_: curator.simulate.engines.torchsim.TorchSimEngine
+_target_: curator.simulate.engines.torchsim.TorchSimEngine   # TorchSim backend engine
 
 # CURATOR → TorchSim adapter
 model:
   _target_: curator.interface.torchsim.CuratorTorchSimAdapter
   model: ${model_path}            # checkpoint or compiled model path
   cutoff: null                    # infer from model if available
-  compute_neighbor_list: true
-  transforms: null
-  device: ${device}
-  load_compiled: false            # test checkpoint is a training ckpt
-  load_weights_only: false
-  return_cell_displacements: false
-  outputs: null
-  energy_scale: 1.0
-  forces_scale: 1.0
-  stress_scale: 1.0
-  detach: true
+  compute_neighbor_list: true     # build neighbor lists inside adapter
+  transforms: null                # optional preprocessing transforms
+  device: ${device}               # device to place the model on
+  load_compiled: false            # treat checkpoint as training ckpt (not compiled)
+  load_weights_only: false        # load only weights if True
+  return_cell_displacements: false # return PBC displacements if True
+  outputs: null                   # subset of outputs to request
+  energy_scale: 1.0               # rescale energy predictions
+  forces_scale: 1.0               # rescale forces
+  stress_scale: 1.0               # rescale stresses
+  detach: true                    # detach outputs from computation graph
 
 # TorchSim integration settings
-integrator: nve
-temperature: 300.0
-timestep: 0.001
-integrator_kwargs: {}
+integrator: nve                  # TorchSim integrator name
+temperature: 300.0               # target temperature in Kelvin
+timestep: 0.001                  # timestep in picoseconds
+integrator_kwargs: {}            # extra args passed to integrator

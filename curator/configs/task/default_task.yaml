@@ -1,17 +1,17 @@
 defaults:
-  - optimizer: adam
-  - scheduler: reduce_on_plateau
-  - outputs: energy_force
+  - optimizer: adam                  # optimizer used for training
+  - scheduler: reduce_on_plateau     # LR scheduler policy
+  - outputs: energy_force            # which model outputs and losses to train
 
-_target_: curator.model.LitNNP
-scheduler_monitor: val_total_loss
-warmup_steps: 0
-save_entire_model: True
-load_entire_model: False
-load_weights_only: True
+_target_: curator.model.LitNNP       # LightningModule wrapper around the model
+scheduler_monitor: val_total_loss    # metric monitored by the scheduler
+warmup_steps: 0                      # optional linear warmup steps for optimizer
+save_entire_model: True              # save full model object (not just state dict)
+load_entire_model: False             # load checkpoints by restoring entire model
+load_weights_only: True              # if True, only load weights into model
 
 # customize loss ratios
-energy_weight: 1
-forces_weight: 100
-# stress_weight: 50
-patience: 200
+energy_weight: 1                     # scale factor for energy loss
+forces_weight: 100                   # scale factor for force loss
+# stress_weight: 50                  # optional scale for stress loss
+patience: 200                        # early stopping patience (epochs)

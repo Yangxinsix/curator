@@ -1,0 +1,2 @@
+           step            sys           epot           ekin           etot      maha_dist     is_outlier     is_warning
+              1              0     -184.12271        0.03211     -184.09060        8.66937        1.00000        1.00000

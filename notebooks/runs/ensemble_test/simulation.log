@@ -1,0 +1,10 @@
+2025-12-25 03:21:40: Running on host: XSH-20240927AHO
+2025-12-25 03:21:40: Simulation setup:
+  Engine    : curator.simulate.engines.ase_md.MDEngine
+  Model     : ['../test/best_model.ckpt', '../test/best_model.ckpt']
+  Init traj : ../test/LiFePO4.traj
+  Systems   : 1 | single system
+  Device    : cpu
+  Engine params: timestep=0.5
+  Callbacks   : curator.simulate.callbacks.calc.CalculatorAssign, curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty, curator.simulate.callbacks.early_stop.EarlyStop
+2025-12-25 03:21:40: Seed with <1234>

@@ -1,9 +1,9 @@
-_target_: curator.simulate.logger.MDLogger
-variables: full_thermodynamics
-interval: ${simulator.print_step}
-header: true
-monitor: mahalanobis_distance
-low: 0.05
-high: 0.5
-save_path: ${run_path}/warning_struct.traj
-uncertain_count: null
+_target_: curator.simulate.logger.MDLogger          # general-purpose MD logger with uncertainty
+variables: full_thermodynamics                      # variables to record
+interval: ${simulator.print_step}                   # logging interval in steps
+header: true                                        # print header row
+monitor: mahalanobis_distance                       # uncertainty metric to monitor
+low: 0.05                                           # lower threshold for saving frames
+high: 0.5                                           # upper threshold for saving frames
+save_path: ${run_path}/warning_struct.traj          # file path for uncertain structures
+uncertain_count: null                               # stop after collecting this many uncertain frames

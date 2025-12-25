@@ -1,1 +1,1 @@
-_target_: curator.simulate.callbacks.early_stop.EarlyStop
+_target_: curator.simulate.callbacks.early_stop.EarlyStop   # stops simulation based on failure/criteria

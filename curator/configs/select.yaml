@@ -1,18 +1,18 @@
-_convert_: all
-cfg: null
-seed: 123
-run_path: .
-model_path: null
-device: cuda
-dataset: null
-split_file: null
-train_set: null
-pool_set: null # This can also be a list
-batch_size: 100
-kernel: full-g
-method: lcmd_greedy
-n_random_features: 500
-save_features: false
-save_images: false
-debug: false
-transforms: []
+_convert_: all               # instantiate nested configs eagerly
+cfg: null                    # optional config file to merge
+seed: 123                    # RNG seed for reproducibility
+run_path: .                  # working directory for selection outputs
+model_path: null             # model used to score uncertainty/features
+device: cuda                 # device for model inference
+dataset: null                # dataset used to compute selection metrics
+split_file: null             # path to existing train/pool split indices
+train_set: null              # dataset to treat as labeled/training pool
+pool_set: null               # unlabeled pool dataset (can be a list)
+batch_size: 100              # batch size for model inference during selection
+kernel: full-g               # kernel type for feature embedding
+method: lcmd_greedy          # selection strategy
+n_random_features: 500       # random Fourier features for kernel approximation
+save_features: false         # persist computed features to disk
+save_images: false           # save selected structures
+debug: false                 # enable verbose debugging
+transforms: []               # transforms applied before feature extraction

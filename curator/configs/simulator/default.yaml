@@ -1,11 +1,12 @@
 defaults:
-  - engine: ase_langevin
-  - /simulator/callbacks@callbacks.calc_assign: calc_assign
-  - /simulator/callbacks@callbacks.thermo: thermo_logger
+  - engine: ase_langevin                                  # ASE MD engine
+  - /simulator/callbacks@callbacks.calc_assign: calc_assign  # attach calculator
+  - /simulator/callbacks@callbacks.thermo: thermo_with_uncertainty  # log thermo + uncertainty
+  - /simulator/callbacks@callbacks.early_stop: early_stop            # halt on criteria
   - _self_
 
-_target_: curator.simulate.core.simulator.Simulator
-init_traj: null
-start_index: null
+_target_: curator.simulate.core.simulator.Simulator       # simulator orchestrator
+init_traj: null                                           # initial structure/trajectory path
+start_index: null                                         # frame index to start from
 run_kwargs:
-  steps: 100
+  steps: 100                                              # number of steps to run
