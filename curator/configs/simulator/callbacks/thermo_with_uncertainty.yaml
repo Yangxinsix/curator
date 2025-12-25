@@ -1,21 +1,21 @@
-_target_: curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty
-interval: 1
-variables: basic_energies
-monitor: null
-low: 0.05
-high: 0.5
-save_path: warning_struct.traj
-uncertain_count: null
+_target_: curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty  # log thermo metrics with uncertainty checks
+interval: 1                                                                     # logging interval in steps
+variables: basic_energies                                                       # variables to record
+monitor: null                                                                   # which uncertainty metric to monitor (null = disabled)
+save_path: warning_struct.traj                                                  # file for saving uncertain structures
+uncertain_count: null                                                           # stop after collecting this many uncertain frames
 uncertainty_backend:
-  _target_: curator.simulate.uncertainty.auto.AutoUncertainty
-  calculator: ${calculator}
-  dataset: ${dataset}
+  _target_: curator.simulate.uncertainty.auto.AutoUncertainty                   # backend computing uncertainty
+  calculator: ${calculator}                                                     # model/calculator path
+  dataset: ${dataset}                                                           # reference dataset for statistics
   maha_kwargs:
-    kernel: local-full-g
-    low_threshold: 0.9
-    high_threshold: 0.99
-    max_structures: 128
+    kernel: local-full-g                                                        # kernel for Mahalanobis distance
+    low_threshold: 0.9                                                          # Mahalanobis low threshold
+    high_threshold: 0.99                                                        # Mahalanobis high threshold
+    max_structures: 128                                                         # maximum reference structures stored
   ensemble_kwargs:
     uncertainty_keys:
-      - force_sd
-      - energy_sd
+      - force_sd                                                                # ensemble spread metric for forces
+      - energy_sd                                                               # ensemble spread metric for energy
+    low_threshold: 0.05                                                         # ensemble spread low threshold
+    high_threshold: 0.5                                                         # ensemble spread high threshold

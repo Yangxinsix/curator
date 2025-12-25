@@ -1,1 +1,1 @@
-_target_: curator.layer.GradientOutput
+_target_: curator.layer.GradientOutput   # converts energy predictions to forces/stresses via gradients

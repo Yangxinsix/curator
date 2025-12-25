@@ -1,13 +1,13 @@
 defaults:
-  - engine: ase_langevin
-  - /simulator/callbacks@callbacks.calc: calc_assign
-  - /simulator/callbacks@callbacks.thermo: thermo_uncertainty
-  - /simulator/callbacks@callbacks.traj: trajectory_writer
-  - /simulator/callbacks@callbacks.stop: early_stop
+  - engine: ase_langevin                                  # ASE Langevin dynamics engine
+  - /simulator/callbacks@callbacks.calc: calc_assign      # attach calculator
+  - /simulator/callbacks@callbacks.thermo: thermo_uncertainty  # log thermo + uncertainty
+  - /simulator/callbacks@callbacks.traj: trajectory_writer     # write trajectory to disk
+  - /simulator/callbacks@callbacks.stop: early_stop            # stop on failure/threshold
   - _self_
 
-_target_: curator.simulate.core.simulator.Simulator
-init_traj: null
-start_index: null
+_target_: curator.simulate.core.simulator.Simulator       # simulator orchestrator
+init_traj: null                                           # initial structure/trajectory path
+start_index: null                                         # frame index to start from
 run_kwargs:
-  steps: 1000
+  steps: 1000                                             # number of MD steps to integrate

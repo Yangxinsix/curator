@@ -1,5 +1,5 @@
-_target_: pytorch_lightning.callbacks.EarlyStopping
-monitor: val_total_loss
-min_delta: 0.0
-patience: ${task.patience}
-mode: min
+_target_: pytorch_lightning.callbacks.EarlyStopping   # stop training when monitored metric stalls
+monitor: val_total_loss                               # metric to monitor
+min_delta: 0.0                                        # minimum change to qualify as improvement
+patience: ${task.patience}                            # epochs to wait before stopping
+mode: min                                             # smaller metric is better

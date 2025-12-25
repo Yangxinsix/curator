@@ -1,16 +1,16 @@
 defaults:
-  - annotator: vasp_annotator
-  - optional annotator/calc_params: ${annotator/calculator}_params
+  - annotator: vasp_annotator                                   # calculator/annotator backend
+  - optional annotator/calc_params: ${annotator/calculator}_params  # calculator-specific overrides
   - _self_
 
-cfg: null
-run_path: .
-datapath: null
-pool_set: null # This can also be a list
-indices: null #sepcify the indices of the pool_set to label
-al_info: null # get the active learning information from the previous run
+cfg: null                                                        # optional config file to merge
+run_path: .                                                      # working directory for outputs
+datapath: null                                                   # dataset containing structures to label
+pool_set: null                                                   # dataset or list serving as unlabeled pool
+indices: null                                                    # subset indices within pool_set to label
+al_info: null                                                    # active learning metadata from previous run
 
 # split labeling jobs to multiple job, only one of imgs_per_job or split_jobs need to be set
-split_jobs: null # can be null or int numbers. it means the label jobs will be split into `split_jobs`
-imgs_per_job: null # can be null or int numbers. it means the images will be split into `imgs_per_job`
-job_order: null # after split jobs, which parts of job need to be labeled
+split_jobs: null                                                 # number of label chunks to create
+imgs_per_job: null                                               # fixed number of images per chunk
+job_order: null                                                  # which split chunks to execute

@@ -1,4 +1,5 @@
 import torch
+import os
 from e3nn.util.jit import script
 from omegaconf import open_dict, OmegaConf, DictConfig, ListConfig
 from hydra import compose, initialize, initialize_config_dir
@@ -337,6 +338,30 @@ def load_models(
     load_weights_only: bool = False,
     cfg: Optional[DictConfig] = None,
 ) -> List[torch.nn.Module]:
+    def _resolve_path_like(p: Path) -> Path:
+        if p.is_absolute():
+            return p
+        bases = [Path.cwd()]
+        env_base = os.environ.get("HYDRA_ORIG_CWD")
+        if env_base:
+            bases.append(Path(env_base))
+        try:
+            from hydra.utils import get_original_cwd
+            bases.append(Path(get_original_cwd()))
+        except Exception:
+            pass
+        repo_root = Path(__file__).resolve().parent.parent  # project root-ish
+        bases.append(repo_root)
+        for base in bases:
+            candidate = (base / p).resolve()
+            if candidate.exists():
+                return candidate
+            # Fallback: if path starts with "..", try stripping one level relative to repo root
+            if p.parts and p.parts[0] == "..":
+                alt = (repo_root / Path(*p.parts[1:])).resolve()
+                if alt.exists():
+                    return alt
+        return p.resolve()
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -362,7 +387,7 @@ def load_models(
     models: List[torch.nn.Module] = []
     for m in model_like:
         if isinstance(m, (str, Path)):
-            p = Path(m)
+            p = _resolve_path_like(Path(m))
             if p.is_file() and p.suffix in {'.pt', '.pth', '.ckpt'}:
                 models.append(
                     load_model(

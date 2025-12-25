@@ -1,35 +1,35 @@
-method: vasp
+method: vasp                  # calculator type
 parameters:
-  xc: pbesol
-  encut: 520
-  ediff: 1e-05
-  ediffg: -0.03
-  algo: all
-  prec: accurate
-  sigma: 0.05
-  ibrion: 2
-  isif: 3
-  ismear: 0
-  ispin: 2
-  nelmin: 8
-  nelm: 400
-  lmaxmix: 4
-  nsw: 0
-  lorbit: 12
-  npar: 1
-  kpar: 1
-  lreal: auto
-  gamma: True
-  ncore: 4
-  istart: 0
-  isym: 0
-  lcharg: False
-  lwave: True
-  kspacing: 0.3
-  command: mpirun vasp_std
-  #ldau: True
-  #nupdown: 0
-  #ldau_luj: 
+  xc: pbesol                  # exchange-correlation functional
+  encut: 520                  # plane-wave cutoff energy (eV)
+  ediff: 1e-05                # electronic SCF convergence threshold
+  ediffg: -0.03               # ionic relaxation force threshold (eV/Å)
+  algo: all                   # electronic minimization algorithm
+  prec: accurate              # precision level for FFT grids, etc.
+  sigma: 0.05                 # smearing width (eV)
+  ibrion: 2                   # ionic relaxation algorithm (2 = conjugate gradient)
+  isif: 3                     # stress/ion relaxation settings
+  ismear: 0                   # smearing method (0 = Gaussian)
+  ispin: 2                    # spin-polarized calculation
+  nelmin: 8                   # minimum electronic steps
+  nelm: 400                   # maximum electronic steps
+  lmaxmix: 4                  # maximum l-quantum number for augmentation charge
+  nsw: 0                      # ionic steps (0 = single-point)
+  lorbit: 12                  # output projected DOS/charges
+  npar: 1                     # band parallelization
+  kpar: 1                     # k-point parallelization
+  lreal: auto                 # projection in real space
+  gamma: True                 # gamma-centered k-point grid
+  ncore: 4                    # cores per band group
+  istart: 0                   # start from scratch (no WAVECAR/CHGCAR)
+  isym: 0                     # disable symmetry
+  lcharg: False               # skip writing CHGCAR
+  lwave: True                 # write WAVECAR
+  kspacing: 0.3               # k-point spacing (1/Å)
+  command: mpirun vasp_std    # command to launch VASP
+  #ldau: True                 # enable DFT+U
+  #nupdown: 0                 # total spin moment
+  #ldau_luj:                  # element-specific L, U, J values
   #  Fe: 
   #    L: 2 
   #    U: 5.3

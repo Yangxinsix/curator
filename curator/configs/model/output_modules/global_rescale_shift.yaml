@@ -1,1 +1,1 @@
-_target_: curator.layer.GlobalRescaleShift
+_target_: curator.layer.GlobalRescaleShift   # apply global scaling and shifting to outputs

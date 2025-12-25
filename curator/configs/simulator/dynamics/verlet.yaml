@@ -1,3 +1,3 @@
-_target_: ase.md.VelocityVerlet
-_partial_: True
-timestep: ${multiply_fs: ${simulator.timestep}}                  # take care of the unit. fs -> ase.units.fs
+_target_: ase.md.VelocityVerlet                         # Velocity Verlet integrator
+_partial_: True                                         # allow hydra partial instantiation
+timestep: ${multiply_fs: ${simulator.timestep}}         # timestep converted from fs

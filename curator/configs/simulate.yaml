@@ -1,14 +1,14 @@
 defaults:
-  - simulator: default
+  - simulator: default    # simulation recipe (engine + callbacks)
   - _self_
 
-cfg: null
-seed: 1234
-run_path: .
-model_path: null
-dataset: null
-device: cuda
-deploy: null
+cfg: null                 # optional config file to merge
+seed: 1234                # RNG seed for reproducibility
+run_path: .               # working directory for simulation artifacts
+model_path: null          # trained model or compiled calculator path
+dataset: null             # reference dataset for uncertainty metrics
+device: cuda              # device for simulation calculator
+deploy: null              # deploy config or compiled model override
 
 # make calculator visible to callback interpolations
-calculator: ${model_path}
+calculator: ${model_path}  # expose calculator path for callbacks

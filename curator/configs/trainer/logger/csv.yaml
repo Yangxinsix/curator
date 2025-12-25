@@ -1,3 +1,3 @@
-_target_: pytorch_lightning.loggers.CSVLogger
-save_dir: ${run_path}/logs
-name: curator-train
+_target_: pytorch_lightning.loggers.CSVLogger   # write metrics to CSV files
+save_dir: ${run_path}/logs                     # directory for log files
+name: curator-train                            # experiment name prefix

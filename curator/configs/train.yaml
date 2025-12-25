@@ -1,18 +1,18 @@
 
 defaults:
-  - trainer: default_trainer
-  - task: default_task
-  - model: nnp
-  - data: custom
-  - optional model/repr_params: ${model/representation}_params       # model specified hyperparameters. Training different models will need different params such as batch size, optimizer, learning rate, etc. 
-  - optional task/output_params: ${task/outputs}_params 
+  - trainer: default_trainer       # training loop and callbacks used by PyTorch Lightning
+  - task: default_task             # task-specific model wrapper (losses, optimizer, scheduler)
+  - model: nnp                     # base model architecture to train
+  - data: custom                   # dataset and dataloader settings
+  - optional model/repr_params: ${model/representation}_params  # representation-specific hyperparameters (batch size, optimizer, lr, etc.)
+  - optional task/output_params: ${task/outputs}_params         # task output-specific overrides
   - _self_
 
 # Some parameters that are important for training
-seed: 3407
-cfg: null
-model_path: null               # Model checkpoint
-run_path: .
-deploy_model: True
-compile: False
-device: cuda
+seed: 3407                         # random seed for reproducibility
+cfg: null                          # optional path to an existing config to merge
+model_path: null                   # path to start from a pre-trained checkpoint
+run_path: .                        # root directory for logs, checkpoints, and artifacts
+deploy_model: True                 # export a deployable model after training
+compile: False                     # torch.compile model before training if supported
+device: cuda                       # device identifier for training

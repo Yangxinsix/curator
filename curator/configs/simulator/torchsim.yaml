@@ -1,13 +1,13 @@
 defaults:
-  - engine: torchsim
-  - /simulator/callbacks@callbacks.calc: calc_assign
-  - /simulator/callbacks@callbacks.traj: trajectory_writer
-  - /simulator/callbacks@callbacks.thermo: torchsim_logger
-  - /simulator/callbacks@callbacks.stop: early_stop
+  - engine: torchsim                                   # TorchSim integration engine
+  - /simulator/callbacks@callbacks.calc: calc_assign   # attach calculator to TorchSim
+  - /simulator/callbacks@callbacks.traj: trajectory_writer  # dump simulated trajectory
+  - /simulator/callbacks@callbacks.thermo: torchsim_logger # log thermo metrics
+  - /simulator/callbacks@callbacks.stop: early_stop         # early termination handler
   - _self_
 
-_target_: curator.simulate.core.simulator.Simulator
-init_traj: null
-start_index: null
+_target_: curator.simulate.core.simulator.Simulator    # simulator orchestrator
+init_traj: null                                        # initial structure/trajectory path
+start_index: null                                      # frame index to start from
 run_kwargs:
-  steps: 100
+  steps: 100                                           # number of simulation steps
