@@ -2,6 +2,7 @@ import torch
 from torch import nn
 from typing import Optional, Dict, Union, List
 from curator.data import properties
+from collections import defaultdict
 try:
     from torch_scatter import scatter_add
 except ImportError:
@@ -17,11 +18,12 @@ class GlobalRescaleShift(torch.nn.Module):
         scale_trainable: bool=False,
         shift_trainable: bool=False,
         scale_keys: List[str] = ["energy"],
-        shift_keys: List[str] = ["energy"],
+        shift_keys: List[str] = ["energy"], # We only need scale_keys now
         atomwise_shift: bool=False,                   # if the value to be shifted is atomwise or structure-based
         atomwise_normalization: bool=True,            # if the value to be shifted is normalized to each atom. This is only useful for structure-based properties.
         output_keys: List[str] = ["energy", "forces"],
         atomic_energies: Optional[Dict[int, Union[float, torch.Tensor]]] = None,
+        atomic_charges: Optional[Dict[int, Union[float, torch.Tensor]]] = None,
     ):
         super().__init__()
         self.scale_keys = scale_keys
@@ -29,75 +31,99 @@ class GlobalRescaleShift(torch.nn.Module):
         self.output_keys = output_keys
         self.register_buffer("atomwise_normalization", torch.tensor(atomwise_normalization))        # this should be in buffer because it cannot be changed when you are using the model
         self.atomwise_shift = atomwise_shift
-            
+        
         if scale_by is None and shift_by is None:
             self._initialized = False
         else:
             self._initialized = True
-            
-        if scale_by is not None:
-            if scale_trainable:
-                self.register_parameter("scale_by", torch.tensor([scale_by]))
-            else:
-                self.register_buffer("scale_by", torch.tensor([scale_by]))
-        else:
-            self.register_buffer("scale_by", torch.tensor([1.0]))
-            
-        if shift_by is not None:
-            if shift_trainable:
-                self.register_parameter("shift_by", torch.tensor([shift_by]))
-            else:
-                self.register_buffer("shift_by", torch.tensor([shift_by]))
-        else:
-            self.register_buffer("shift_by", torch.tensor([0.0]))
+
+        all_keys = list(dict.fromkeys(self.output_keys + self.scale_keys + self.shift_keys))
+        if scale_by is not None and shift_by is not None:       
+            self.scale_by = {}
+            self.shift_by = {}
+            self._register_scale_shift_buffer(keys=all_keys, scale_by=scale_by, shift_by=shift_by)
 
         self.model_outputs = output_keys
         self._get_atomic_energies_list(atomic_energies)
+        self._get_atomic_charges_list(atomic_charges)
         
     def forward(self, data: properties.Type) -> properties.Type:
-        return self.scale(data, force_process=False)
+        return self.scale(data, force_process=False, keys=self.scale_keys)
     
     @torch.jit.export
-    def scale(self, data: properties.Type, force_process: bool=False) -> properties.Type:
+    # From non-unit normalized standardized data to real unit data
+    def scale(self, data: properties.Type, force_process: bool=False, keys: Union[properties.Type, List[properties.Type]]=None) -> properties.Type:
         data = data.copy()
+        # make scale more robust. we can directly call scale(data), and the previous calls can be non-modified
+        if keys is None:
+            keys = self.scale_keys
+        
         if not self.training or force_process:
-            for key in self.scale_keys:
-                data[key] = data[key] * self.scale_by
-            # add atomic energies
-            if not self.atomwise_shift and self.atomwise_normalization:
-                shift_by = data[properties.n_atoms] * self.shift_by
-            else:
-                shift_by = self.shift_by
-            if self.shift_by_E0:
-                node_e0 = self.atomic_energies[data[properties.Z]]
-                if self.atomwise_shift:
-                    shift_by = shift_by + node_e0
+            for key in keys:
+                # scale
+                if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
+                    data[key] = data[key] * (self.scale_by[key] * data[properties.n_atoms])  # because scale_by is the std of pre-atom energies
                 else:
-                    e0 = scatter_add(node_e0, data[properties.image_idx])
-                    shift_by = shift_by + e0
-            for key in self.shift_keys:
+                    data[key] = data[key] * self.scale_by[key]
+                # shift
+                if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
+                    shift_by = data[properties.n_atoms] * self.shift_by[key]
+                else:
+                    shift_by = self.shift_by[key]
+                # get atomic energy and charge
+                if self.shift_by_E0 and key == properties.energy:
+                    node_e0 = self.atomic_energies[data[properties.Z]]
+                    if self.atomwise_shift:
+                        shift_by = shift_by + node_e0
+                    else:
+                        e0 = scatter_add(node_e0, data[properties.image_idx])
+                        shift_by = shift_by + e0
+                elif self.shift_by_q0 and key == properties.atomic_charge:
+                    node_q0 = self.atomic_charges[data[properties.Z]]
+                    shift_by = shift_by + node_q0
+
                 data[key] = data[key] + shift_by
         return data
     
     @torch.jit.export
-    def unscale(self, data: properties.Type, force_process: bool=False) -> properties.Type:
+    # From real unit data to non-unit normalized standardized data
+    def unscale(self, data: properties.Type, force_process: bool=False, keys: Union[properties.Type, List[properties.Type]]=None) -> properties.Type:
         data = data.copy()
+        # make scale more robust. we can directly call scale(data), and the previous calls can be non-modified
+        if keys is None:
+            keys = self.scale_keys
+
         if self.training or force_process:
             # inverse scale and shift for unscale
-                # add atomic energies
-            shift_by = data[properties.n_atoms] * self.shift_by if self.atomwise_normalization else self.shift_by
-            if self.shift_by_E0:
-                node_e0 = self.atomic_energies[data[properties.Z]]
-                e0 = scatter_add(node_e0, data[properties.image_idx])
-                shift_by = shift_by + e0
-            for key in self.shift_keys:
-                data[key] = data[key] - shift_by
+            # First unshift, then unscale
+            for key in keys:
+                # unshift
+                if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
+                    shift_by = data[properties.n_atoms] * self.shift_by[key]
+                else:
+                    shift_by = self.shift_by[key]
+                # get atomic energy and charge
+                if self.shift_by_E0 and key == properties.energy:
+                    node_e0 = self.atomic_energies[data[properties.Z]]
+                    if self.atomwise_shift:
+                        shift_by = shift_by + node_e0
+                    else:
+                        e0 = scatter_add(node_e0, data[properties.image_idx])
+                        shift_by = shift_by + e0
+                elif self.shift_by_q0 and key == properties.atomic_charge:
+                    node_q0 = self.atomic_charges[data[properties.Z]]
+                    shift_by = shift_by + node_q0
 
-            for key in self.scale_keys:
-                data[key] = data[key] / self.scale_by
+                data[key] = data[key] - shift_by
+                # unscale
+                if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
+                    data[key] = data[key] / (self.scale_by[key] * data[properties.n_atoms])
+                else:
+                    data[key] = data[key] / self.scale_by[key]
         return data
         
     def _get_atomic_energies_list(self, atomic_energies: Union[Dict[int, float], Dict[str, float], None]):
+        # from a non-zero dict to all element 119-length dict
         if atomic_energies is not None:
             if not hasattr(self, "shift_by_E0"):
                 self.register_buffer("shift_by_E0", torch.tensor(True))
@@ -125,25 +151,89 @@ class GlobalRescaleShift(torch.nn.Module):
                 self.register_buffer("atomic_energies", torch.zeros((119,), dtype=torch.float))    # dummy buffer for torch script
             else:
                 self.atomic_energies.copy_(torch.zeros((119,), dtype=torch.float))
-        
+
+    def _get_atomic_charges_list(self, atomic_charges: Union[Dict[int, float], Dict[str, float], None]):
+        # from a non-zero dict to all element 119-length dict
+        if atomic_charges is not None:
+            if not hasattr(self, "shift_by_q0"):
+                self.register_buffer("shift_by_q0", torch.tensor(True))
+            else:
+                self.shift_by_q0.copy_(torch.tensor(True))
+            atomic_charges_dict = torch.zeros((119,), dtype=torch.float)
+            if atomic_charges is not None:
+                # convert chemical symbols to atomic numbers
+                if isinstance(atomic_charges, Dict):
+                    for k, v in atomic_charges.items():
+                        if isinstance(k, str):
+                            atomic_charges_dict[atomic_numbers[k]] = v
+                        else:
+                            atomic_charges_dict[k] = v
+            if not hasattr(self, "atomic_charges"):
+                self.register_buffer("atomic_charges", atomic_charges_dict)
+            else:
+                self.atomic_charges.copy_(atomic_charges_dict)
+        else:
+            if not hasattr(self, "shift_by_q0"):
+                self.register_buffer("shift_by_q0", torch.tensor(False))
+            else:
+                self.shift_by_q0.copy_(torch.tensor(False))
+            if not hasattr(self, "atomic_charges"):
+                self.register_buffer("atomic_charges", torch.zeros((119,), dtype=torch.float))    # dummy buffer for torch script
+            else:
+                self.atomic_charges.copy_(torch.zeros((119,), dtype=torch.float))
+
+    def _register_scale_shift_buffer(self, keys, scale_by=None, shift_by=None):
+        # scale_by/shift_by: Dict[str, float] 或 None
+        scale_by = scale_by or {}
+        shift_by = shift_by or {}
+
+        for k in keys:
+            s = float(scale_by.get(k, 1.0))
+            m = float(shift_by.get(k, 0.0))
+
+            s_name = f"scale_by__{k}"
+            m_name = f"shift_by__{k}"
+
+            if not hasattr(self, s_name):
+                self.register_buffer(s_name, torch.tensor(s))
+            else:
+                getattr(self, s_name).fill_(s)
+
+            if not hasattr(self, m_name):
+                self.register_buffer(m_name, torch.tensor(m))
+            else:
+                getattr(self, m_name).fill_(m)
+
+            self.scale_by[k] = getattr(self, s_name)
+            self.shift_by[k] = getattr(self, m_name)
+
+    # Initialized in base.py
     def datamodule(self, _datamodule):
         if not self._initialized:
-            shift_by, scale_by = _datamodule._get_scale_shift()
-            if scale_by is not None:
-                self.scale_by = torch.tensor([scale_by])
-            if shift_by is not None:
-                self.shift_by = torch.tensor([shift_by])
-                
-            self.atomwise_normalization = torch.tensor(_datamodule.atomwise_normalization)
-            scale_forces = _datamodule.scale_forces
-            if scale_forces and "forces" not in self.scale_keys:
+            self.scale_by = {}
+            self.shift_by = {}
+            shift_by, scale_by = _datamodule._get_scale_shift(self.scale_keys) # return Dict[str, float]
+
+            if _datamodule.scale_forces and "forces" not in self.scale_keys:
                 self.scale_keys.append("forces")
+
+            all_keys = list(dict.fromkeys(self.output_keys + self.scale_keys + self.shift_keys))
+            self._register_scale_shift_buffer(keys=all_keys, scale_by=scale_by, shift_by=shift_by)
+
+            self.atomwise_normalization = torch.tensor(_datamodule.atomwise_normalization)
+                
             self._get_atomic_energies_list(_datamodule._get_average_E0())
+            self._get_atomic_charges_list(_datamodule._get_average_q0())
+            
+            self._initialized = True
 
     def __repr__(self):
+        sb = {k: float(v) for k, v in self.scale_by.items()}
+        mb = {k: float(v) for k, v in self.shift_by.items()}
         atomic_energies_dict = {chemical_symbols[i]: self.atomic_energies[i] for i in self.atomic_energies.nonzero().squeeze().cpu().numpy()}
-        return (f"{self.__class__.__name__}(scale_by={self.scale_by}, shift_by={self.shift_by}"
-            f", shift_by_E0={self.shift_by_E0}, atomic_energies={atomic_energies_dict}"
+        atomic_charges_dict = {chemical_symbols[i]: self.atomic_charges[i] for i in self.atomic_charges.nonzero().squeeze().cpu().numpy()}
+        return (f"{self.__class__.__name__}(scale_by={sb}, shift_by={mb}"
+            f", shift_by_E0={self.shift_by_E0}, shift_by_q0={self.shift_by_q0}, atomic_energies={atomic_energies_dict}, atomic_charges={atomic_charges_dict}"
             f", scale_keys={self.scale_keys}, shift_keys={self.shift_keys}, atomwise_normalization={self.atomwise_normalization})"
         )
             
