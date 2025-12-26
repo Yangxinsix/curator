@@ -1,8 +1,9 @@
 from ._atomwise_nn import AtomwiseNN
 from ._ewald import EwaldSummation
 from curator.data import properties
-from typing import Union, Type, Optional, List
+from typing import Union, Type, Optional, List, Dict
 from functools import partial
+from ase.data import atomic_numbers, chemical_symbols
 import torch
 from torch import nn
 try:
@@ -30,6 +31,10 @@ class ChargeEquilibration(nn.Module):
         compute_forces: bool = True,
         constant_potential: bool = False,
         model_outputs: List[str] = ['residual_forces', 'atomic_charge'],
+        ewald_weight = 1.0,
+        ewald_weight_trainable: bool = False,
+        reference_electronegativity: Union[Dict[int, float], Dict[str, float], None, str] = "auto",
+        reference_hardness: Union[Dict[int, float], Dict[str, float], None, str] = "auto",
         *args,
         **kwargs,
     ):
@@ -56,18 +61,62 @@ class ChargeEquilibration(nn.Module):
                 use_e3nn=False,
                 activation='silu',
             )
+        # Giving electronegativity and hardness a reference value, preventing it becoming too small
+        if reference_electronegativity == "auto":
+            ref_chi_dict = torch.ones((119,), dtype=torch.float)
+            self.register_buffer("ref_chi_dict", ref_chi_dict)
+        elif isinstance(reference_electronegativity, Dict):
+            ref_chi_dict = torch.zeros((119,), dtype=torch.float)
+            if reference_electronegativity is not None:
+                # convert chemical symbols to atomic numbers
+                for k, v in reference_electronegativity.items():
+                    if isinstance(k, str):
+                        ref_chi_dict[atomic_numbers[k]] = v
+                    else:
+                        ref_chi_dict[k] = v
+            self.register_buffer("ref_chi_dict", ref_chi_dict)
+        else:
+            ref_chi_dict = torch.zeros((119,), dtype=torch.float)
+            self.register_buffer("ref_chi_dict", ref_chi_dict)
+
+        if reference_hardness == "auto":
+            ref_hardness_dict = torch.ones((119,), dtype=torch.float)
+            self.register_buffer("ref_hardness_dict", ref_hardness_dict)
+        elif isinstance(reference_hardness, Dict):
+            ref_hardness_dict = torch.zeros((119,), dtype=torch.float)
+            if reference_hardness is not None:
+                # convert chemical symbols to atomic numbers
+                for k, v in reference_hardness.items():
+                    if isinstance(k, str):
+                        ref_hardness_dict[atomic_numbers[k]] = v
+                    else:
+                        ref_hardness_dict[k] = v
+            self.register_buffer("ref_hardness_dict", ref_hardness_dict)
+        else:
+            ref_hardness_dict = torch.zeros((119,), dtype=torch.float)
+            self.register_buffer("ref_hardness_dict", ref_hardness_dict)
+
         if isinstance(ewald, EwaldSummation):
             self.ewald = ewald
         else:
             self.ewald = ewald(cutoff=cutoff, k_cutoff=k_cutoff, alpha=alpha, acc_factor=acc_factor)
-        
+
         self.compute_forces = compute_forces
         self.constant_potential = constant_potential
         self.model_outputs = model_outputs
+        if ewald_weight_trainable:
+            self.ewald_weight = torch.nn.Parameter(torch.tensor(ewald_weight))
+        else:
+            self.register_buffer("ewald_weight", torch.tensor(ewald_weight))
+        self.ewald_weight_trainable = ewald_weight_trainable
 
     def forward(self, data: properties.Type, training: bool=True) -> properties.Type:
+        data = data.copy()
         chi = self.electronegativity_mlp._compute(data[properties.node_embedding]).squeeze()
         hardness = self.hardness_mlp._compute(data[properties.node_embedding]).squeeze()
+
+        chi0 = self.ref_chi_dict[data[properties.Z]]
+        hardness0 = self.ref_hardness_dict[data[properties.Z]]
 
         # processing charges to make sure sum_i {q_i} = q_total
         # consider adding an upper bound for charge predictions here
@@ -77,13 +126,17 @@ class ChargeEquilibration(nn.Module):
         data[properties.atomic_charge] = data[properties.atomic_charge] + torch.gather(diff_charge, 0, data[properties.image_idx])
 
         # calculate residual energy
-        residual_energy =  chi ** 2 * data[properties.atomic_charge] + hardness ** 2 * data[properties.atomic_charge] ** 2    # use square to ensure that both values are positive
+        residual_energy =  (chi ** 2 + chi0) * data[properties.atomic_charge] + (hardness ** 2 + hardness0) * data[properties.atomic_charge] ** 2    # use square to ensure that both values are positive
         residual_energy = scatter_add(residual_energy, data[properties.image_idx], dim=0)
 
         # calculate ewald energy, total energy = local + ewald + residual
         ewald_energy = self.ewald(data)
-        data[properties.energy] += ewald_energy + residual_energy
+
+        data[properties.short_energy] = data[properties.energy]
+        data[properties.residual_energy] = residual_energy
         data[properties.ewald_energy] = ewald_energy
+        data[properties.energy] = data[properties.energy] + (ewald_energy + residual_energy) * self.ewald_weight
+        # data[properties.electrostatic_energy] = ewald_energy + residual_energy
 
         # calculate residual forces, total force = local + residual, residual forces should be zero under strict charge equilibration scheme
         if self.compute_forces:
@@ -109,7 +162,7 @@ class ChargeEquilibration(nn.Module):
             assert residual_forces is not None
 
             data[properties.ewald_forces] = ewald_forces
-            data[properties.forces] += ewald_forces
+            data[properties.forces] = data[properties.forces] + ewald_forces * self.ewald_weight
             data[properties.residual_forces] = residual_forces
         
         return data

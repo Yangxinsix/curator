@@ -43,6 +43,10 @@ class NeuralNetworkPotential(nn.Module):
         self._initialized: bool = False
         self.collect_outputs()
         self.register_callbacks()
+        self.rescale_layers = []
+        for layer in self.output_modules:
+            if hasattr(layer, "unscale"):
+                self.rescale_layers.append(layer)
         
     def forward(self, data: properties.Type) -> properties.Type:
         data = data.copy()
@@ -52,8 +56,21 @@ class NeuralNetworkPotential(nn.Module):
         data = self.representation(data)
         
         for m in self.output_modules:
-            data = m(data)
-        
+            # import pdb; pdb.set_trace()
+            if hasattr(m, 'electronegativity_mlp'):
+                scaled_data = data.copy()
+                for layer in self.rescale_layers[::-1]:
+                    scaled_data = layer.scale(scaled_data, force_process=True)
+                data[properties.atomic_charge] = scaled_data[properties.atomic_charge]
+                data[properties.energy] = scaled_data[properties.energy]
+                data[properties.forces] = scaled_data[properties.forces]
+                data = m(data)
+                for layer in self.rescale_layers:
+                    data = layer.unscale(data, force_process=True)
+                
+            else:
+                data = m(data)
+        # import pdb; pdb.set_trace()
         return self.extract_outputs(data)
 
     def initialize_modules(self, datamodule: LightningDataModule) -> None:
@@ -276,6 +293,7 @@ class LitNNP(pl.LightningModule):
         for output in self.outputs:
             for k, v in output.calculate_metrics(pred, batch, 'val').items():
                 all_metrics[k] = v
+        # import pdb; pdb.set_trace()
         self.log_dict(all_metrics, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
         
         # get metric names for first epoch

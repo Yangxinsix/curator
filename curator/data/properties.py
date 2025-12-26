@@ -39,6 +39,9 @@ total_magmom: Final[str] = "total_magmom"
 atomic_energy: Final[str] = "atomic_energy"
 fermi_level: Final[str] = "fermi_level"
 ewald_energy: Final[str] = "ewald_energy"
+residual_energy: Final[str] = "residual_energy"
+electrostatic_energy: Final[str] = "electrostatic_energy"
+short_energy: Final[str] = "short_energy"
 ewald_forces: Final[str] = "ewald_forces"
 residual_forces: Final[str] = "residual_forces"     # residual forces from chi and hardness, this is meaningless
 

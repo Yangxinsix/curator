@@ -9,6 +9,7 @@ from . import properties
 from ase.data import chemical_symbols, atomic_numbers
 import json
 import logging
+from torch.utils.data import Subset
 
 
 logger = logging.getLogger(__name__)
@@ -40,6 +41,7 @@ class AtomsDataModule(pl.LightningDataModule):
         species: Union[List[str], str, None] = "auto",
         avg_num_neighbors: Union[float, str, None] = "auto",
         atomic_energies: Union[Dict[int, float], Dict[str, float], None, str] = "auto",
+        reference_charge: Union[Dict[int, float], Dict[str, float], None, str] = "auto",
         normalization: bool = True,
         atomwise_normalization: bool = True,
         scale_by: Union[float, List[float], None] = None,
@@ -97,6 +99,7 @@ class AtomsDataModule(pl.LightningDataModule):
         self.species = species
         self.avg_num_neighbors = avg_num_neighbors
         self.atomic_energies = atomic_energies
+        self.reference_charge = reference_charge
         self.mean = shift_by
         self.std = scale_by
         
@@ -299,7 +302,6 @@ class AtomsDataModule(pl.LightningDataModule):
                 E0s = torch.linalg.lstsq(A, B, rcond=None)[0]
                 for i, z in enumerate(numbers):
                     atomic_energies_dict[z] = E0s[i].item()
-                    
             except torch.linalg.LinAlgError:
                 print(
                     "Failed to compute E0s using least squares regression, using the same for all atoms"
@@ -314,44 +316,109 @@ class AtomsDataModule(pl.LightningDataModule):
         logger.debug(f"Using reference energies for elements: {self.atomic_energies}.")
         return self.atomic_energies
     
+    def _get_average_q0(self) -> Optional[Dict[int, float]]:
+        """
+        Function to compute the average atomic charge of each chemical element
+        returns dictionary of q0s
+        """
+        if self.reference_charge == "auto":
+            numbers = [atomic_numbers[s] for s in self._get_species(force_process=True)]
+            num_elements = len(numbers)
+            compute_dataset = Subset(self.train_dataset, range(0, len(self.train_dataset), max(1, len(self.train_dataset)//100)))
+            len_atoms = 0
+            for sample in compute_dataset:
+                len_atoms += sample[properties.n_atoms].sum().item()
+            A = torch.zeros((len_atoms, num_elements))
+            B = torch.zeros((len_atoms,))
+            
+            idx = 0
+            numbers_tensor = torch.tensor(numbers) 
+            for i, sample in enumerate(compute_dataset):
+                B[idx:idx+sample[properties.n_atoms].sum().item()] = sample[properties.atomic_charge]
+                for j, z in enumerate(sample[properties.Z]):
+                    A[idx+j] = (numbers_tensor == z)
+                idx += sample[properties.n_atoms].sum().item()
+
+            reference_charge_dict = {z: 0.0 for z in numbers}
+            
+            try:
+                q0s, residuals, rank, singular = torch.linalg.lstsq(A, B, rcond=None)
+                print(residuals)
+                for i, z in enumerate(numbers):
+                    reference_charge_dict[z] = q0s[i].item()
+        
+            except torch.linalg.LinAlgError:
+                print(
+                    "Failed to compute q0s using least squares regression, using the same for all atoms"
+                )
+            self.reference_charge = reference_charge_dict
+        
+        if isinstance(self.reference_charge, Dict):
+            for k in list(self.reference_charge.keys()):
+                if isinstance(k, int):
+                    self.reference_charge[chemical_symbols[k]] = self.reference_charge.pop(k)
+
+        logger.debug(f"Using reference charges for elements: {self.reference_charge}.")
+        return self.reference_charge
+    
     def _get_scale_shift(
         self,
+        keys,
     ) -> Tuple[float, float]:
         if self.mean is None:
             if self.normalization:
                 atomic_energies = self._get_average_E0()
+                atomic_charge = self._get_average_q0()
                 if atomic_energies is not None:
                     reference_energies = torch.zeros((119,), dtype=self.default_dtype)
                     for k, v in atomic_energies.items():
                         reference_energies[atomic_numbers[k] if isinstance(k, str) else k] = v
-
+                if atomic_charge is not None:
+                    reference_charges = torch.zeros((119,), dtype=self.default_dtype)
+                    for k, v in atomic_charge.items():
+                        reference_charges[atomic_numbers[k] if isinstance(k, str) else k] = v
                 energies = []
+                charges = []
                 if self.scale_forces:
                     forces = []
                 for sample in self.train_dataset:
                     e = sample[properties.energy]
+                    q = sample[properties.atomic_charge]
                     if atomic_energies is not None:
                         node_e0 = reference_energies[sample[properties.Z]]
                         e0 = node_e0.sum()
                         e = e - e0
+                    if atomic_charge is not None:
+                        node_q0 = reference_charges[sample[properties.Z]]
+                        q = q - node_q0
                     if self.atomwise_normalization:
                         e /= sample[properties.n_atoms]
                     energies.append(e)
+                    charges.append(q)
                     if self.scale_forces:
                         forces.append(sample[properties.forces])
                 energies = torch.cat(energies)
-                mean = torch.mean(energies).item()
-                std = torch.std(energies).item()
+                charges = torch.cat(charges)
+                mean = {}
+                std = {}
+                mean[properties.energy] = torch.mean(energies).item()
+                std[properties.energy] = torch.std(energies).item()
+                mean[properties.atomic_charge] = torch.mean(charges).item()
+                std[properties.atomic_charge] = torch.std(charges).item()
+                # import pdb; pdb.set_trace()
                 if self.scale_forces:
                     forces = torch.cat(forces)
-                    std = torch.sqrt(torch.mean(forces * forces)).item()
-                    logger.debug(f"Forces will be scaled by forces_rms: {std:.3f}.")
+                    mean[properties.forces] = torch.mean(forces).item()
+                    std[properties.forces] = torch.sqrt(torch.mean(forces * forces)).item()
+                    # logger.debug(f"Forces will be scaled by forces_rms: {std:.3f}.")
             else:
                 mean, std = 0.0, 1.0
             self.mean, self.std = mean, std
         if self.atomwise_normalization:
             logger.debug("Atomwise model outputs will be normalized.")
-        logger.debug(f"Model output properties will be scaled by {self.std:.3f}, shifted by {self.mean:.3f}.")
+        sb = {k: float(v) for k, v in self.mean.items()}
+        mb = {k: float(v) for k, v in self.std.items()}
+        logger.debug(f"Model output properties will be scaled by {mb}, shifted by {sb}.")
         return self.mean, self.std
     
     def __repr__(self):
