@@ -406,11 +406,13 @@ class AtomsDataModule(pl.LightningDataModule):
                 mean[properties.atomic_charge] = torch.mean(charges).item()
                 std[properties.atomic_charge] = torch.std(charges).item()
                 # import pdb; pdb.set_trace()
+                # Energy and force must use the same scale parameters to ensure conservatism
                 if self.scale_forces:
                     forces = torch.cat(forces)
-                    mean[properties.forces] = torch.mean(forces).item()
+                    mean[properties.forces] = torch.mean(energies).item()
                     std[properties.forces] = torch.sqrt(torch.mean(forces * forces)).item()
                     # logger.debug(f"Forces will be scaled by forces_rms: {std:.3f}.")
+                    std[properties.energy] = torch.sqrt(torch.mean(forces * forces)).item()
             else:
                 mean, std = 0.0, 1.0
             self.mean, self.std = mean, std
