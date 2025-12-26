@@ -20,6 +20,7 @@ class GlobalRescaleShift(torch.nn.Module):
         scale_keys: List[str] = ["energy"],
         shift_keys: List[str] = ["energy"], # We only need scale_keys now
         atomwise_shift: bool=False,                   # if the value to be shifted is atomwise or structure-based
+        atomwise_scale: bool=True,                    # True: energy scale = scale; False: energy scale = scale * n_atoms
         atomwise_normalization: bool=True,            # if the value to be shifted is normalized to each atom. This is only useful for structure-based properties.
         output_keys: List[str] = ["energy", "forces"],
         atomic_energies: Optional[Dict[int, Union[float, torch.Tensor]]] = None,
@@ -31,6 +32,7 @@ class GlobalRescaleShift(torch.nn.Module):
         self.output_keys = output_keys
         self.register_buffer("atomwise_normalization", torch.tensor(atomwise_normalization))        # this should be in buffer because it cannot be changed when you are using the model
         self.atomwise_shift = atomwise_shift
+        self.atomwise_scale = atomwise_scale
         
         if scale_by is None and shift_by is None:
             self._initialized = False
@@ -61,7 +63,8 @@ class GlobalRescaleShift(torch.nn.Module):
         if not self.training or force_process:
             for key in keys:
                 # scale
-                if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
+                if key == properties.energy and not self.atomwise_scale and self.atomwise_normalization:
+                    # import pdb; pdb.set_trace()
                     data[key] = data[key] * (self.scale_by[key] * data[properties.n_atoms])  # because scale_by is the std of pre-atom energies
                 else:
                     data[key] = data[key] * self.scale_by[key]
@@ -81,7 +84,7 @@ class GlobalRescaleShift(torch.nn.Module):
                 elif self.shift_by_q0 and key == properties.atomic_charge:
                     node_q0 = self.atomic_charges[data[properties.Z]]
                     shift_by = shift_by + node_q0
-
+                # import pdb; pdb.set_trace()
                 data[key] = data[key] + shift_by
         return data
     
@@ -98,7 +101,7 @@ class GlobalRescaleShift(torch.nn.Module):
             # First unshift, then unscale
             for key in keys:
                 # unshift
-                if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
+                if key == properties.energy and not self.atomwise_scale and self.atomwise_normalization:
                     shift_by = data[properties.n_atoms] * self.shift_by[key]
                 else:
                     shift_by = self.shift_by[key]

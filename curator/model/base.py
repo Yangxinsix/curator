@@ -58,13 +58,16 @@ class NeuralNetworkPotential(nn.Module):
         for m in self.output_modules:
             # import pdb; pdb.set_trace()
             if hasattr(m, 'electronegativity_mlp'):
+                # import pdb; pdb.set_trace()
                 scaled_data = data.copy()
                 for layer in self.rescale_layers[::-1]:
                     scaled_data = layer.scale(scaled_data, force_process=True)
                 data[properties.atomic_charge] = scaled_data[properties.atomic_charge]
                 data[properties.energy] = scaled_data[properties.energy]
                 data[properties.forces] = scaled_data[properties.forces]
+                # import pdb; pdb.set_trace()
                 data = m(data)
+                # import pdb; pdb.set_trace()
                 for layer in self.rescale_layers:
                     data = layer.unscale(data, force_process=True)
                 
@@ -281,13 +284,14 @@ class LitNNP(pl.LightningModule):
         # calculate loss, metrics
         # both batch and pred need to be normalized for calculating loss in validation mode
         unscaled_batch, unscaled_pred = batch, pred
+        # import pdb; pdb.set_trace()
         for layer in self.rescale_layers:
             unscaled_batch = layer.unscale(unscaled_batch, force_process=True)
             unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
         loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_batch, 'val')
         for k in loss_dict.keys():
             self.log(k, loss_dict[k].detach().cpu().item(), batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True) 
-        
+        # import pdb; pdb.set_trace()
         # nothing need to be scaled for calculating metrics        
         all_metrics = {}
         for output in self.outputs:
@@ -295,7 +299,7 @@ class LitNNP(pl.LightningModule):
                 all_metrics[k] = v
         # import pdb; pdb.set_trace()
         self.log_dict(all_metrics, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
-        
+        # import pdb; pdb.set_trace()
         # get metric names for first epoch
         self.log_head(loss_dict, all_metrics, 'val')
         

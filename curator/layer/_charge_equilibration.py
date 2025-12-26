@@ -33,8 +33,8 @@ class ChargeEquilibration(nn.Module):
         model_outputs: List[str] = ['residual_forces', 'atomic_charge'],
         ewald_weight = 1.0,
         ewald_weight_trainable: bool = False,
-        reference_electronegativity: Union[Dict[int, float], Dict[str, float], None, str] = "auto",
-        reference_hardness: Union[Dict[int, float], Dict[str, float], None, str] = "auto",
+        reference_electronegativity: Union[Dict[int, float], Dict[str, float], None, str] = None,
+        reference_hardness: Union[Dict[int, float], Dict[str, float], None, str] = None,
         *args,
         **kwargs,
     ):
