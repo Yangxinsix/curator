@@ -1,6 +1,6 @@
-_target_: curator.simulate.callbacks.calc.CalculatorAssign
-calculator: ${model_path}
-warmup: true
-require_forces: false
-apply_to_neb_images: false
-device: ${device}
+_target_: curator.simulate.callbacks.calc.CalculatorAssign   # attaches calculator to simulation
+calculator: ${model_path}                                    # calculator identifier or checkpoint
+warmup: true                                                 # run single-step warmup before MD
+require_forces: false                                        # ensure forces exist if True
+apply_to_neb_images: false                                   # also attach calculator to NEB images
+device: ${device}                                            # device for calculator execution

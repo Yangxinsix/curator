@@ -1,0 +1,5 @@
+defaults:
+  - _self_
+  - /task/outputs/components@energy: energy
+  - /task/outputs/components@forces: forces
+  - /task/outputs/components@residual_forces: residual_forces

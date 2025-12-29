@@ -1,14 +1,14 @@
-_target_: curator.simulate.callbacks.torchsim_logger.TorchSimThermoLogger
-variables: basic_energies
-interval: 1
-header: true
-per_system_logs: true
-log_dir: ${run_path}
-monitor: maha_dist
-low: null
-high: null
+_target_: curator.simulate.callbacks.torchsim_logger.TorchSimThermoLogger   # logger tailored for TorchSim runs
+variables: basic_energies                                                   # variables to record
+interval: 1                                                                 # logging interval
+header: true                                                                # print header row
+per_system_logs: true                                                       # log each system separately
+log_dir: ${run_path}                                                        # directory for log files
+monitor: maha_dist                                                          # uncertainty metric to monitor
+low: null                                                                   # lower threshold for alerts
+high: null                                                                  # upper threshold for alerts
 uncertainty_backend:
-  _target_: curator.simulate.uncertainty.auto.AutoUncertainty
-  calculator: ${model_path}
-  dataset: ${dataset}
-  device: ${device}
+  _target_: curator.simulate.uncertainty.auto.AutoUncertainty               # backend computing uncertainty
+  calculator: ${model_path}                                                 # model/calculator path
+  dataset: ${dataset}                                                       # reference dataset
+  device: ${device}                                                         # device for inference

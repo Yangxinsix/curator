@@ -1,4 +1,4 @@
-_target_: curator.simulate.callbacks.trajectory.TrajectoryWriter
-path: ${run_path}/trajectory_sys{i}.traj
-interval: 1
-per_system: true
+_target_: curator.simulate.callbacks.trajectory.TrajectoryWriter  # writes trajectories during MD
+path: ${run_path}/trajectory_sys{i}.traj                          # output path template
+interval: 1                                                       # write every N steps
+per_system: true                                                  # separate file per system

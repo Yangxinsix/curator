@@ -1,4 +1,4 @@
-_target_: pytorch_lightning.loggers.WandbLogger
-save_dir: ${run_path}/logs
-offline: true
-name: curator-train
+_target_: pytorch_lightning.loggers.WandbLogger   # log metrics to Weights & Biases
+save_dir: ${run_path}/logs                       # directory for local run files
+offline: true                                    # run W&B in offline mode by default
+name: curator-train                              # W&B run name prefix

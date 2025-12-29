@@ -1,0 +1,99 @@
+2025-12-25 02:03:30: Running on host: XSH-20240927AHO
+2025-12-25 02:03:30: Seed with <3407>
+2025-12-25 02:03:30: Instantiating datamodule <curator.data.AtomsDataModule> from dataset ../example/LiFePO4.traj
+AtomsDataModule(
+Train | Val | Test | Batch | Cutoff | Path                   
+------+-----+------+-------+--------+------------------------
+2031  | 225 | 0    | 16    | 5.0    | ../example/LiFePO4.traj
+)
+2025-12-25 02:03:30: Instantiating task <curator.model.LitNNP>
+2025-12-25 02:03:30: Energy loss weight: 1 Forces loss weight: 100
+2025-12-25 02:03:30: Instantiating model <class 'curator.model.base.NeuralNetworkPotential'> with GNN representation <class 'curator.model.painn.Painn'>
+2025-12-25 02:03:30: Instantiating trainer <pytorch_lightning.Trainer>
+2025-12-25 02:03:31: Using reference energies for elements: None.
+2025-12-25 02:03:32: Forces will be scaled by forces_rms: 1.231.
+2025-12-25 02:03:32: Atomwise model outputs will be normalized.
+2025-12-25 02:03:32: Model output properties will be scaled by 1.231, shifted by -6.520.
+2025-12-25 02:03:32: Using reference energies for elements: None.
+NeuralNetworkPotential(
+  (representation): Painn(
+    (atom_embedding): Embedding(119, 128)
+    (message_layers): ModuleList(
+      (0-2): 3 x PainnMessage(
+        (cutoff_fn): CosineCutoff()
+        (radial_basis): SineBasis()
+        (scalar_message_mlp): Sequential(
+          (0): Linear(in_features=128, out_features=128, bias=True)
+          (1): SiLU()
+          (2): Linear(in_features=128, out_features=384, bias=True)
+        )
+        (filter_layer): Linear(in_features=20, out_features=384, bias=True)
+      )
+    )
+    (update_layers): ModuleList(
+      (0-2): 3 x PainnUpdate(
+        (update_U): Linear(in_features=128, out_features=128, bias=True)
+        (update_V): Linear(in_features=128, out_features=128, bias=True)
+        (update_mlp): Sequential(
+          (0): Linear(in_features=256, out_features=128, bias=True)
+          (1): SiLU()
+          (2): Linear(in_features=128, out_features=384, bias=True)
+        )
+      )
+    )
+    (readout): AtomwiseNN(
+      (readout_mlp): Sequential(
+        (0): Dense(
+          (linear): Linear(in_features=128, out_features=128, bias=True)
+          (activation): SiLU()
+        )
+        (1): Dense(
+          (linear): Linear(in_features=128, out_features=1, bias=True)
+          (activation): Identity()
+        )
+      )
+    )
+  )
+  (input_modules): CallbackModuleList(
+    (0): PairwiseDistance(compute_neighbor_list=True, compute_distance_from_R=False, compute_forces=True)
+  )
+  (output_modules): CallbackModuleList(
+    (0): GradientOutput(grad_on_edge_diff=True, grad_on_positions=False, model_outputs=['forces'])
+    (1): GlobalRescaleShift(scale_by=tensor([1.2307]), shift_by=tensor([-6.5200]), shift_by_E0=False, atomic_energies={}, scale_keys=['energy', 'forces'], shift_keys=['energy'], atomwise_normalization=True)
+  )
+)
+2025-12-25 02:03:32: Model parameters: 600,577
+
+
+2025-12-25 02:03:32: Start training model
+LightningAdamW (
+Parameter Group 0
+    amsgrad: False
+    betas: [0.9, 0.999]
+    capturable: False
+    decoupled_weight_decay: True
+    differentiable: False
+    eps: 1e-08
+    foreach: None
+    fused: None
+    lr: 0.0005
+    maximize: False
+    weight_decay: 0.01
+)
+
+
+2025-12-25 02:03:32: Training
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      0          0             119             9.1             110            3.59            3.71           0.828            1.29
+
+
+2025-12-25 02:03:33: Validating
+# epoch      batch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+      0          0             109            12.4            96.7            4.22            4.34           0.763            1.21
+
+
+2025-12-25 02:03:33: Epoch summary:
+Validation  # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  0             109            12.4            96.7            4.22            4.34           0.763            1.21
+Train       # epoch      total_loss     energy_loss     forces_loss      energy_mae     energy_rmse      forces_mae     forces_rmse
+                  0             119             9.1             110            3.59            3.71           0.828            1.29

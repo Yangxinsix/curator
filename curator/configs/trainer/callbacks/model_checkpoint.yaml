@@ -1,5 +1,5 @@
-_target_: pytorch_lightning.callbacks.ModelCheckpoint
-dirpath: ${run_path}/model_path
-save_top_k: 1
-monitor: val_total_loss
-filename: best_model_{epoch}_{step}_{val_total_loss:.2f}
+_target_: pytorch_lightning.callbacks.ModelCheckpoint   # saves checkpoints during training
+dirpath: ${run_path}/model_path                        # directory to store checkpoints
+save_top_k: 1                                          # keep best K checkpoints
+monitor: val_total_loss                                # metric to monitor for ranking
+filename: best_model_{epoch}_{step}_{val_total_loss:.2f}  # checkpoint filename template

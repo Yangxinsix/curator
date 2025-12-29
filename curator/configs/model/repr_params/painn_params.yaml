@@ -1,10 +1,10 @@
 # @package _global_
 task:
   optimizer:
-    lr: 0.0005
+    lr: 0.0005           # recommended learning rate for PAINN
 
 data:
-  batch_size: 16
-  species: null
-  atomic_energies: null
-  avg_num_neighbors: null
+  batch_size: 16         # batch size tuned for PAINN
+  species: null          # allow species inference
+  atomic_energies: null  # disable automatic energy offsets
+  avg_num_neighbors: null  # leave neighbor stats unset (computed if needed)

@@ -65,6 +65,10 @@ class CalculatorAssign(Callback):
         return self._calculator
 
     def _assign_and_warmup(self, atoms) -> None:
+        if isinstance(atoms, (list, tuple)):
+            for single in atoms:
+                self._assign_and_warmup(single)
+            return
         atoms.calc = self._make_calc()
         if self.warmup:
             try:

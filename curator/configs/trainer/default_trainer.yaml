@@ -1,40 +1,40 @@
 defaults:
   - _self_
-  - logger: csv
-  - /trainer/callbacks@callbacks.model_checkpoint: model_checkpoint
-  - /trainer/callbacks@callbacks.early_stopping: early_stopping
-  - /trainer/callbacks@callbacks.learning_rate_monitor: learning_rate_monitor
-  - /trainer/callbacks@callbacks.ema: ema
+  - logger: csv                                                  # logger used during training
+  - /trainer/callbacks@callbacks.model_checkpoint: model_checkpoint  # checkpoint callback
+  - /trainer/callbacks@callbacks.early_stopping: early_stopping      # early stopping callback
+  - /trainer/callbacks@callbacks.learning_rate_monitor: learning_rate_monitor  # log LR
+  - /trainer/callbacks@callbacks.ema: ema                           # EMA callback
 
-_target_: pytorch_lightning.Trainer
+_target_: pytorch_lightning.Trainer                                 # Lightning trainer entrypoint
 
-devices: 1
+devices: 1                                                          # number of devices to use
 
-default_root_dir: ${run_path}
-min_epochs: null
-max_epochs: 1000
+default_root_dir: ${run_path}                                       # base directory for logs/checkpoints
+min_epochs: null                                                    # minimum training epochs
+max_epochs: 1000                                                    # maximum training epochs
 
 # prints
-enable_model_summary: True
-profiler: null
+enable_model_summary: True                                          # show model summary on start
+profiler: null                                                      # optional profiler configuration
 
-log_every_n_steps: 10
-gradient_clip_val: 10.0
-gradient_clip_algorithm: norm
-accumulate_grad_batches: 1
-val_check_interval: 1.0
-check_val_every_n_epoch: 1
+log_every_n_steps: 10                                               # logging frequency (steps)
+gradient_clip_val: 10.0                                             # gradient clipping norm value
+gradient_clip_algorithm: norm                                       # clipping algorithm
+accumulate_grad_batches: 1                                          # gradient accumulation steps
+val_check_interval: 1.0                                             # validation frequency (fraction of epoch or steps)
+check_val_every_n_epoch: 1                                          # run validation every N epochs
 
-num_sanity_val_steps: -1
-fast_dev_run: False
-overfit_batches: 0
-limit_train_batches: 1.0
-limit_val_batches: 1.0
-limit_test_batches: 1.0
-detect_anomaly: False
+num_sanity_val_steps: -1                                            # sanity validation steps before training
+fast_dev_run: False                                                 # quick run for debugging
+overfit_batches: 0                                                  # overfit small subset for debugging
+limit_train_batches: 1.0                                            # fraction/steps of training data to use
+limit_val_batches: 1.0                                              # fraction/steps of validation data to use
+limit_test_batches: 1.0                                             # fraction/steps of test data to use
+detect_anomaly: False                                               # enable autograd anomaly detection
 
-precision: 32
-accelerator: auto
-num_nodes: 1
-deterministic: False
-inference_mode: False
+precision: 32                                                       # training precision (32/16/etc.)
+accelerator: auto                                                   # hardware accelerator selection
+num_nodes: 1                                                        # number of nodes for distributed training
+deterministic: False                                                # enforce deterministic behavior
+inference_mode: False                                               # use torch.inference_mode during evaluation

@@ -1,6 +1,6 @@
-_target_: curator.simulate.uncertainty.MahalanobisUncertainty
-high_threshold: 1.1
-low_threshold: 0.95
-dataset: null
-kernel: local-full-g
-max_structures: 128
+_target_: curator.simulate.uncertainty.MahalanobisUncertainty   # Mahalanobis distance uncertainty
+high_threshold: 1.1                                             # upper confidence threshold
+low_threshold: 0.95                                             # lower confidence threshold
+dataset: null                                                   # reference dataset for covariance
+kernel: local-full-g                                            # kernel used for embedding
+max_structures: 128                                             # cap on stored reference structures

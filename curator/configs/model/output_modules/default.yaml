@@ -1,4 +1,4 @@
 defaults:
   - _self_
-  - /model/output_modules@output_modules.gradient_output: gradient_output
-  - /model/output_modules@output_modules.global_rescale_shift: global_rescale_shift
+  - /model/output_modules@output_modules.gradient_output: gradient_output            # expose force/stress gradients
+  - /model/output_modules@output_modules.global_rescale_shift: global_rescale_shift  # normalize outputs

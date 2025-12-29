@@ -15,52 +15,6 @@ import logging
 from curator.layer._feature import FeatureExtractor, RandomProjections
 
 logger = logging.getLogger(__name__)
-
-class FeatureExtractor(nn.Module):
-    """Extract features from neural networks"""
-
-    def __init__(self, model: nn.Module, target_layer: str = 'readout_mlp',) -> None:
-        """Extract features from neural networks
-
-        Args:
-            model (nn.Module): pytorch model
-            target_layer (str): name of target layer to extract features from
-        """
-        super().__init__()
-        self.model = model
-        self.target_layer = target_layer
-        self._features = []
-        self._grads = []
-        self.hooks = []
-        layer = find_layer_by_name_recursive(self.model, self.target_layer)
-        assert layer is not None, f"Target layer {self.target_layer} is not found!"
-
-        #  No need to specify MACE now because we have a better mechanism for accessing readout_mlp!
-        # representation = getattr(self.model, "representation", None)
-        # if representation is not None and representation.__class__.__name__ == "MACE":
-        #     layer = layer[-1]
-
-        for child in layer.children():
-            if isinstance(child, (nn.Linear, o3.Linear)):
-                self.hooks.append(child.register_forward_pre_hook(self.save_feats_hook))
-                self.hooks.append(child.register_backward_hook(self.save_grads_hook))
-
-    def save_feats_hook(self, _, in_feat):
-        new_feat = torch.cat((in_feat[0].detach().clone(), torch.ones_like(in_feat[0][:, 0:1])), dim=-1)
-        self._features.append(new_feat)
-
-    def save_grads_hook(self, _, __, grad_output):
-        self._grads.append(grad_output[0].detach().clone())
-
-    def unhook(self):
-        for hook in self.hooks:
-            hook.remove()
-
-    def forward(self, model_inputs: Dict[str, torch.Tensor]):
-        self._features = []
-        self._grads = []
-        _ = self.model(model_inputs)
-        return self._features, self._grads[::-1]
     
 class RandomProjections:
     """Store parameters of random projections"""

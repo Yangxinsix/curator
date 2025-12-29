@@ -76,4 +76,9 @@ def log_simulation_summary(logger: logging.Logger, config: DictConfig) -> None:
                 extra.append(f"{key}={eng_cfg.get(key)}")
         if extra:
             logger.info("  Engine params: %s", ", ".join(extra))
-    logger.info("  Callbacks   : %s", cb_names)
+    if callbacks_cfg:
+        logger.info("  Callbacks   :")
+        for cb in callbacks_cfg:
+            logger.info("    - %s", _target_name(cb))
+    else:
+        logger.info("  Callbacks   : none")

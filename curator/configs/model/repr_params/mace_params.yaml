@@ -1,12 +1,12 @@
 # @package _global_
 task:
   optimizer:
-    amsgrad: True
-    lr: 0.005
-    weight_decay: 0.0
+    amsgrad: True          # use AMSGrad optimizer variant
+    lr: 0.005              # suggested learning rate for MACE
+    weight_decay: 0.0      # disable weight decay by default
   
 data:
-  batch_size: 5
-  species: auto
-  atomic_energies: auto
-  avg_num_neighbors: auto
+  batch_size: 5            # batch size tuned for MACE memory/throughput
+  species: auto            # infer species automatically
+  atomic_energies: auto    # automatically fit per-species reference energies
+  avg_num_neighbors: auto  # estimate average neighbors from data

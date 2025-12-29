@@ -1,5 +1,5 @@
 defaults:
-  - calculator: vasp
+  - calculator: vasp                        # use VASP calculator settings
 
-_target_: curator.label.annotator.AtomsAnnotator
-inspector: null
+_target_: curator.label.annotator.AtomsAnnotator   # annotator that runs calculator on structures
+inspector: null                                    # optional inspector to validate results

@@ -1,4 +1,4 @@
-_target_: curator.simulate.uncertainty.EnsembleUncertainty
+_target_: curator.simulate.uncertainty.EnsembleUncertainty   # ensemble-based uncertainty estimator
 uncertainty_keys:
-  - force_sd
-  - energy_sd
+  - force_sd                                                 # standard deviation of forces
+  - energy_sd                                                # standard deviation of energy
