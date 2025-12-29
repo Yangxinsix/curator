@@ -215,7 +215,7 @@ class MACE(nn.Module):
     def forward(self, data: properties.Type) -> properties.Type:
         # add mask for local interaction part
         edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
-        mask = edge_dist < self.cutoff
+        mask = edge_dist < self.cutoff 
         data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
 
         

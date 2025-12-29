@@ -18,7 +18,7 @@ class GlobalRescaleShift(torch.nn.Module):
         scale_trainable: bool=False,
         shift_trainable: bool=False,
         scale_keys: List[str] = ["energy"],
-        shift_keys: List[str] = ["energy"], # We only need scale_keys now
+        shift_keys: List[str] = ["energy"],
         atomwise_shift: bool=False,                   # if the value to be shifted is atomwise or structure-based
         atomwise_scale: bool=True,                    # True: energy scale = scale; False: energy scale = scale * n_atoms
         atomwise_normalization: bool=True,            # if the value to be shifted is normalized to each atom. This is only useful for structure-based properties.
@@ -64,12 +64,11 @@ class GlobalRescaleShift(torch.nn.Module):
             for key in keys:
                 # scale
                 if key == properties.energy and not self.atomwise_scale and self.atomwise_normalization:
-                    # import pdb; pdb.set_trace()
                     data[key] = data[key] * (self.scale_by[key] * data[properties.n_atoms])  # because scale_by is the std of pre-atom energies
                 else:
                     data[key] = data[key] * self.scale_by[key]
                 # shift (forces should not be shifted, as they are derivatives of energy)
-                if key == properties.forces:
+                if key not in self.shift_keys:
                     continue
                 if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
                     shift_by = data[properties.n_atoms] * self.shift_by[key]
@@ -86,7 +85,6 @@ class GlobalRescaleShift(torch.nn.Module):
                 elif self.shift_by_q0 and key == properties.atomic_charge:
                     node_q0 = self.atomic_charges[data[properties.Z]]
                     shift_by = shift_by + node_q0
-                # import pdb; pdb.set_trace()
                 data[key] = data[key] + shift_by
         return data
     
@@ -103,7 +101,7 @@ class GlobalRescaleShift(torch.nn.Module):
             # First unshift, then unscale
             for key in keys:
                 # unshift (forces should not be shifted, as they are derivatives of energy)
-                if key != properties.forces:
+                if key in self.shift_keys:
                     if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
                         shift_by = data[properties.n_atoms] * self.shift_by[key]
                     else:
@@ -213,6 +211,29 @@ class GlobalRescaleShift(torch.nn.Module):
             self.scale_by[k] = getattr(self, s_name)
             self.shift_by[k] = getattr(self, m_name)
 
+    def _rebuild_scale_shift_dicts(self):
+        """Rebuild scale_by and shift_by dicts from registered buffers after loading state_dict."""
+        if not hasattr(self, 'scale_by') or self.scale_by is None:
+            self.scale_by = {}
+        if not hasattr(self, 'shift_by') or self.shift_by is None:
+            self.shift_by = {}
+        
+        # Find all scale_by__* and shift_by__* buffers
+        for name, buffer in self.named_buffers():
+            if name.startswith("scale_by__"):
+                key = name[len("scale_by__"):]
+                self.scale_by[key] = buffer
+            elif name.startswith("shift_by__"):
+                key = name[len("shift_by__"):]
+                self.shift_by[key] = buffer
+
+    def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
+        # Call parent's _load_from_state_dict first
+        super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
+        # Rebuild the scale_by and shift_by dicts from buffers
+        self._rebuild_scale_shift_dicts()
+        self._initialized = True
+
     # Initialized in base.py
     def datamodule(self, _datamodule):
         if not self._initialized:
@@ -234,6 +255,9 @@ class GlobalRescaleShift(torch.nn.Module):
             self._initialized = True
 
     def __repr__(self):
+        # Ensure dicts are rebuilt before repr
+        if not self.scale_by or not self.shift_by:
+            self._rebuild_scale_shift_dicts()
         sb = {k: float(v) for k, v in self.scale_by.items()}
         mb = {k: float(v) for k, v in self.shift_by.items()}
         atomic_energies_dict = {chemical_symbols[i]: self.atomic_energies[i] for i in self.atomic_energies.nonzero().squeeze().cpu().numpy()}
