@@ -1,6 +1,6 @@
 defaults:
   - _self_
-  - /trainer/callbacks@callbacks.model_checkpoint: model_checkpoint
-  - /trainer/callbacks@callbacks.early_stopping: early_stopping
-  - /trainer/callbacks@callbacks.learning_rate_monitor: learning_rate_monitor
-  - /trainer/callbacks@callbacks.ema: ema
+  - /trainer/callbacks@callbacks.model_checkpoint: model_checkpoint   # save best checkpoints
+  - /trainer/callbacks@callbacks.early_stopping: early_stopping       # stop when metric plateaus
+  - /trainer/callbacks@callbacks.learning_rate_monitor: learning_rate_monitor  # log LR schedule
+  - /trainer/callbacks@callbacks.ema: ema                              # track EMA weights

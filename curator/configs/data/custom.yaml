@@ -1,25 +1,25 @@
-_target_: curator.data.AtomsDataModule
-_convert_: partial
-datapath: null
-train_path: null
-val_path: null
-test_path: null
-batch_size: 8
-compute_neighbor_list: False
-cutoff: 5.0
-num_train: 0.9
-num_val: 0.1
-num_test: null
-train_val_split: random
-shuffle: true
-num_workers: 0
-pin_memory: True
-species: null
-avg_num_neighbors: auto
-atomic_energies: null
-normalization: True
-atomwise_normalization: True
-scale_forces: True
-transforms: []
+_target_: curator.data.AtomsDataModule   # data module driving loaders and splits
+_convert_: partial                       # allow partial instantiation for hydra
+datapath: null                           # single dataset path containing all splits
+train_path: null                         # explicit training data path (overrides datapath)
+val_path: null                           # explicit validation data path
+test_path: null                          # explicit test data path
+batch_size: 8                            # training batch size
+compute_neighbor_list: False             # precompute neighbor lists during loading
+cutoff: 5.0                              # cutoff radius used for neighbor finding
+num_train: 0.9                           # fraction or count of samples for training split
+num_val: 0.1                             # fraction or count of samples for validation split
+num_test: null                           # fraction or count for test split (null derives remainder)
+train_val_split: random                  # random or sequential split strategy
+shuffle: true                            # shuffle training data per epoch
+num_workers: 0                           # DataLoader worker count
+pin_memory: True                         # pin host memory for faster GPU transfer
+species: null                            # list of chemical species; null infers from data
+avg_num_neighbors: auto                  # average neighbors used for model normalization
+atomic_energies: null                    # per-species reference energies for offsetting
+normalization: True                      # enable global normalization of targets
+atomwise_normalization: True             # normalize atomwise properties independently
+scale_forces: True                       # scale forces by dataset statistics
+transforms: []                           # optional transforms applied to each structure
   # - _target_: curator.data.TypeMapper
   #   species: ${data.species}

@@ -424,16 +424,26 @@ class AtomsDataModule(pl.LightningDataModule):
         return self.mean, self.std
     
     def __repr__(self):
-        path_info = [f"train_path={self.train_path}, " if self.train_path is not None else "", f"val_path={self.val_path}" if self.val_path is not None else "", f", test_path={self.test_path}" if self.test_path is not None else ""]
-        path_info = "".join(path_info)
-        path_info += "\n" if path_info != "" else ""
-        path_info += f"datapath={self.datapath}\n" if self.datapath is not None else ""
-        if self._train_dataset is not None:
-            data_info = f"Dataset size={self.datalen or self.num_train + self.num_val + self.num_test}, training dataset size={self.num_train}, validation dataset size={self.num_val}, test dataset size={self.num_test}.\n"
-        else:
-            data_info = ""
-        scale_info = f"scale={self.std}, shift={self.mean}, atomwise_normalization={self.atomwise_normalization}, scale_forces={self.scale_forces}\n" if self.normalization else ""
-        species_info = f"species={self.species}\n" if self.species is not None else ""
-        e0_info = f"atomic_energies={self.atomic_energies}" if isinstance(self.atomic_energies, Dict) else ""
-        neigh_info = f"avg_num_neighbors={self.avg_num_neighbors}\n" if self.avg_num_neighbors is not None else ""
-        return f"{self.__class__.__name__}(" + path_info + data_info + scale_info + species_info + e0_info + neigh_info + ")"
+        return self._format_table()
+
+    def __str__(self):
+        # Avoid Lightning's default __str__ which inspects dataloaders.
+        return self.__repr__()
+
+    def _format_table(self) -> str:
+        train_size = len(self._train_dataset) if self._train_dataset is not None else (self.num_train if isinstance(self.num_train, (int, float)) else 0)
+        val_size = len(self._val_dataset) if self._val_dataset is not None else (self.num_val if isinstance(self.num_val, (int, float)) else 0)
+        test_size = len(self._test_dataset) if self._test_dataset is not None else (self.num_test if isinstance(self.num_test, (int, float)) else 0)
+        path = self.datapath or self.train_path or self.val_path or self.test_path or "N/A"
+
+        headers = ["Train", "Val", "Test", "Batch", "Cutoff", "Path"]
+        row = [str(train_size), str(val_size), str(test_size), str(self.batch_size), str(self.cutoff), str(path)]
+
+        widths = [max(len(headers[i]), len(row[i])) for i in range(len(headers))]
+
+        def fmt(values):
+            return " | ".join(v.ljust(widths[i]) for i, v in enumerate(values))
+
+        line = "-+-".join("-" * w for w in widths)
+        table = "\n".join([fmt(headers), line, fmt(row)])
+        return f"{self.__class__.__name__}(\n{table}\n)"

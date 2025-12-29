@@ -1,16 +1,16 @@
-_target_: curator.model.MACE
-cutoff: 5.0
-num_interactions: 3
-num_elements: null             # will be obtained from species
-species: ${data.species}
-correlation: 3
-hidden_irreps: null
-MLP_irreps: null
-avg_num_neighbors: null
-lmax: 3
-parity: True
-num_features: 32             # will be inferred from hidden_irreps
-num_basis: 8
-power: 6
-gate: silu
-use_cueq: False
+_target_: curator.model.MACE     # MACE equivariant architecture
+cutoff: 5.0                      # interaction cutoff radius
+num_interactions: 3              # number of interaction blocks
+num_elements: null               # number of species; inferred from `species` when null
+species: ${data.species}         # species list passed to model
+correlation: 3                   # body order / correlation order
+hidden_irreps: null              # hidden irreps specification (auto if null)
+MLP_irreps: null                 # MLP irreps specification
+avg_num_neighbors: null          # average neighbors used for normalization
+lmax: 3                          # maximum spherical harmonic order
+parity: True                     # include parity equivariance
+num_features: 32                 # embedding width (derived from hidden_irreps if null)
+num_basis: 8                     # radial basis size
+power: 6                         # cutoff envelope exponent
+gate: silu                       # gating nonlinearity
+use_cueq: False                  # enable charge equilibration variant

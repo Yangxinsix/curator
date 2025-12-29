@@ -1,5 +1,5 @@
-_target_: ase.md.Langevin
-_partial_: True
-timestep: "${multiply_fs: ${simulator.timestep}}"                # take care of the unit. fs -> ase.units.fs
-temperature_K: ${simulator.temperature}
-friction: "${divide_by_fs: 0.01}"              # take care of the unit. fs -> ase.units.fs
+_target_: ase.md.Langevin                                # Langevin thermostat integrator
+_partial_: True                                          # allow hydra partial instantiation
+timestep: "${multiply_fs: ${simulator.timestep}}"        # timestep converted from fs
+temperature_K: ${simulator.temperature}                  # target temperature in Kelvin
+friction: "${divide_by_fs: 0.01}"                        # friction constant converted from 1/fs

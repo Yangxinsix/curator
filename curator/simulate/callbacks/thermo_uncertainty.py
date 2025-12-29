@@ -44,8 +44,8 @@ class ThermoWithUncertainty(MDThermoLogger):
         # Uncertainty
         uncertainty_backend: Optional[Callable[[Any], Dict[str, float]]] = None,
         monitor: Optional[str] = None,
-        low: Optional[float] = 0.05,
-        high: Optional[float] = 0.5,
+        low: Optional[float] = None,
+        high: Optional[float] = None,
         save_path: Optional[str] = 'warning_struct.traj',
         uncertain_count: Optional[int] = None,
     ):
@@ -56,8 +56,13 @@ class ThermoWithUncertainty(MDThermoLogger):
             logger=logger,
             custom_functions=custom_functions,
         )
-        self._unc_backend = uncertainty_backend
-        self.monitor = monitor
+        backend = uncertainty_backend
+        # If AutoUncertainty (or similar) has no active backend, disable uncertainty.
+        if getattr(backend, "_backend", None) is None:
+            backend = None
+
+        self._unc_backend = backend
+        self.monitor = monitor if self._unc_backend is not None else None
         # allow logger thresholds to inherit backend thresholds when not specified
         backend_low = getattr(self._unc_backend, "low_threshold", None) if self._unc_backend else None
         backend_high = getattr(self._unc_backend, "high_threshold", None) if self._unc_backend else None
@@ -159,7 +164,7 @@ class ThermoWithUncertainty(MDThermoLogger):
         is_warn = bool(data.get("is_warning", False))
         is_out = bool(data.get("is_outlier", False))
 
-        if "is_warning" in data or "is_outlier" in data:
+        if monitor_key is not None and ("is_warning" in data or "is_outlier" in data):
             if is_out:
                 if self._traj is not None:
                     self._traj.write(ctx.atoms)

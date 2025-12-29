@@ -1,0 +1,12 @@
+defaults:
+  - simulator: auto_uncertainty
+
+model_path: 
+  - ../example/train/ensemble/model_1/model_path
+  - ../example/train/ensemble/model_2/model_path
+  - ../example/train/ensemble/model_3/model_path
+simulator:
+  init_traj: ../test/LiFePO4.traj
+
+  run_kwargs:
+    steps: 100

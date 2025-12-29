@@ -1,4 +1,4 @@
 # @package _global_
 deploy:
-  load_weights_only: false
-  target_path: ${run_path}/compiled_model.pt
+  load_weights_only: false               # export full model (not weights-only)
+  target_path: ${run_path}/compiled_model.pt  # path for compiled TorchScript model

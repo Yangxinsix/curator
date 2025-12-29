@@ -27,16 +27,12 @@ class AutoUncertainty:
         device: Optional[Any] = None,
     ) -> None:
         self.device = device
-        self.calculator = self._resolve_calculator(calculator)
-        self.dataset = dataset
+        calc_like = self._maybe_parse_list(calculator)
+        self.dataset = self._normalize_dataset(dataset)
         self.maha_kwargs = dict(maha_kwargs or {})
-        if self.dataset is not None and "dataset" not in self.maha_kwargs:
-            self.maha_kwargs["dataset"] = self.dataset
-        if "kernel" not in self.maha_kwargs:
-            self.maha_kwargs["kernel"] = "local-full-g"
-
         self.ensemble_kwargs = dict(ensemble_kwargs or {})
 
+        self.calculator = self._resolve_calculator(calc_like)
         self._backend = self._select_backend()
         self.threshold_key = getattr(self._backend, "threshold_key", None) if self._backend else None
         self.uncertainty_keys = getattr(self._backend, "uncertainty_keys", ()) if self._backend else ()
@@ -45,12 +41,17 @@ class AutoUncertainty:
     def _select_backend(self):
         model = getattr(self.calculator, "model", None)
         is_ensemble = isinstance(model, EnsembleModel)
-
-        if not is_ensemble and self.dataset is not None:
-            return MahalanobisUncertainty(calculator=self.calculator, **self.maha_kwargs)
+        has_dataset = self.dataset is not None
 
         if is_ensemble:
             return EnsembleUncertainty(calculator=self.calculator, **self.ensemble_kwargs)
+
+        if has_dataset:
+            if "dataset" not in self.maha_kwargs:
+                self.maha_kwargs["dataset"] = self.dataset
+            if "kernel" not in self.maha_kwargs:
+                self.maha_kwargs["kernel"] = "local-full-g"
+            return MahalanobisUncertainty(calculator=self.calculator, **self.maha_kwargs)
 
         return None
 
@@ -71,3 +72,22 @@ class AutoUncertainty:
             return made
         # Model-like (path/paths/module/list)
         return MLCalculator(model=calc_like, device=self.device)
+
+    def _maybe_parse_list(self, calc_like: Any):
+        """Handle bracketed list strings from CLI (e.g., "[a,b]")."""
+        if isinstance(calc_like, str):
+            text = calc_like.strip()
+            if text.startswith("[") and text.endswith("]"):
+                inner = text[1:-1]
+                parts = [p.strip().strip("\"'") for p in inner.split(",") if p.strip()]
+                return parts
+        return calc_like
+
+    def _normalize_dataset(self, dataset: Optional[Union[str, None]]):
+        """Treat empty/None/null datasets as missing to avoid accidental Maha."""
+        if dataset is None:
+            return None
+        if isinstance(dataset, str):
+            if dataset.strip().lower() in {"", "none", "null"}:
+                return None
+        return dataset

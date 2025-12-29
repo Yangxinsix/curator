@@ -1,12 +1,12 @@
-_target_: curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty
-variables: basic_energies
-interval: 1
-header: true
-monitor: maha_dist
-low: null
-high: null
+_target_: curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty  # logs thermo data with uncertainty metrics
+variables: basic_energies                                                       # variables to record
+interval: 1                                                                     # logging frequency in steps
+header: true                                                                    # print column headers
+monitor: maha_dist                                                              # uncertainty metric to watch
+low: null                                                                       # lower alert threshold
+high: null                                                                      # upper alert threshold
 uncertainty_backend:
-  _target_: curator.simulate.uncertainty.auto.AutoUncertainty
-  calculator: ${model_path}
-  dataset: ${dataset}
-  device: ${device}
+  _target_: curator.simulate.uncertainty.auto.AutoUncertainty                   # backend computing uncertainty
+  calculator: ${model_path}                                                     # model/calculator used
+  dataset: ${dataset}                                                           # reference dataset for statistics
+  device: ${device}                                                             # device for inference

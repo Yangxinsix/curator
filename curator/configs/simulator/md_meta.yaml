@@ -1,14 +1,14 @@
-method: md
-init_traj: null
-start_index: 0
-rattle: null
-fix_under: null
-friction: 0.003
-temperature: 300 #K
-time_step: 1.0 #fs
-print_step: 1
-dump_step: 100
-min_steps: 1000
-max_steps: 10000
-num_uncertain: 100
-plumed_restart: False
+method: md              # simulation mode identifier
+init_traj: null         # path to initial trajectory/structure
+start_index: 0          # starting frame index
+rattle: null            # optional initial random displacement amplitude
+fix_under: null         # minimum coordination enforcement
+friction: 0.003         # Langevin friction coefficient
+temperature: 300 #K     # target temperature in Kelvin
+time_step: 1.0 #fs      # integrator timestep in femtoseconds
+print_step: 1           # logging interval
+dump_step: 100          # trajectory writing interval
+min_steps: 1000         # minimum steps before adaptive stopping
+max_steps: 10000        # maximum allowed simulation steps
+num_uncertain: 100      # limit of uncertain structures to collect
+plumed_restart: False   # resume PLUMED metadynamics if True

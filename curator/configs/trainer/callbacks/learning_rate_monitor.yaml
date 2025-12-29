@@ -1,2 +1,2 @@
-_target_: pytorch_lightning.callbacks.LearningRateMonitor
-logging_interval: epoch
+_target_: pytorch_lightning.callbacks.LearningRateMonitor   # logs learning rate schedule
+logging_interval: epoch                                     # frequency for logging LR

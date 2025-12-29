@@ -1,6 +1,6 @@
-_target_: curator.simulate.uncertainty.auto.AutoUncertainty
-calculator: ${calculator}
-dataset: ${dataset}
-maha_kwargs: {}
-ensemble_kwargs: {}
-device: ${device}
+_target_: curator.simulate.uncertainty.auto.AutoUncertainty   # auto-selects uncertainty backend
+calculator: ${calculator}                                    # model/calculator path
+dataset: ${dataset}                                          # dataset for statistics
+maha_kwargs: {}                                              # overrides for Mahalanobis backend
+ensemble_kwargs: {}                                          # overrides for ensemble backend
+device: ${device}                                            # device for inference

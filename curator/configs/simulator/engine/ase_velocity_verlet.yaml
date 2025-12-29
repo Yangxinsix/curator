@@ -1,4 +1,4 @@
 engine:
-  _target_: curator.simulate.engines.ase_md.MDEngine
-  dynamics_cls: ase.md.verlet.VelocityVerlet
-  timestep: 1.0
+  _target_: curator.simulate.engines.ase_md.MDEngine    # wrapper around ASE engines
+  dynamics_cls: ase.md.verlet.VelocityVerlet            # Velocity Verlet integrator
+  timestep: 1.0                                         # MD timestep in femtoseconds

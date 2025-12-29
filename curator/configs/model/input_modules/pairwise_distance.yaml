@@ -1,4 +1,4 @@
-_target_: curator.layer.PairwiseDistance
-compute_neighbor_list: True
-compute_distance_from_R: False
-cutoff: ${data.cutoff}
+_target_: curator.layer.PairwiseDistance   # builds edges based on interatomic distances
+compute_neighbor_list: True                # compute neighbors on the fly from positions
+compute_distance_from_R: False             # reuse provided edge vectors if available
+cutoff: ${data.cutoff}                     # radial cutoff for neighbor search
