@@ -68,7 +68,9 @@ class GlobalRescaleShift(torch.nn.Module):
                     data[key] = data[key] * (self.scale_by[key] * data[properties.n_atoms])  # because scale_by is the std of pre-atom energies
                 else:
                     data[key] = data[key] * self.scale_by[key]
-                # shift
+                # shift (forces should not be shifted, as they are derivatives of energy)
+                if key == properties.forces:
+                    continue
                 if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
                     shift_by = data[properties.n_atoms] * self.shift_by[key]
                 else:
@@ -100,26 +102,27 @@ class GlobalRescaleShift(torch.nn.Module):
             # inverse scale and shift for unscale
             # First unshift, then unscale
             for key in keys:
-                # unshift
-                if key == properties.energy and not self.atomwise_scale and self.atomwise_normalization:
-                    shift_by = data[properties.n_atoms] * self.shift_by[key]
-                else:
-                    shift_by = self.shift_by[key]
-                # get atomic energy and charge
-                if self.shift_by_E0 and key == properties.energy:
-                    node_e0 = self.atomic_energies[data[properties.Z]]
-                    if self.atomwise_shift:
-                        shift_by = shift_by + node_e0
+                # unshift (forces should not be shifted, as they are derivatives of energy)
+                if key != properties.forces:
+                    if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
+                        shift_by = data[properties.n_atoms] * self.shift_by[key]
                     else:
-                        e0 = scatter_add(node_e0, data[properties.image_idx])
-                        shift_by = shift_by + e0
-                elif self.shift_by_q0 and key == properties.atomic_charge:
-                    node_q0 = self.atomic_charges[data[properties.Z]]
-                    shift_by = shift_by + node_q0
+                        shift_by = self.shift_by[key]
+                    # get atomic energy and charge
+                    if self.shift_by_E0 and key == properties.energy:
+                        node_e0 = self.atomic_energies[data[properties.Z]]
+                        if self.atomwise_shift:
+                            shift_by = shift_by + node_e0
+                        else:
+                            e0 = scatter_add(node_e0, data[properties.image_idx])
+                            shift_by = shift_by + e0
+                    elif self.shift_by_q0 and key == properties.atomic_charge:
+                        node_q0 = self.atomic_charges[data[properties.Z]]
+                        shift_by = shift_by + node_q0
 
-                data[key] = data[key] - shift_by
+                    data[key] = data[key] - shift_by
                 # unscale
-                if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
+                if key == properties.energy and not self.atomwise_scale and self.atomwise_normalization:
                     data[key] = data[key] / (self.scale_by[key] * data[properties.n_atoms])
                 else:
                     data[key] = data[key] / self.scale_by[key]
