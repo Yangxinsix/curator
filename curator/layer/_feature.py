@@ -68,32 +68,8 @@ class FeatureExtractor(nn.Module):
     def forward(self, data: properties.Type, predict: bool=False) -> properties.Type:
         # repr_callback may modify the original data in place, so we need to make a copy of the data
         new_data = data.copy()
-        if predict:
-            # In predict mode, we need to run the model forward AND backward to capture both
-            # features (from forward hooks) and gradients (from backward hooks).
-            # We enable grad for positions to allow backward pass.
-            pos = new_data[properties.positions]
-            requires_grad_backup = pos.requires_grad
-            if not pos.requires_grad:
-                new_data[properties.positions] = pos.requires_grad_(True)
-            
+        if predict: # in predict mode, modify the data in place
             new_data = self.repr_callback(new_data)
-            
-            # Perform backward pass to trigger gradient hooks
-            # Use energy sum as the scalar for backward
-            energy = new_data.get(properties.energy, None)
-            if energy is not None and energy.requires_grad:
-                try:
-                    # Use retain_graph=False since we don't need the graph afterwards
-                    energy.sum().backward(retain_graph=False)
-                except RuntimeError:
-                    # If backward fails (e.g., no grad path), gradients won't be captured
-                    pass
-            
-            # Restore requires_grad state if it was changed
-            if not requires_grad_backup and properties.positions in new_data:
-                new_data[properties.positions] = new_data[properties.positions].detach()
-                
         data[properties.feature] = self._features
         data[properties.gradient] = self._grads[::-1]
         self._reset()
@@ -397,7 +373,9 @@ class FeatureCalculator(nn.Module):
 
         if properties.feature in data:
             feats = (data[properties.feature] - self.feature_mean) / self.feature_std
-            maha_dist = torch.sqrt(torch.einsum("ij,jk,ik->i", feats, self.precision, feats))
+            # Clamp to avoid negative values due to numerical precision issues
+            maha_sq = torch.einsum("ij,jk,ik->i", feats, self.precision, feats).clamp(min=0.0)
+            maha_dist = torch.sqrt(maha_sq)
             if 'local' in self.kernel:
                 maha_dist = scatter_mean(maha_dist, data[properties.image_idx], dim=0)
             data[properties.maha_dist] = maha_dist
@@ -406,43 +384,11 @@ class FeatureCalculator(nn.Module):
     def _compute_feature(self, data: properties.Type, predict: bool=False) -> properties.Type:
         if not hasattr(self, 'feature_extractor') or not hasattr(self, 'random_projections'):
             raise RuntimeError("Feature extractor is not initialized; ensure repr_callback is provided.")
-        
-        # Get current features/gradients captured by hooks (if any)
-        feats = self.feature_extractor._features
-        grads = self.feature_extractor._grads
-        
-        logger.debug(f"Before feature_extractor: feats={len(feats)}, grads={len(grads)}")
-        
-        # If we have features but no gradients, we need to trigger backward pass
-        # This happens when the model ran forward but backward hasn't been called yet
-        # (e.g., FeatureCalculator runs before GradientOutput)
-        if feats and not grads:
-            # Trigger backward to capture gradients
-            energy = data.get(properties.energy, None)
-            if energy is not None:
-                pos = data.get(properties.positions)
-                if pos is not None and not pos.requires_grad:
-                    # Need to enable grad on positions to allow backward
-                    data[properties.positions] = pos.requires_grad_(True)
-                try:
-                    if energy.requires_grad:
-                        logger.debug("Triggering backward pass to capture gradients")
-                        energy.sum().backward(retain_graph=True)  # Use retain_graph=True to allow later gradient computation
-                        # Update grads after backward
-                        grads = self.feature_extractor._grads
-                        logger.debug(f"After backward: grads={len(grads)}")
-                except RuntimeError as e:
-                    logger.warning(f"Failed to compute gradients for features: {e}")
-        
-        # Now call feature_extractor to collect features/gradients into data
-        data = self.feature_extractor(data, predict=predict)
+        data = self.feature_extractor(data, predict=predict)       # this will modify the data in place if in predict mode
         feats, grads = data[properties.feature], data[properties.gradient]
-        
-        logger.debug(f"After feature_extractor: feats={len(feats)}, grads={len(grads)}")
-        
         if not feats or not grads:
             raise RuntimeError(
-                f"FeatureExtractor did not capture features/gradients (feats={len(feats) if feats else 0}, grads={len(grads) if grads else 0}). "
+                "FeatureExtractor did not capture features/gradients. "
                 "Ensure the repr_callback forward/backward runs with hooks attached before calling FeatureCalculator, "
                 "or call with predict=True so repr_callback executes within FeatureCalculator."
             )

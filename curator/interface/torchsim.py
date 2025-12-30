@@ -122,6 +122,10 @@ class CuratorTorchSimAdapter(ModelInterface):
             default_dtype=self._dtype,
         )
         self._move_transforms_to_device(self._device)
+        
+        # Cache for the most recent forward outputs (e.g., atomic_charge)
+        # This allows callbacks to access full model outputs without re-computation
+        self.step_outputs: Optional[Dict[str, torch.Tensor]] = None
 
     def forward(
         self,
@@ -139,7 +143,10 @@ class CuratorTorchSimAdapter(ModelInterface):
                 outputs = self._forward_with_manual_forces(batch)
             else:
                 raise
-        return self._postprocess(outputs, batch, detach=detach, to_cpu=to_cpu)
+        result = self._postprocess(outputs, batch, detach=detach, to_cpu=to_cpu)
+        # Cache for callbacks to access extended outputs (e.g., atomic_charge)
+        self.step_outputs = result
+        return result
 
     def _forward_with_manual_forces(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Fallback path when the checkpoint's GradientOutput autograd fails (e.g., detached energy)."""
