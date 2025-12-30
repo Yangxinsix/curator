@@ -37,6 +37,7 @@ class MLCalculator(Calculator):
         self.model = EnsembleModel(model_like) if len(model_like) > 1 else model_like[0]
         self.model.eval()
         self.model_device = next(self.model.parameters()).device
+        self.model_dtype = next(self.model.parameters()).dtype
         if cutoff is None:
             cutoff = find_layer_by_name_recursive(self.model, 'cutoff')
         
@@ -87,7 +88,10 @@ class MLCalculator(Calculator):
         # Convert atoms to model inputs
         model_inputs = self.ase_data_reader(self.atoms)
         model_inputs = {
-            k: v.to(self.model_device) for (k, v) in model_inputs.items()
+            k: v.to(self.model_device, dtype=self.model_dtype)
+            if isinstance(v, torch.Tensor) and torch.is_floating_point(v)
+            else (v.to(self.model_device) if isinstance(v, torch.Tensor) else v)
+            for (k, v) in model_inputs.items()
         }
         
         # Run model
@@ -131,8 +135,10 @@ class EnsembleCalculator(Calculator):
         self.models = models
         if hasattr(models[0], 'parameters'):
             self.model_device = next(models[0].parameters()).device
+            self.model_dtype = next(models[0].parameters()).dtype
         else:
             self.model_device = models[0]['device']
+            self.model_dtype = None
         self.ase_data_reader = AseDataReader(cutoff if cutoff is not None else models[0].representation.cutoff)
         self.energy_scale = energy_scale
         self.forces_scale = forces_scale
@@ -157,7 +163,10 @@ class EnsembleCalculator(Calculator):
         # Convert atoms to model inputs
         model_inputs = self.ase_data_reader(self.atoms)
         model_inputs = {
-            k: v.to(self.model_device) for (k, v) in model_inputs.items()
+            k: v.to(self.model_device, dtype=self.model_dtype)
+            if isinstance(v, torch.Tensor) and torch.is_floating_point(v) and self.model_dtype is not None
+            else (v.to(self.model_device) if isinstance(v, torch.Tensor) else v)
+            for (k, v) in model_inputs.items()
         }
 
         # Run models

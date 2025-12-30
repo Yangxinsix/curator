@@ -14,6 +14,8 @@ num_basis: 8
 power: 6
 gate: silu
 use_cueq: False
+distance_transform: None
+filter_forbidden_irreps: True
 heads: ${model.heads}
 readout:
   _target_: curator.layer.MultiDomainMACEAtomwiseNN

@@ -20,10 +20,13 @@ from curator.layer import (
     RealAgnosticResidualInteractionBlock,
     RealAgnosticInteractionBlock,
     EquivariantProductBasisBlock,
+    AgnesiTransform,
+    SoftTransform,
 )
 from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
 from curator.data import properties
 from typing import List, Optional, Dict, Union, Callable, Type
+from ase.data import atomic_numbers
 from curator.model.base import Representation
 
 activation_fn = {
@@ -59,6 +62,8 @@ class MACE(Representation):
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
         heads: Optional[list] = None,
+        distance_transform: Optional[Union[str, nn.Module]] = None,
+        filter_forbidden_irreps: bool = True,
         **kwargs,
     ) -> None:
         """MACE model.
@@ -111,9 +116,12 @@ class MACE(Representation):
                 ]
             ).sort()[0].simplify()
             self.lmax = lmax
-        # MACE prohibits some irreps like 0e, 1e to be used
-        forbidden_ir = ['0o', '1e', '2o', '3e', '4o']
-        self.hidden_irreps = o3.Irreps([irrep for irrep in self.hidden_irreps if str(irrep.ir) not in forbidden_ir])
+        # MACE prohibits some irreps like 0e, 1e to be used; allow opt-out for strict conversions.
+        if filter_forbidden_irreps:
+            forbidden_ir = ['0o', '1e', '2o', '3e', '4o']
+            self.hidden_irreps = o3.Irreps(
+                [irrep for irrep in self.hidden_irreps if str(irrep.ir) not in forbidden_ir]
+            )
         self.num_features = self.hidden_irreps.count(o3.Irrep(0, 1))
 
         if radial_MLP is None:
@@ -144,9 +152,30 @@ class MACE(Representation):
             
         self.embeddings = nn.ModuleDict()
         self.embeddings['onehot_embedding'] = OneHotAtomEncoding(num_elements=num_elements, species=species)
+        if species is not None:
+            self.register_buffer(
+                "atomic_numbers",
+                torch.tensor([atomic_numbers[s] for s in species], dtype=torch.long),
+            )
+        else:
+            self.atomic_numbers = None
+        # Resolve distance transform by name for config-friendly usage.
+        if isinstance(distance_transform, str):
+            name = distance_transform.lower()
+            if name in ("none", ""):
+                distance_transform = None
+            elif name == "agnesi":
+                distance_transform = AgnesiTransform()
+            elif name == "soft":
+                distance_transform = SoftTransform()
+            else:
+                raise ValueError(f"Unsupported distance_transform '{distance_transform}'")
+
         self.embeddings['radial_basis'] = RadialBasisEdgeEncoding(
             basis=BesselBasis(cutoff=cutoff, num_basis=num_basis, sqrt_prefactor=True),
             cutoff_fn=PolynomialCutoff(cutoff=cutoff, power=power),
+            distance_transform=distance_transform,
+            atomic_numbers=self.atomic_numbers,
         )
         self.embeddings['sphere_harmonics'] = SphericalHarmonicEdgeAttrs(edge_sh_irreps=self.edge_sh_irreps)
         
@@ -206,6 +235,7 @@ class MACE(Representation):
             heads=self.heads,
             num_interactions=num_interactions,
             hidden_irreps=self.hidden_irreps,
+            MLP_irreps=self.MLP_irreps,
         )
             
     def forward(self, data: properties.Type) -> properties.Type:

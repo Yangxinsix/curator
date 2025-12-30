@@ -23,18 +23,62 @@ def register_resolvers():
     OmegaConf.register_new_resolver("multiply_fs", lambda x: x * units.fs, replace=True)
     OmegaConf.register_new_resolver("divide_by_fs", lambda x: x / units.fs, replace=True)
 
-def create_model_from_mace(mace_model):
-    from curator.layer import GlobalRescaleShift, Strain, AtomwiseReduce, PairwiseDistance, GradientOutput, RealAgnosticInteractionBlock, RealAgnosticResidualInteractionBlock
+def create_model_from_mace(
+    mace_model,
+    head: Optional[Union[str, int]] = None,
+):
+    from curator.layer import GlobalRescaleShift, Strain, AtomwiseReduce, PairwiseDistance, GradientOutput, RealAgnosticInteractionBlock, RealAgnosticResidualInteractionBlock, AgnesiTransform, SoftTransform, PairRepulsionEnergy, ZBLBasis, MACEReadoutAdapter
     from curator.model import NeuralNetworkPotential, MACE
+
+    heads = list(getattr(mace_model, "heads", []))
+    head_idx = None
+    if len(heads) > 1:
+        if head is None:
+            if "Default" in heads:
+                head = "Default"
+            elif "default" in heads:
+                head = "default"
+            else:
+                non_pt = [h for h in heads if h != "pt_head"]
+                head = non_pt[0] if non_pt else heads[0]
+        if isinstance(head, int):
+            if head < 0 or head >= len(heads):
+                raise ValueError(f"Head index {head} out of range for heads={heads}")
+            head_idx = head
+        else:
+            head_name = str(head)
+            if head_name not in heads:
+                raise ValueError(f"Head {head_name} not found in heads={heads}")
+            head_idx = heads.index(head_name)
+
     interaction_map = {
         'RealAgnosticInteractionBlock': RealAgnosticInteractionBlock,
         'RealAgnosticResidualInteractionBlock': RealAgnosticResidualInteractionBlock,
     }
 
-    input_modules = [Strain(), PairwiseDistance(compute_distance_from_R=True)]
-    num_heads = len(getattr(mace_model, "heads", ["Default"])) if hasattr(mace_model, "heads") else 1
-    interaction_cls_first = interaction_map.get(mace_model.interactions[0].__class__.__name__, RealAgnosticInteractionBlock)
-    interaction_cls = interaction_map.get(mace_model.interactions[0].__class__.__name__, RealAgnosticResidualInteractionBlock)
+    # input_modules = [Strain(), PairwiseDistance(compute_distance_from_R=True)]
+    input_modules = [PairwiseDistance()]
+    interaction_cls_first = interaction_map.get(
+        mace_model.interactions[0].__class__.__name__, RealAgnosticInteractionBlock
+    )
+    if len(mace_model.interactions) > 1:
+        interaction_cls = interaction_map.get(
+            mace_model.interactions[1].__class__.__name__, RealAgnosticResidualInteractionBlock
+        )
+    else:
+        interaction_cls = interaction_cls_first
+
+    distance_transform = None
+    if hasattr(mace_model, "radial_embedding") and hasattr(mace_model.radial_embedding, "distance_transform"):
+        dt = mace_model.radial_embedding.distance_transform
+        if dt is not None:
+            if dt.__class__.__name__ == "AgnesiTransform":
+                distance_transform = AgnesiTransform()
+            elif dt.__class__.__name__ == "SoftTransform":
+                distance_transform = SoftTransform()
+            else:
+                raise ValueError(f"Unsupported distance_transform '{dt.__class__.__name__}' in MACE model")
+            distance_transform.load_state_dict(dt.state_dict(), strict=False)
     curator_mace = MACE(
         cutoff=float(mace_model.r_max),
         num_interactions=len(mace_model.interactions),
@@ -48,47 +92,124 @@ def create_model_from_mace(mace_model):
         power=float(mace_model.radial_embedding.cutoff_fn.p),
         interaction_cls=interaction_cls,
         interaction_cls_first=interaction_cls_first,
-        num_heads=num_heads,
+        distance_transform=distance_transform,
+        filter_forbidden_irreps=False,
+    )
+    curator_mace.readout = MACEReadoutAdapter(
+        mace_model.readouts,
+        num_interactions=len(mace_model.interactions),
+        hidden_irreps=curator_mace.hidden_irreps,
+        head_idx=head_idx,
     )
 
-    output_modules = [
-        AtomwiseReduce(output_key='energy'),
-        GlobalRescaleShift(
-            scale_by=float(mace_model.scale_shift.scale),
-            shift_by=float(mace_model.scale_shift.shift),
-            atomic_energies={
-                int(idx): float(e)
-                for idx, e in zip(mace_model.atomic_numbers, mace_model.atomic_energies_fn.atomic_energies.squeeze())
-            },
-        ),
-        GradientOutput(model_outputs=['energy', 'forces'], grad_on_edge_diff=False, grad_on_positions=True),
-    ]
+    atomic_energies = mace_model.atomic_energies_fn.atomic_energies
+    if atomic_energies.ndim > 1 and head_idx is not None:
+        if atomic_energies.shape[0] == len(heads):
+            atomic_energies = atomic_energies[head_idx]
+        elif atomic_energies.shape[1] == len(heads):
+            atomic_energies = atomic_energies[:, head_idx]
+        else:
+            atomic_energies = atomic_energies[0]
+    atomic_energies = atomic_energies.squeeze()
+
+    from curator.data.properties import HeadConfig
+    energy_head = HeadConfig(
+        key=properties.energy,
+        is_atomwise=True,
+        reduction="sum",
+        atomwise_key=properties.atomic_energy,
+        write_atomwise=False,
+        dim=1,
+        scale_by=float(torch.atleast_1d(mace_model.scale_shift.scale)[head_idx or 0]),
+        shift_by=float(torch.atleast_1d(mace_model.scale_shift.shift)[head_idx or 0]),
+        atomwise_shift=False,
+        atomwise_normalization=True,
+        per_species_shift={
+            int(idx): float(e)
+            for idx, e in zip(mace_model.atomic_numbers, atomic_energies)
+        },
+    )
+    output_modules = []
+    if hasattr(mace_model, "pair_repulsion_fn"):
+        pair_fn = ZBLBasis()
+        pair_fn.load_state_dict(mace_model.pair_repulsion_fn.state_dict(), strict=False)
+        output_modules.append(PairRepulsionEnergy(pair_fn, atomic_numbers=curator_mace.atomic_numbers))
+    output_modules.extend(
+        [
+            GlobalRescaleShift(heads=[energy_head]),
+            GradientOutput(model_outputs=['energy', 'forces'], grad_on_edge_diff=True, grad_on_positions=False),
+        ]
+    )
     curator_mace.embeddings.radial_basis.basis.load_state_dict(mace_model.radial_embedding.bessel_fn.state_dict(), strict=False)
     curator_mace.embeddings.chemical_embedding.linear.load_state_dict(mace_model.node_embedding.linear.state_dict(), strict=False)
     for i in range(len(mace_model.interactions)):
         curator_mace.interactions[i].avg_num_neighbors = torch.tensor(mace_model.interactions[i].avg_num_neighbors)
-        curator_mace.interactions[i].load_state_dict(mace_model.interactions[i].state_dict(), strict=False)
-        curator_mace.products[i].load_state_dict(mace_model.products[i].state_dict())
-        if i < len(mace_model.readouts) - 1 and hasattr(mace_model.readouts[i], "linear"):
-            curator_mace.readout_mlp[i].load_state_dict(mace_model.readouts[i].linear.state_dict(), strict=False)
-        elif i < len(mace_model.readouts):
-            curator_mace.readout_mlp[i].load_state_dict(mace_model.readouts[i].state_dict(), strict=False)
+        _load_state_dict_by_shape(curator_mace.interactions[i], mace_model.interactions[i].state_dict())
+        _load_state_dict_by_shape(curator_mace.products[i], mace_model.products[i].state_dict())
     nnp = NeuralNetworkPotential(
         input_modules=input_modules,
         representation=curator_mace,
         output_modules=output_modules,
     )
-    
+    try:
+        target_dtype = next(mace_model.parameters()).dtype
+        nnp = nnp.to(dtype=target_dtype)
+    except StopIteration:
+        pass
+
     return nnp
 
 
-def convert_mace_to_curator(mace_path: Union[str, Path], output_path: Union[str, Path], foundation: bool = False, device: Optional[torch.device] = None) -> Path:
+def _slice_mace_readout_state(
+    state_dict: Dict[str, torch.Tensor],
+    head_idx: int,
+    num_heads: int,
+    mlp_count_irreps: int,
+) -> Dict[str, torch.Tensor]:
+    sliced: Dict[str, torch.Tensor] = {}
+    for name, param in state_dict.items():
+        if "linear_1.weight" in name and mlp_count_irreps:
+            sliced[name] = param.reshape(-1, num_heads, mlp_count_irreps)[:, head_idx, :].flatten()
+        elif "linear_2.weight" in name:
+            sliced[name] = param.reshape(num_heads, -1, num_heads)[head_idx, :, head_idx].flatten() / (num_heads ** 0.5)
+        elif "linear.weight" in name:
+            sliced[name] = param.reshape(-1, num_heads)[:, head_idx].flatten()
+        elif "output_mask" in name and param.numel() == num_heads:
+            sliced[name] = param[head_idx : head_idx + 1]
+        elif "bias" in name and param.numel() > 0 and param.numel() % num_heads == 0:
+            sliced[name] = param.reshape(-1, num_heads)[:, head_idx].flatten()
+        else:
+            sliced[name] = param
+    return sliced
+
+
+def _load_state_dict_by_shape(module: torch.nn.Module, state_dict: Dict[str, torch.Tensor]) -> None:
+    """Load only matching parameter shapes to tolerate version skew."""
+    current = module.state_dict()
+    filtered = {}
+    for name, param in state_dict.items():
+        if name in current and current[name].shape == param.shape:
+            filtered[name] = param
+    module.load_state_dict(filtered, strict=False)
+
+
+def convert_mace_to_curator(
+    mace_path: Union[str, Path],
+    output_path: Union[str, Path],
+    head: Optional[Union[str, int]] = None,
+    device: Optional[torch.device] = None,
+) -> Path:
     """Load a mace model checkpoint and save a curator-style model."""
     torch_serialization.add_safe_globals([slice])
+    try:
+        from mace.modules.models import ScaleShiftMACE
+        torch_serialization.add_safe_globals([ScaleShiftMACE])
+    except Exception:
+        pass
     mace_path = Path(mace_path)
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    obj = torch.load(mace_path, map_location=device)
+    obj = torch.load(mace_path, map_location=device, weights_only=False)
     mace_model = None
     if isinstance(obj, torch.nn.Module):
         mace_model = obj
@@ -98,7 +219,7 @@ def convert_mace_to_curator(mace_path: Union[str, Path], output_path: Union[str,
             raise TypeError("MACE checkpoint does not include an instantiated model; please provide a TorchScript or full model checkpoint.")
     if mace_model is None:
         raise TypeError(f"Unsupported MACE checkpoint format at {mace_path}")
-    curator_model = create_model_from_mace(mace_model, foundation=foundation)
+    curator_model = create_model_from_mace(mace_model, head=head)
     output_path = Path(output_path)
     torch.save(curator_model, output_path)
     return output_path
@@ -139,6 +260,16 @@ def _build_mace_from_curator(curator_model):
     num_basis = len(repr_model.embeddings.radial_basis.basis.bessel_weights)
     num_polynomial_cutoff = int(repr_model.embeddings.radial_basis.cutoff_fn.power)
     avg_num_neighbors = float(repr_model.interactions[0].avg_num_neighbors.squeeze())
+    distance_transform = "None"
+    dt = getattr(repr_model.embeddings.radial_basis, "distance_transform", None)
+    if dt is not None:
+        from curator.layer import AgnesiTransform, SoftTransform
+        if isinstance(dt, AgnesiTransform):
+            distance_transform = "Agnesi"
+        elif isinstance(dt, SoftTransform):
+            distance_transform = "Soft"
+        else:
+            distance_transform = dt.__class__.__name__
 
     scale, shift = 1.0, 0.0
     atomic_energies = torch.zeros(len(atomic_numbers))
@@ -168,6 +299,7 @@ def _build_mace_from_curator(curator_model):
         correlation=correlation,
         gate=torch.nn.functional.silu,
         heads=heads,
+        distance_transform=distance_transform,
     )
 
     # load weights (best effort, shapes match original MACE layout)
@@ -1156,6 +1288,11 @@ def get_representation_config(model):
             "avg_num_neighbors": float(rep.interactions[0].avg_num_neighbors),
             "num_basis": rep.embeddings.radial_basis.basis.num_basis,
             "power": rep.embeddings.radial_basis.cutoff_fn.p,
+            "distance_transform": (
+                rep.embeddings.radial_basis.distance_transform.__class__.__name__
+                if getattr(rep.embeddings.radial_basis, "distance_transform", None) is not None
+                else "None"
+            ),
             "gate": gate,
         }
     elif model.representation.__class__.__name__ == 'Nequip':

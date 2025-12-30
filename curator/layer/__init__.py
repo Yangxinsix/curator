@@ -11,10 +11,12 @@ from ._mace_interaction import (
     RealAgnosticInteractionBlock,
     RealAgnosticResidualInteractionBlock,
 )
+from ._mace_readout_adapter import MACEReadoutAdapter
 from ._node_embedding import OneHotAtomEncoding
 from ._painn_message import PainnMessage
 from ._painn_update import PainnUpdate
 from ._pairwise_distance import PairwiseDistance, get_pair_distance
+from ._pair_repulsion import ZBLBasis, PairRepulsionEnergy
 from ._symmetric_contraction import Contraction, SymmetricContraction
 from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift
 from ._strain import Strain
@@ -28,6 +30,8 @@ from .radial_basis import (
     GaussianBasis,
     RadialBasisEdgeEncoding,
     SphericalHarmonicEdgeAttrs,
+    AgnesiTransform,
+    SoftTransform,
 )
 from .utils import (
     tp_path_exists, 
@@ -52,6 +56,7 @@ __all__ = [
     EquivariantProductBasisBlock,
     RealAgnosticInteractionBlock,
     RealAgnosticResidualInteractionBlock,
+    MACEReadoutAdapter,
     Contraction,
     SymmetricContraction,
     OneHotAtomEncoding,
@@ -65,6 +70,8 @@ __all__ = [
     GaussianBasis,
     RadialBasisEdgeEncoding,
     SphericalHarmonicEdgeAttrs,
+    AgnesiTransform,
+    SoftTransform,
     tp_path_exists,
     tp_out_irreps_with_instructions,
     linear_out_irreps,
@@ -72,6 +79,8 @@ __all__ = [
     reshape_irreps,
     PairwiseDistance,         # input modules (preprocess, calculate pairwise distances)
     Strain,                   # input modules (preprocess, add strain on cell and atom positions)
+    ZBLBasis,
+    PairRepulsionEnergy,
     GradientOutput,           # output modules (output forces and stress)
     GlobalRescaleShift,            # output modules (postprocess energy)
     PerSpeciesRescaleShift,
