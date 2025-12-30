@@ -297,7 +297,17 @@ class CuratorTorchSimAdapter(ModelInterface):
         ):
             virial = outputs[properties.virial]
             if isinstance(virial, torch.Tensor) and properties.cell in inputs:
-                volume = torch.det(inputs[properties.cell])
+                cell = inputs[properties.cell]
+                # Handle batched cells: shape [n_systems * 3, 3] -> [n_systems, 3, 3]
+                if cell.ndim == 2 and cell.shape[0] > 3:
+                    n_systems = cell.shape[0] // 3
+                    cell = cell.view(n_systems, 3, 3)
+                elif cell.ndim == 2 and cell.shape[0] == 3:
+                    cell = cell.unsqueeze(0)  # [3, 3] -> [1, 3, 3]
+                volume = torch.det(cell)  # [n_systems]
+                # Ensure virial and volume have compatible shapes
+                if virial.ndim == 2:  # [n_systems, 6] or [n_systems, 9]
+                    volume = volume.view(-1, 1)
                 stress = -(virial / volume).detach() if should_detach else -virial / volume
                 result[properties.stress] = self._voigt6_to_full(stress, to_cpu=to_cpu)
 
