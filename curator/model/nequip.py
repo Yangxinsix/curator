@@ -48,7 +48,6 @@ class Nequip(Representation):
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
         use_cueq: bool = False,
         heads: Optional[list] = None,
-        domain_key: Optional[str] = None,
         **kwargs,
     ) -> None:
         """Nequip model.
@@ -73,7 +72,7 @@ class Nequip(Representation):
             nonlinearity_gates (Dict[int, Callable], optional): Nonlinearity for gates. Defaults to {"e": "ssp", "o": "abs"}.
             convolution_kwargs (dict, optional): Convolution kwargs. Defaults to {}.
         """
-        super().__init__(heads=heads, domain_key=domain_key)
+        super().__init__(heads=heads)
         self.cutoff = cutoff
         self.num_features = num_features
         self.lmax = lmax
@@ -158,7 +157,6 @@ class Nequip(Representation):
         self.readout = self._instantiate_readout(
             readout,
             heads=self.heads,
-            domain_key=self.domain_key,
             in_features=self.irreps_in[properties.node_feat],
             use_e3nn=True,
         )

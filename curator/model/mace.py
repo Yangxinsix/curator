@@ -59,7 +59,6 @@ class MACE(Representation):
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
         heads: Optional[list] = None,
-        domain_key: Optional[str] = None,
         **kwargs,
     ) -> None:
         """MACE model.
@@ -84,7 +83,7 @@ class MACE(Representation):
                 energies are exposed at properties.atomic_energy_heads and averaged for
                 properties.atomic_energy.
         """
-        super().__init__(heads=heads, domain_key=domain_key)
+        super().__init__(heads=heads)
         
         self.cutoff = cutoff
         self.parity = parity
@@ -205,7 +204,6 @@ class MACE(Representation):
         self.readout = self._instantiate_readout(
             readout,
             heads=self.heads,
-            domain_key=self.domain_key,
             num_interactions=num_interactions,
             hidden_irreps=self.hidden_irreps,
         )

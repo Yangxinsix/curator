@@ -11,3 +11,6 @@ radial_basis:
   cutoff: ${..cutoff}
   num_basis: ${model.representation.num_basis}
 heads: ${model.heads}
+readout:
+  _target_: curator.layer.MultiDomainAtomwiseNN
+  _partial_: true

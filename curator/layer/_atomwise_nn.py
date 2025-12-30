@@ -65,7 +65,6 @@ class AtomwiseNN(nn.Module):
         activation: Union[Callable, nn.Module, str, List[Callable], List[nn.Module], List[str]] = 'silu',
         heads: Optional[List[Union[HeadConfig, Dict, str]]] = None,
         domains: Optional[List[Union[str, int]]] = None,  # optional domain-specific heads
-        domain_key: Optional[str] = None,  # key in data dict that holds domain id
         *args,
         **kwargs,
     ):
@@ -80,7 +79,6 @@ class AtomwiseNN(nn.Module):
         self.out_features = out_features
         self.use_e3nn = use_e3nn
         self.n_hidden_layers = n_hidden_layers
-        self.domain_key = domain_key
         self.domains = [str(d) for d in domains] if domains is not None else []
 
         # Setup neuron sizes
@@ -247,30 +245,36 @@ class MultiDomainAtomwiseNN(nn.Module):
 
     def __init__(
         self,
-        domains: List[Union[str, int]],
-        domain_key: str = properties.domain,
+        domains: Optional[List[Union[str, int]]] = None,
         readout_cls: Union[type, Callable] = AtomwiseNN,
+        heads_by_domain: Optional[Dict[Union[str, int], List[Union[HeadConfig, Dict, str]]]] = None,
         *args,
         **kwargs,
     ):
         super().__init__()
-        self.domain_key = domain_key
-        self.domains = [str(d) for d in domains] if domains is not None else []
-        if not self.domains:
-            raise ValueError("MultiDomainAtomwiseNN requires a non-empty domains list.")
+        self.domains = [str(d) for d in domains] if domains else ["0"]
 
         base_kwargs = dict(kwargs)
+        base_heads_by_domain = {}
+        if heads_by_domain:
+            base_heads_by_domain = {str(k): v for k, v in heads_by_domain.items()}
         base_kwargs.pop("domains", None)
-        base_kwargs.pop("domain_key", None)
+        base_kwargs.pop("heads_by_domain", None)
 
         self.domain_modules = nn.ModuleDict()
         for dom in self.domains:
-            self.domain_modules[dom] = readout_cls(*args, **base_kwargs)
+            domain_kwargs = dict(base_kwargs)
+            heads_for_domain = base_heads_by_domain.get(dom, domain_kwargs.get("heads"))
+            if heads_for_domain is not None:
+                resolved = resolve_heads(heads_for_domain)
+                domain_kwargs["heads"] = heads_for_domain
+                domain_kwargs["out_features"] = sum(int(h.dim) for h in resolved)
+            self.domain_modules[dom] = readout_cls(*args, **domain_kwargs)
 
     def _get_domain(self, data: properties.Type) -> str:
-        if self.domain_key not in data:
+        if properties.domain not in data:
             return self.domains[0]
-        dom = data[self.domain_key]
+        dom = data[properties.domain]
         if torch.is_tensor(dom):
             if dom.numel() == 0:
                 return self.domains[0]
@@ -294,8 +298,8 @@ class MultiDomainAtomwiseNN(nn.Module):
         atom_domain = None
         if properties.domain_atom in data:
             atom_domain = data[properties.domain_atom]
-        elif self.domain_key in data:
-            dom = data[self.domain_key]
+        elif properties.domain in data:
+            dom = data[properties.domain]
             if torch.is_tensor(dom) and dom.numel() == n_atoms:
                 atom_domain = dom
         return atom_domain
@@ -402,5 +406,5 @@ class MultiDomainMACEAtomwiseNN(MultiDomainAtomwiseNN):
     MultiDomain wrapper specialized for MACEAtomwiseNN.
     """
 
-    def __init__(self, domains: List[Union[str, int]], domain_key: str = properties.domain, *args, **kwargs):
-        super().__init__(domains=domains, domain_key=domain_key, readout_cls=MACEAtomwiseNN, *args, **kwargs)
+    def __init__(self, domains: Optional[List[Union[str, int]]] = None, *args, **kwargs):
+        super().__init__(domains=domains, readout_cls=MACEAtomwiseNN, *args, **kwargs)

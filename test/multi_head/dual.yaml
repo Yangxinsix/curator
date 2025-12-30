@@ -6,7 +6,6 @@ data:
     lifp:
       datapath: /home/xinyang/curator/example/LiFePO4.traj
       heads: [energy]
-
   pin_memory: false
 model:
   representation:
@@ -30,4 +29,6 @@ trainer:
       monitor: val_total_loss/dataloader_idx_0
 task:
   scheduler_monitor: val_total_loss/dataloader_idx_0
+  normalize_domain_loss: true
+run_path: test/multi_head/dual_run
 deploy_model: false

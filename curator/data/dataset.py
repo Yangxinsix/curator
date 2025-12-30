@@ -50,6 +50,13 @@ class AseDataset(torch.utils.data.Dataset):
             meta.setdefault("index", idx)
         return atoms_data_from_dict(atoms_data, task=self.task, weight=self.weight, meta=meta)
 
+    def __del__(self) -> None:
+        try:
+            if hasattr(self, "db") and hasattr(self.db, "close"):
+                self.db.close()
+        except Exception:
+            pass
+
 class BambooDataset(torch.utils.data.Dataset):
     def __init__(self, datapath, task: str = "bamboo", weight: float = 1.0, meta: Dict = None, return_atoms_data: bool = True):
         # cutoff is 5.0 A
@@ -179,5 +186,5 @@ def cat_tensors(tensors: List[torch.Tensor]) -> torch.Tensor:
         return torch.cat(tensors)
     return torch.stack(tensors)
 
-def collate_atomsdata(atoms_data: List[dict], pin_memory=True) -> Dict:
+def collate_atomsdata(atoms_data: List[dict], pin_memory=False) -> Dict:
     return collate_atoms_data(atoms_data, pin_memory=pin_memory)

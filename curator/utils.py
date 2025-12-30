@@ -15,6 +15,7 @@ import torch.serialization as torch_serialization
 
 from ase.data import chemical_symbols
 import torch, re
+from curator.data import properties
 
 def register_resolvers():
     OmegaConf.register_new_resolver("multiply", lambda x, y: x * y, replace=True)
@@ -471,6 +472,35 @@ class CustomFormatter(logging.Formatter):
         formatter = logging.Formatter(log_fmt, self.time_format)
         return formatter.format(record)
 
+
+_LOGO_LOGGED = False
+
+
+def log_logo(logger: Optional[logging.Logger] = None) -> None:
+    global _LOGO_LOGGED
+    if _LOGO_LOGGED:
+        return
+    _LOGO_LOGGED = True
+    log = logger or logging.getLogger("curator")
+    logo = [
+        """
+            █████████  █████  █████ ███████████     █████████   ███████████    ███████    ███████████  
+           ███░░░░░███░░███  ░░███ ░░███░░░░░███   ███░░░░░███ ░█░░░███░░░█  ███░░░░░███ ░░███░░░░░███ 
+          ███     ░░░  ░███   ░███  ░███    ░███  ░███    ░███ ░   ░███  ░  ███     ░░███ ░███    ░███ 
+         ░███          ░███   ░███  ░██████████   ░███████████     ░███    ░███      ░███ ░██████████  
+         ░███          ░███   ░███  ░███░░░░░███  ░███░░░░░███     ░███    ░███      ░███ ░███░░░░░███ 
+         ░░███     ███ ░███   ░███  ░███    ░███  ░███    ░███     ░███    ░░███     ███  ░███    ░███ 
+          ░░█████████  ░░████████   █████   █████ █████   █████    █████    ░░░███████░   █████   █████
+           ░░░░░░░░░    ░░░░░░░░   ░░░░░   ░░░░░ ░░░░░   ░░░░░    ░░░░░       ░░░░░░░    ░░░░░   ░░░░░
+
+                           Active learning for machine learning interatomic potentials
+        """,
+    ]
+    display_lines = [line.replace("\\\\", "\\") for line in logo]
+    width = max(max(len(line) for line in display_lines), 80)
+    for line in display_lines:
+        log.info(line.center(width))
+
 # Set up Early stopping for pytorch training 
 class EarlyStopping():
     def __init__(self, patience=5, min_delta=0):
@@ -607,6 +637,146 @@ def prune_config_targets(config: Optional[DictConfig], logger: Optional[logging.
                 _prune(v, f"{path}.{k}" if path else k)
 
     _prune(config)
+
+
+def update_config_from_datamodule(
+    config: DictConfig,
+    datamodule: Any,
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """
+    Update config based on datamodule contents (species and per-domain heads).
+    Keeps logic centralized and minimal.
+    """
+    log = logger or logging.getLogger("curator")
+
+    def _is_auto(value) -> bool:
+        return value is None or (isinstance(value, str) and value.lower() == "auto")
+
+    def _update_heads_cfg(cfg: DictConfig, keypath: str, heads: List) -> None:
+        heads_cfg = OmegaConf.select(cfg, keypath)
+        if isinstance(heads_cfg, DictConfig) and "_target_" in heads_cfg:
+            OmegaConf.update(cfg, f"{keypath}.heads", heads, force_add=True)
+        else:
+            OmegaConf.update(cfg, keypath, heads, force_add=True)
+
+    def _update_rescale_heads(cfg: DictConfig, heads: List) -> None:
+        try:
+            _update_heads_cfg(cfg, "model.output_modules.global_rescale_shift.heads", heads)
+            return
+        except Exception:
+            pass
+        output_modules = OmegaConf.select(cfg, "model.output_modules")
+        if isinstance(output_modules, (ListConfig, list)):
+            for idx, item in enumerate(output_modules):
+                if not isinstance(item, (DictConfig, dict)):
+                    continue
+                target = item.get("_target_")
+                if target and "RescaleShift" in str(target):
+                    _update_heads_cfg(cfg, f"model.output_modules.{idx}.heads", heads)
+                    return
+
+    def _get_rescale_heads(cfg: DictConfig) -> List:
+        try:
+            value = OmegaConf.select(cfg, "model.output_modules.global_rescale_shift.heads")
+            if value is not None:
+                return value
+        except Exception:
+            pass
+        output_modules = OmegaConf.select(cfg, "model.output_modules")
+        if isinstance(output_modules, (ListConfig, list)):
+            for item in output_modules:
+                if not isinstance(item, (DictConfig, dict)):
+                    continue
+                target = item.get("_target_")
+                if target and "RescaleShift" in str(target):
+                    value = item.get("heads", [])
+                    if isinstance(value, (DictConfig, dict)) and "heads" in value:
+                        return value.get("heads", [])
+                    return value
+        return []
+
+    # Update config.data.species from datamodule or contexts.
+    if hasattr(datamodule, "species") and _is_auto(getattr(datamodule, "species", None)):
+        inferred = datamodule._get_species()
+        config.data.species = inferred
+    elif not hasattr(datamodule, "species") and hasattr(datamodule, "build_contexts"):
+        try:
+            ctxs = datamodule.build_contexts([])
+            if "global" in ctxs and ctxs["global"].species:
+                inferred = ctxs["global"].species
+                config.data.species = inferred
+        except Exception:
+            pass
+
+    # Update heads for readout/rescale from datapath or datamodule inference.
+    datapath = getattr(config.data, "datapath", None)
+    if isinstance(datapath, DictConfig) or isinstance(datapath, dict):
+        if hasattr(datamodule, "infer_domain_head_keys"):
+            readout_heads = OmegaConf.select(config, "model.representation.readout.heads")
+            if _is_auto(readout_heads):
+                domain_heads_cfg: Dict[str, List[str]] = {}
+                for name, cfg in datapath.items():
+                    if isinstance(cfg, (DictConfig, dict)) and "heads" in cfg:
+                        domain_heads_cfg[str(name)] = list(cfg["heads"])
+
+                if not domain_heads_cfg:
+                    domain_heads_cfg = datamodule.infer_domain_head_keys(default_heads=["energy"])
+                    domain_heads_cfg = {str(k): v for k, v in domain_heads_cfg.items()}
+                else:
+                    inferred = datamodule.infer_domain_head_keys(default_heads=["energy"])
+                    inferred = {str(k): v for k, v in inferred.items()}
+                    for name in datamodule.domain_modules.keys():
+                        name = str(name)
+                        if name not in domain_heads_cfg:
+                            domain_heads_cfg[name] = inferred.get(name, ["energy"])
+
+                domain_heads_cfg = {
+                    name: [k for k in heads if k != properties.forces]
+                    for name, heads in domain_heads_cfg.items()
+                }
+                # Write per-domain heads into readout and aligned heads into rescale.
+                heads_by_domain = {
+                    str(datamodule.domain_to_id[name]): heads
+                    for name, heads in domain_heads_cfg.items()
+                }
+                domains = list(heads_by_domain.keys())
+                OmegaConf.update(config, "model.representation.readout.heads_by_domain", heads_by_domain, force_add=True)
+                OmegaConf.update(config, "model.representation.readout.domains", domains, force_add=True)
+                rescale_heads = []
+                for dom_id, heads in heads_by_domain.items():
+                    for key in heads:
+                        rescale_heads.append({"key": key, "domains": [dom_id]})
+                if not rescale_heads:
+                    rescale_heads = [{"key": "energy", "domains": domains}]
+                _update_rescale_heads(config, rescale_heads)
+
+    # If we are not using multi-domain loaders, strip dataloader_idx suffixes.
+    if not hasattr(datamodule, "domain_modules"):
+        def _strip_idx(value: Optional[str]) -> Optional[str]:
+            if isinstance(value, str) and value.endswith("/dataloader_idx_0"):
+                return value.replace("/dataloader_idx_0", "")
+            return value
+
+        sched_monitor = OmegaConf.select(config, "task.scheduler_monitor")
+        sched_monitor = _strip_idx(sched_monitor)
+        if sched_monitor is not None:
+            OmegaConf.update(config, "task.scheduler_monitor", sched_monitor, force_add=True)
+
+        callbacks = OmegaConf.select(config, "trainer.callbacks")
+        if isinstance(callbacks, (ListConfig, list)):
+            for idx, cb in enumerate(callbacks):
+                if not isinstance(cb, (DictConfig, dict)):
+                    continue
+                monitor = cb.get("monitor", None)
+                monitor = _strip_idx(monitor)
+                if monitor is not None:
+                    OmegaConf.update(config, f"trainer.callbacks.{idx}.monitor", monitor, force_add=True)
+
+    if hasattr(datamodule, "log_summary"):
+        summary = datamodule.log_summary()
+        if summary:
+            logging.getLogger(__name__).info("%s", summary)
 
 # Ugly workaround for specifying config files outside of the package
 def read_user_config(
@@ -1228,7 +1398,24 @@ def convert_cueq_to_e3nn(model):
 
 def update_model(model):
     import warnings
+    from functools import partial
+    from curator.layer import MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
+    from curator.layer._rescale import MultiDomainRescaleShift
+
+    def _get_readout_module(rep):
+        ro = getattr(rep, "readout", None)
+        if ro is None:
+            return None
+        if hasattr(ro, "domain_modules") and len(ro.domain_modules) > 0:
+            return next(iter(ro.domain_modules.values()))
+        return ro
+
     rep_config = get_representation_config(model)
+    rep_name = model.representation.__class__.__name__
+    if rep_name in {"Painn", "Nequip"}:
+        rep_config["readout"] = partial(MultiDomainAtomwiseNN, domains=["0"])
+    elif rep_name == "MACE":
+        rep_config["readout"] = partial(MultiDomainMACEAtomwiseNN, domains=["0"])
     new_rep = model.representation.__class__(**rep_config)
 
     old_state_dict = model.representation.state_dict()
@@ -1236,6 +1423,9 @@ def update_model(model):
     # replace readout weight name
     try:
         if new_rep.__class__.__name__ == 'MACE':
+            target_readout = _get_readout_module(new_rep)
+            if target_readout is None:
+                raise AttributeError("Missing readout module for MACE.")
             for i in range(len(model.representation.readout_mlp)):
                 # replace normal layers
                 if i != len(model.representation.readout_mlp) - 1:
@@ -1244,19 +1434,31 @@ def update_model(model):
                     warnings.warn("Rename weights in deprecated readouts.")
                 else:
                 # replace readout_mlp layer
-                    for j in range(len(new_rep.readout.readout_mlp)):
+                    for j in range(len(target_readout.readout_mlp)):
                         for name in ['weight', 'bias', 'output_mask']:
                             old_state_dict[f'readout.readouts.{i}.{j}.linear.{name}'] = old_state_dict.pop(f'readout_mlp.{i}.linear_{j+1}.{name}')
                             old_state_dict[f'readout.readout_mlp.{j}.linear.{name}'] = old_state_dict[f'readout.readouts.{i}.{j}.linear.{name}']
                     warnings.warn("Rename weights in deprecated readout_mlp.")
         elif new_rep.__class__.__name__ == 'Painn':
-            for i in range(len(new_rep.readout.readout_mlp)):
+            target_readout = _get_readout_module(new_rep)
+            if target_readout is None:
+                raise AttributeError("Missing readout module for Painn.")
+            for i in range(len(target_readout.readout_mlp)):
                 for name in ['weight', 'bias']:
                     old_state_dict[f'readout.readout_mlp.{i}.linear.{name}'] = old_state_dict.pop(f'readout_mlp.{2*i}.{name}')
             warnings.warn("Rename weights in deprecated readout_mlp.")
 
     except KeyError:
         pass
+
+    if hasattr(new_rep, "readout") and hasattr(new_rep.readout, "domain_modules"):
+        remapped = {}
+        for k, v in old_state_dict.items():
+            if k.startswith("readout."):
+                remapped[f"readout.domain_modules.0.{k[len('readout.') :]}"] = v
+            else:
+                remapped[k] = v
+        old_state_dict = remapped
 
     try:
         new_rep.load_state_dict(old_state_dict)
@@ -1280,7 +1482,7 @@ def update_model(model):
             if m.__class__.__name__ == 'GlobalRescaleShift':
                 scale_by = m.scale_by.detach().clone().cpu().squeeze().item()
                 shift_by = m.shift_by.detach().clone().cpu().squeeze().item()
-                output_modules[i] = m.__class__(
+                grs = m.__class__(
                     scale_by=scale_by,
                     shift_by=shift_by,
                     scale_trainable=isinstance(getattr(m, "scale_by", None), torch.nn.Parameter),
@@ -1296,7 +1498,10 @@ def update_model(model):
                         else None
                     )
                 )
-                warnings.warn('Replace GlobalRescaleShift module.')
+                md = MultiDomainRescaleShift(heads=grs.heads)
+                md.domain_modules["0"] = grs
+                output_modules[i] = md
+                warnings.warn('Replace GlobalRescaleShift module with MultiDomainRescaleShift.')
         # remove module
         for i, m in enumerate(output_modules):
             if m.__class__.__name__ == 'AtomwiseReduce':

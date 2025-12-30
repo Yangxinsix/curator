@@ -10,3 +10,6 @@ lmax: 2
 parity: True
 use_cueq: False
 heads: ${model.heads}
+readout:
+  _target_: curator.layer.MultiDomainAtomwiseNN
+  _partial_: true

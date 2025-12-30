@@ -26,7 +26,6 @@ class Painn(Representation):
         radial_basis: Optional[nn.Module]=None,
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
         heads: Optional[list] = None,
-        domain_key: Optional[str] = None,
         **kwargs,
     ):
         """Painn without edge updating
@@ -39,7 +38,7 @@ class Painn(Representation):
             cutoff_fn (Optional[nn.Module], optional): Cutoff function. Defaults to None.
             radial_basis (Optional[nn.Module], optional): Radial basis. Defaults to None.
         """
-        super().__init__(heads=heads, domain_key=domain_key)
+        super().__init__(heads=heads)
         
         num_embedding = 119   # number of all elements
         self.cutoff = cutoff
@@ -68,7 +67,6 @@ class Painn(Representation):
         self.readout = self._instantiate_readout(
             readout,
             heads=self.heads,
-            domain_key=self.domain_key,
             in_features=self.num_features,
         )
 

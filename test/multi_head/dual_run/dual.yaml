@@ -6,7 +6,6 @@ data:
     lifp:
       datapath: /home/xinyang/curator/example/LiFePO4.traj
       heads: [energy]
-
   pin_memory: false
 model:
   representation:
@@ -17,11 +16,11 @@ model:
     global_rescale_shift:
       _target_: curator.layer._rescale.MultiDomainRescaleShift
 trainer:
-  accelerator: cpu
+  accelerator: cuda
   devices: 1
-  max_epochs: 1
-  limit_train_batches: 2
-  limit_val_batches: 2
+  max_epochs: 100
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
   num_sanity_val_steps: 0
   callbacks:
     early_stopping:
@@ -30,4 +29,6 @@ trainer:
       monitor: val_total_loss/dataloader_idx_0
 task:
   scheduler_monitor: val_total_loss/dataloader_idx_0
+  normalize_domain_loss: true
+run_path: .
 deploy_model: false

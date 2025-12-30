@@ -6,7 +6,6 @@ from torchmetrics import Metric
 import torch
 from collections import OrderedDict
 from .metrics import AtomsMetric
-from curator.data import properties
 
 class ModelOutput(nn.Module):
     """ Base class for model outputs."""
@@ -61,26 +60,10 @@ class ModelOutput(nn.Module):
             loss = self.loss_weight * pred[self.name].square().mean()
             num_obs = 1
         elif self.loss_fn is not None:
-            if target is None or self.target_property not in target:
-                if return_num_obs:
-                    return torch.tensor(0.0), 1
-                return torch.tensor(0.0)
-            pred_val = pred[self.name]
-            target_val = target[self.target_property]
-            mask = None
-            if isinstance(target, dict) and "masks" in target:
-                mask = target["masks"].get(self.target_property) or target["masks"].get(self.name)
-                if mask is not None and properties.image_idx in target and pred_val.shape[0] == target[properties.image_idx].shape[0]:
-                    mask = mask[target[properties.image_idx]]
-            if mask is not None and mask.shape[0] == pred_val.shape[0]:
-                pred_val = pred_val[mask]
-                target_val = target_val[mask]
-            if pred_val.numel() == 0:
-                loss = pred_val.sum() * 0.0
-                num_obs = 1
-            else:
-                loss = self.loss_weight * self.loss_fn(pred_val, target_val)
-                num_obs = target_val.view(-1).shape[0]
+            loss = self.loss_weight * self.loss_fn(
+                pred[self.name], target[self.target_property]
+            )
+            num_obs = target[self.target_property].view(-1).shape[0]
         else:
             return 0.0
 
@@ -106,8 +89,6 @@ class ModelOutput(nn.Module):
     def calculate_metrics(self, pred: Dict, target: Dict, subset: str) -> None:
         if self.metrics is None:
             return {}
-        if self.target_property not in target:
-            return {}
         
         batch_val = OrderedDict()
         for k in self.metrics[subset]:
@@ -116,20 +97,7 @@ class ModelOutput(nn.Module):
                 for k2, v in metric.items():
                     batch_val[f"{subset}_{self.name}_{k2}"] = v
             else:
-                pred_val = pred[self.name].detach()
-                target_val = target[self.target_property].detach()
-                mask = None
-                if "masks" in target:
-                    mask = target["masks"].get(self.target_property) or target["masks"].get(self.name)
-                    if mask is not None and properties.image_idx in target and pred_val.shape[0] == target[properties.image_idx].shape[0]:
-                        mask = mask[target[properties.image_idx]]
-                if mask is not None and mask.shape[0] == pred_val.shape[0]:
-                    pred_val = pred_val[mask]
-                    target_val = target_val[mask]
-                if pred_val.numel() == 0:
-                    metric = pred_val.sum() * 0.0
-                else:
-                    metric = self.metrics[subset][k](pred_val, target_val)
+                metric = self.metrics[subset][k](pred[self.name].detach(), target[self.target_property].detach())
                 batch_val[f"{subset}_{self.name}_{k}"] = metric
         
         return batch_val

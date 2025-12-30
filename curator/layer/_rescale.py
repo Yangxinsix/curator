@@ -33,7 +33,7 @@ class ScaleTransform(nn.Module):
 
 
 class ShiftTransform(nn.Module):
-    """Simple shift: add scalar shift to a property (no atomwise logic)."""
+    """Simple shift: add scalar shift to a property."""
 
     def __init__(self, key: str, shift: Union[float, torch.Tensor], trainable: bool = False):
         super().__init__()
@@ -44,13 +44,10 @@ class ShiftTransform(nn.Module):
             self.register_buffer("shift", shift)
         self.key = key
 
-    def forward(self, data: properties.Type, mask: Optional[torch.Tensor] = None) -> properties.Type:
+    def forward(self, data: properties.Type) -> properties.Type:
         if self.key not in data:
             return data
-        if mask is None:
-            data[self.key] = data[self.key] + self.shift
-            return data
-        data[self.key][mask] = data[self.key][mask] + self.shift
+        data[self.key] = data[self.key] + self.shift
         return data
 
 
@@ -86,21 +83,15 @@ class AtomwiseShift(nn.Module):
             return data[properties.n_atoms] * self.shift
         return self.shift
 
-    def forward(self, data: properties.Type, graph_mask: Optional[torch.Tensor] = None, atom_mask: Optional[torch.Tensor] = None) -> properties.Type:
+    def forward(self, data: properties.Type) -> properties.Type:
         if self.key not in data:
             return data
         if self.atomwise_shift:
-            if atom_mask is None:
-                data[self.key] = data[self.key] + self.shift
-            else:
-                data[self.key][atom_mask] = data[self.key][atom_mask] + self.shift
+            data[self.key] = data[self.key] + self.shift
             return data
 
         s = self.compute_shift(data)
-        if graph_mask is None:
-            data[self.key] = data[self.key] + s
-        else:
-            data[self.key][graph_mask] = data[self.key][graph_mask] + s[graph_mask]
+        data[self.key] = data[self.key] + s
         return data
 
 
@@ -136,26 +127,24 @@ class PerSpeciesShift(nn.Module):
             self.values[idx] = v
         self.enabled.copy_(torch.tensor(True))
 
-    def forward(self, data: properties.Type, graph_mask: Optional[torch.Tensor] = None, atom_mask: Optional[torch.Tensor] = None) -> properties.Type:
+    def forward(self, data: properties.Type) -> properties.Type:
+        return self.apply(data, sign=1.0)
+
+    def apply(
+        self,
+        data: properties.Type,
+        sign: float = 1.0,
+    ) -> properties.Type:
         if not self.enabled or self.key not in data:
             return data
         per_atom = self.values[data[properties.Z]]
         if self.atomwise_shift:
-            if atom_mask is None:
-                data[self.key] = data[self.key] + per_atom
-            else:
-                data[self.key][atom_mask] = data[self.key][atom_mask] + per_atom[atom_mask]
+            data[self.key] = data[self.key] + sign * per_atom
             return data
 
-        # structure-level: sum over atoms; support per-domain via atom_mask
-        if atom_mask is not None:
-            per_atom = per_atom.clone()
-            per_atom[~atom_mask] = 0.0
+        # structure-level: sum over atoms
         shift_term = scatter_add(per_atom, data[properties.image_idx])
-        if graph_mask is None:
-            data[self.key] = data[self.key] + shift_term
-        else:
-            data[self.key][graph_mask] = data[self.key][graph_mask] + shift_term[graph_mask]
+        data[self.key] = data[self.key] + sign * shift_term
         return data
 
 # --------------------------------------------------------------------------- #
@@ -174,6 +163,8 @@ class GlobalRescaleShift(nn.Module):
         shift_trainable: bool = False,
     ):
         super().__init__()
+        if heads is not None and hasattr(heads, "get") and "heads" in heads:
+            heads = heads.get("heads")
         if heads is None:
             heads = [HEAD_PRESETS["energy"]]
         # ensure heads are HeadConfig instances
@@ -182,7 +173,9 @@ class GlobalRescaleShift(nn.Module):
         scales = []
         shifts = []
         per_species_shifts = []
+        self._atomwise_output_keys: Dict[str, bool] = {}
         for h in heads:
+            self._atomwise_output_keys[h.key] = bool(h.reduction is None)
             # scale
             s_val = 1.0 if h.scale_by is None or isinstance(h.scale_by, dict) else h.scale_by
             scales.append(ScaleTransform(h.key, s_val, trainable=scale_trainable))
@@ -205,27 +198,59 @@ class GlobalRescaleShift(nn.Module):
         self.atomic_shifts = nn.ModuleList(per_species_shifts)
         self._initialized = all(h.scale_by is not None or h.shift_by is not None for h in heads)
 
-    def forward(self, data: properties.Type, graph_mask: Optional[torch.Tensor] = None, atom_mask: Optional[torch.Tensor] = None) -> properties.Type:
+    def forward(self, data: properties.Type) -> properties.Type:
+        return self.scale(data, force_process=False)
+
+    def scale(
+        self,
+        data: properties.Type,
+        force_process: bool = False,
+    ) -> properties.Type:
         data = data.copy()
+        if self.training and not force_process:
+            return data
         # scale then shifts
         for sc in self.scales:
-            if graph_mask is None and atom_mask is None:
-                data = sc(data)
-            else:
-                # default to graph mask; atomwise keys are handled by passing atom_mask explicitly
-                mask = atom_mask if atom_mask is not None else graph_mask
-                if mask is None:
-                    data = sc(data)
-                else:
-                    if sc.key in data:
-                        data[sc.key][mask] = data[sc.key][mask] * sc.scale
+            data = sc(data)
         for sh in self.atomic_shifts:
-            data = sh(data, graph_mask=graph_mask, atom_mask=atom_mask)
+            data = sh(data)
         for sh in self.shifts:
             if isinstance(sh, AtomwiseShift):
-                data = sh(data, graph_mask=graph_mask, atom_mask=atom_mask)
+                data = sh(data)
             else:
-                data = sh(data, mask=graph_mask)
+                data = sh(data)
+        return data
+
+    def unscale(
+        self,
+        data: properties.Type,
+        force_process: bool = False,
+    ) -> properties.Type:
+        data = data.copy()
+        if not self.training and not force_process:
+            return data
+
+        # undo shifts (structure + atomwise)
+        for sh in self.shifts:
+            if sh.key not in data:
+                continue
+            if isinstance(sh, AtomwiseShift):
+                if sh.atomwise_shift:
+                    data[sh.key] = data[sh.key] - sh.shift
+                else:
+                    s = sh.compute_shift(data)
+                    data[sh.key] = data[sh.key] - s
+            else:
+                data[sh.key] = data[sh.key] - sh.shift
+
+        for sh in self.atomic_shifts:
+            data = sh.apply(data, sign=-1.0)
+
+        # undo scale
+        for sc in self.scales:
+            if sc.key in data:
+                data[sc.key] = data[sc.key] / sc.scale
+
         return data
 
     def setup_from_context(self, ctx: DataContext):
@@ -243,9 +268,9 @@ class GlobalRescaleShift(nn.Module):
                 shift_module.shift.copy_(torch.tensor([shift_by], dtype=shift_module.shift.dtype))
 
         # per-species shift handling
-        if isinstance(head.per_species_shifts, dict):
-            self.atomic_shifts[i].load_values(head.per_species_shifts)
-        elif isinstance(head.per_species_shifts, str) and head.per_species_shifts == "auto":
+        if isinstance(head.per_species_shift, dict):
+            self.atomic_shifts[i].load_values(head.per_species_shift)
+        elif isinstance(head.per_species_shift, str) and head.per_species_shift == "auto":
             atomic_values = ctx.head_species_shift.get(head.key, None)
             if atomic_values is not None:
                 self.atomic_shifts[i].load_values(atomic_values)
@@ -284,13 +309,14 @@ class GlobalRescaleShift(nn.Module):
 
 class MultiDomainRescaleShift(nn.Module):
     """
-    Domain-aware wrapper holding one GlobalRescaleShift per domain. Selects by domain_key at forward.
+    Domain-aware wrapper holding one GlobalRescaleShift per domain. Selects by properties.domain at forward.
     """
 
-    def __init__(self, heads: List[HeadConfig], domain_key: str):
+    def __init__(self, heads: List[HeadConfig]):
         super().__init__()
-        self.domain_key = domain_key
-        self.heads = heads
+        if hasattr(heads, "get") and "heads" in heads:
+            heads = heads.get("heads")
+        self.heads = resolve_heads(heads)
         self.domain_modules = nn.ModuleDict()
 
     def setup_from_datamodule(self, dm):
@@ -316,15 +342,23 @@ class MultiDomainRescaleShift(nn.Module):
         else:
             grs = GlobalRescaleShift(heads=self.heads)
             grs.setup_from_datamodule(dm)
-            self.domain_modules["default"] = grs
+            self.domain_modules["0"] = grs
 
     def _get_domain(self, data: properties.Type) -> str:
-        if self.domain_key not in data:
-            return "default"
-        dom = data[self.domain_key]
+        dom = None
+        if properties.domain in data:
+            dom = data[properties.domain]
+        elif properties.domain_atom in data:
+            dom = data[properties.domain_atom]
+        if dom is None:
+            if "0" in self.domain_modules:
+                return "0"
+            return next(iter(self.domain_modules.keys()))
         if torch.is_tensor(dom):
             if dom.numel() == 0:
-                return "default"
+                if "0" in self.domain_modules:
+                    return "0"
+                return next(iter(self.domain_modules.keys()))
             dom = dom.view(-1)[0].item()
         dom = str(dom)
         if dom in self.domain_modules:
@@ -333,72 +367,19 @@ class MultiDomainRescaleShift(nn.Module):
         return next(iter(self.domain_modules.keys()))
 
     def forward(self, data: properties.Type) -> properties.Type:
-        if self.domain_key not in data and properties.domain_atom not in data:
-            dom = self._get_domain(data)
-            return self.domain_modules[dom](data)
+        return self.scale(data, force_process=False)
 
-        domain_graph = None
-        atom_domain = None
-        if self.domain_key in data:
-            dom = data[self.domain_key]
-            if torch.is_tensor(dom):
-                if dom.numel() == 0:
-                    dom = None
-                elif properties.node_feat in data and dom.numel() == data[properties.node_feat].shape[0]:
-                    atom_domain = dom.to(torch.long)
-                else:
-                    domain_graph = dom.view(-1).to(torch.long)
-        if properties.domain_atom in data:
-            atom_domain = data[properties.domain_atom].to(torch.long)
+    def scale(self, data: properties.Type, force_process: bool = False) -> properties.Type:
+        if self.training and not force_process:
+            return data.copy()
+        dom = self._get_domain(data)
+        return self.domain_modules[dom].scale(data, force_process=force_process)
 
-        index = data.get(properties.image_idx, None)
-        matched_graph = None
-        matched_atom = None
-        applied = False
-
-        # Apply each domain module on its subset
-        for dom, module in self.domain_modules.items():
-            dom_id = int(dom) if dom.isdigit() else None
-            if dom_id is None:
-                continue
-            graph_mask = domain_graph == dom_id if domain_graph is not None else None
-            atom_mask = atom_domain == dom_id if atom_domain is not None else None
-            if atom_mask is None and graph_mask is not None and index is not None:
-                atom_mask = graph_mask[index]
-            if graph_mask is None and atom_mask is not None and index is not None:
-                n_graph = int(index.max().item()) + 1 if index.numel() > 0 else 0
-                graph_mask = torch.zeros((n_graph,), dtype=torch.bool, device=index.device)
-                if atom_mask.numel() == index.numel():
-                    graph_mask[index[atom_mask]] = True
-            if graph_mask is None and atom_mask is None:
-                continue
-            if graph_mask is not None and not torch.any(graph_mask):
-                continue
-            if atom_mask is not None and not torch.any(atom_mask):
-                continue
-            data = module(data, graph_mask=graph_mask, atom_mask=atom_mask)
-            applied = True
-            if graph_mask is not None:
-                matched_graph = graph_mask if matched_graph is None else (matched_graph | graph_mask)
-            if atom_mask is not None:
-                matched_atom = atom_mask if matched_atom is None else (matched_atom | atom_mask)
-
-        if not applied:
-            dom = self._get_domain(data)
-            return self.domain_modules[dom](data)
-
-        # fallback to first available domain for remaining entries
-        fallback_dom = next(iter(self.domain_modules.keys()))
-        remaining_graph = ~matched_graph if matched_graph is not None else None
-        remaining_atom = ~matched_atom if matched_atom is not None else None
-        if remaining_graph is not None and torch.any(remaining_graph):
-            if remaining_atom is None and index is not None:
-                remaining_atom = remaining_graph[index]
-        if remaining_graph is not None and torch.any(remaining_graph):
-            data = self.domain_modules[fallback_dom](data, graph_mask=remaining_graph, atom_mask=remaining_atom)
-        elif remaining_atom is not None and torch.any(remaining_atom):
-            data = self.domain_modules[fallback_dom](data, graph_mask=remaining_graph, atom_mask=remaining_atom)
-        return data
+    def unscale(self, data: properties.Type, force_process: bool = False) -> properties.Type:
+        if not self.training and not force_process:
+            return data.copy()
+        dom = self._get_domain(data)
+        return self.domain_modules[dom].unscale(data, force_process=force_process)
 
 
 class PerSpeciesRescaleShift(nn.Module):

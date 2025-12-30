@@ -15,3 +15,6 @@ power: 6
 gate: silu
 use_cueq: False
 heads: ${model.heads}
+readout:
+  _target_: curator.layer.MultiDomainMACEAtomwiseNN
+  _partial_: true

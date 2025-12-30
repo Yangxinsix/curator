@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Optional
+from typing import Dict, Optional, Any
 
 import torch
 
@@ -40,7 +40,7 @@ def is_atomwise_target(key: str) -> bool:
 
 @dataclass
 class AtomsData:
-    atoms: Any
+    atoms: Dict[str, torch.Tensor]
     targets: Dict[str, torch.Tensor]
     task: str
     weight: float = 1.0

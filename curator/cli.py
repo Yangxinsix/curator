@@ -23,6 +23,8 @@ from .utils import (
     convert_mace_to_curator,
     normalize_config_sequences,
     prune_config_targets,
+    update_config_from_datamodule,
+    log_logo,
 )
 import logging
 import socket
@@ -69,6 +71,7 @@ def train(config: DictConfig) -> None:
     fh = logging.FileHandler(os.path.join(config.run_path, "training.log"), mode="w")
     fh.setFormatter(CustomFormatter())
     log.addHandler(fh)
+    log_logo(log)
     
     # Load the arguments 
     if config.cfg is not None:
@@ -76,13 +79,19 @@ def train(config: DictConfig) -> None:
 
     normalize_config_sequences(config)
     prune_config_targets(config, logger=log)
-    prune_config_targets(config, logger=log)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     log.debug("Running on host: " + str(socket.gethostname()))
     
     # Set up seed
+    if hasattr(config, "trainer") and getattr(config.trainer, "accelerator", None) == "cpu":
+        try:
+            import torch
+            torch.cuda.is_available = lambda: False  # avoid CUDA init on CPU-only runs
+            torch.cuda.device_count = lambda: 0
+        except Exception:
+            pass
     if "seed" in config:
         log.debug(f"Seed with <{config.seed}>")
         seed_everything(config.seed, workers=True)
@@ -94,8 +103,7 @@ def train(config: DictConfig) -> None:
     datamodule: LightningDataModule = hydra.utils.instantiate(config.data)
     datamodule.setup()
     # something must be inferred from data before instantiating the model
-    if datamodule.species == 'auto':
-        config.data.species = datamodule._get_species()
+    update_config_from_datamodule(config, datamodule, logger=log)
 
     model = hydra.utils.instantiate(config.model)
     resume_ckpt = None
@@ -574,6 +582,7 @@ def simulate(config: DictConfig):
         sh = logging.StreamHandler(sys.stdout)
         sh.setFormatter(CustomFormatter())
         log.addHandler(sh)
+    log_logo(log)
 
     # Brief simulation summary for easier debugging
     log.debug("Running on host: " + str(socket.gethostname()))
@@ -619,6 +628,7 @@ def select(config: DictConfig):
     fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
     fh.setLevel(logging.DEBUG)
     log.addHandler(fh)
+    log_logo(log)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -720,6 +730,7 @@ def label(config: DictConfig):
     fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
     fh.setLevel(logging.DEBUG)
     log.addHandler(fh)
+    log_logo(log)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)

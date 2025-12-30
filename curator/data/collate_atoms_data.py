@@ -30,8 +30,8 @@ def _collate_atoms_dicts(atoms_list: List[Dict[str, torch.Tensor]], pin_memory: 
         if domain_graph.dim() > 1:
             domain_graph = domain_graph.view(-1)
         collated[properties.domain] = domain_graph
-        collated[properties.domain_atom] = torch.repeat_interleave(domain_graph, collated[properties.n_atoms], dim=0)
 
+    # add offset to edge_idx
     if properties.edge_idx in collated:
         edge_offset = torch.zeros_like(collated[properties.n_atoms])
         edge_offset[1:] = collated[properties.n_atoms][:-1]
@@ -43,13 +43,20 @@ def _collate_atoms_dicts(atoms_list: List[Dict[str, torch.Tensor]], pin_memory: 
     return collated
 
 
-def collate_atoms_data(samples: List[Any], pin_memory: bool = True) -> Dict[str, Any]:
+def collate_atoms_data(samples: List[Any], pin_memory: bool = False) -> Dict[str, Any]:
     atoms_data: List[AtomsData] = []
     for sample in samples:
         if isinstance(sample, AtomsData):
             atoms_data.append(sample)
         elif isinstance(sample, dict):
-            atoms_data.append(atoms_data_from_dict(sample, task="default"))
+            atoms_data.append(
+                atoms_data_from_dict(
+                    sample,
+                    task=sample.get("task", "default"),
+                    weight=float(sample.get("weight", 1.0)),
+                    meta=sample.get("meta"),
+                )
+            )
         else:
             raise TypeError(f"Unsupported sample type: {type(sample)}")
 

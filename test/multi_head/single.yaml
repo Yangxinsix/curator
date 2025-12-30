@@ -1,12 +1,5 @@
 data:
-  datapath:
-    water:
-      datapath: /home/xinyang/curator/example/dataset_1593.traj
-      heads: [energy]
-    lifp:
-      datapath: /home/xinyang/curator/example/LiFePO4.traj
-      heads: [energy]
-
+  datapath: /home/xinyang/curator/example/dataset_1593.traj
   pin_memory: false
 model:
   representation:
@@ -25,9 +18,10 @@ trainer:
   num_sanity_val_steps: 0
   callbacks:
     early_stopping:
-      monitor: val_total_loss/dataloader_idx_0
+      monitor: val_total_loss
     model_checkpoint:
-      monitor: val_total_loss/dataloader_idx_0
+      monitor: val_total_loss
 task:
-  scheduler_monitor: val_total_loss/dataloader_idx_0
+  scheduler_monitor: val_total_loss
+run_path: test/multi_head/single_run
 deploy_model: false

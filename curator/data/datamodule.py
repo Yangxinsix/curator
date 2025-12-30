@@ -5,13 +5,15 @@ from dataclasses import dataclass, field
 from ._transform import Transform
 from ._neighborlist import NeighborListTransform, TorchNeighborList
 from .dataset import collate_atomsdata, AseDataset
-from .atoms_data import AtomsData, get_sample_atoms, get_sample_target
+from .atoms_data import AtomsData, get_sample_atoms, get_sample_target, split_atoms_targets, normalize_target_key
 import math
 from . import properties
+from .properties import resolve_heads
 from ase.data import chemical_symbols, atomic_numbers
 import json
 import logging
 from torch.utils.data import ConcatDataset, Dataset
+from pytorch_lightning.utilities.combined_loader import CombinedLoader
 
 
 logger = logging.getLogger(__name__)
@@ -25,10 +27,11 @@ class DataContext:
     head_species_shift: Dict[str, Dict[int, float]] = field(default_factory=dict)  # {head: {Z: shift}}
 
 class _DomainTaggedDataset(Dataset):
-    def __init__(self, dataset: Dataset, domain_id: int, task: Optional[str] = None):
+    def __init__(self, dataset: Dataset, domain_id: int, task: Optional[str] = None, weight: float = 1.0):
         self.dataset = dataset
         self.domain_id = int(domain_id)
         self.task = task
+        self.weight = float(weight)
 
     def __len__(self) -> int:
         return len(self.dataset)
@@ -39,9 +42,12 @@ class _DomainTaggedDataset(Dataset):
             sample.atoms[properties.domain] = torch.tensor([self.domain_id], dtype=torch.long)
             if self.task is not None:
                 sample.task = self.task
+            sample.weight = self.weight
         elif isinstance(sample, dict):
             sample = sample.copy()
             sample[properties.domain] = torch.tensor([self.domain_id], dtype=torch.long)
+            sample["task"] = self.task or sample.get("task", "default")
+            sample["weight"] = self.weight
         return sample
 
 class AtomsDataModule(pl.LightningDataModule):
@@ -110,7 +116,11 @@ class AtomsDataModule(pl.LightningDataModule):
         self.shuffle = shuffle
         
         self._num_workers = num_workers
-        self._pin_memory = pin_memory
+        try:
+            cuda_available = torch.cuda.is_available()
+        except Exception:
+            cuda_available = False
+        self._pin_memory = pin_memory and cuda_available
         self._collate_fn = collate_fn
         
         # dataset and dataloaders
@@ -133,6 +143,7 @@ class AtomsDataModule(pl.LightningDataModule):
         self.std = scale_by
         self.head_reference_by_species = head_reference_by_species or {}
         self._scale_shift_cache: Dict[str, Tuple[float, float]] = {}
+        self._species_logged = False
         
     def setup(self, stage: Optional[str] = None) -> None:
         if self._train_dataset is None:
@@ -177,7 +188,6 @@ class AtomsDataModule(pl.LightningDataModule):
                 if self.test_idx is not None and self._test_dataset is None:
                     self._test_dataset = torch.utils.data.Subset(self.dataset, self.test_idx)
             
-            logger.info(self)
     
     def setup_dataset(self, data_type: str, datapath: str) -> None:
         task = data_type.lower()
@@ -298,7 +308,9 @@ class AtomsDataModule(pl.LightningDataModule):
                 numbers.append(torch.unique(atoms[properties.Z]))
             numbers = torch.unique(torch.cat(numbers))
             self.species = [chemical_symbols[int(n)] for n in numbers]
-        logger.debug(f"Training model for elements: {self.species}.")
+            if not self._species_logged:
+                logger.debug(f"Detected training species: {self.species}.")
+                self._species_logged = True
         return self.species
             
     def _get_avg_num_neighbors(self) -> Optional[float]:
@@ -346,7 +358,7 @@ class AtomsDataModule(pl.LightningDataModule):
         # user-provided override per head
         if property_key in self.head_reference_by_species:
             shifts = _normalize_keys(self.head_reference_by_species[property_key])
-            logger.debug(f"Using user-specified per-species shift for '{property_key}': {shifts}.")
+            logger.debug(f"Using user-specified per-species reference for '{property_key}': {shifts}.")
             return shifts
 
         # user-provided atomic_energies acts as a default per-species shift for energy
@@ -382,7 +394,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 if counts[idx] > 0:
                     shifts[z_val] = (sums[idx] / counts[idx]).item()
             if shifts:
-                logger.debug(f"Computed per-species shift for atomwise '{property_key}': {shifts}.")
+                logger.debug(f"Computed per-species reference for atomwise '{property_key}': {shifts}.")
                 return shifts
             return None
 
@@ -414,7 +426,7 @@ class AtomsDataModule(pl.LightningDataModule):
             logger.warning(f"Failed to compute per-species shift for '{property_key}' via lstsq; using zeros.")
             coeffs = torch.zeros_like(A[0])
         shifts = {z: coeffs[i].item() for i, z in enumerate(numbers)}
-        logger.debug(f"Computed per-species shift for '{property_key}': {shifts}.")
+        logger.debug(f"Computed per-species reference for '{property_key}': {shifts}.")
         return shifts
     
     def _get_scale_shift(
@@ -454,7 +466,7 @@ class AtomsDataModule(pl.LightningDataModule):
                     v = v - node_shift
                 else:
                     v = v - node_shift.sum()
-            if use_atomwise_norm and properties.n_atoms in atoms and ((not isinstance(v, torch.Tensor)) or v.ndim == 0):
+            if use_atomwise_norm and properties.n_atoms in atoms and ((not isinstance(v, torch.Tensor)) or v.numel() == 1):
                 v = v / atoms[properties.n_atoms]
             values.append(v)
 
@@ -467,11 +479,12 @@ class AtomsDataModule(pl.LightningDataModule):
 
         self._scale_shift_cache[property_key] = (mean, std if std != 0.0 else 1.0)
         msg = (
-            f"Property '{property_key}' stats: shift={self._scale_shift_cache[property_key][0]:.3f}, "
+            f"Computed normalization stats for '{property_key}': "
+            f"shift={self._scale_shift_cache[property_key][0]:.3f}, "
             f"scale={self._scale_shift_cache[property_key][1]:.3f}"
         )
         if per_species_shift is not None:
-            msg += " (using per-species shift for computation)."
+            msg += " (using per-species reference for computation)."
         logger.debug(msg)
         return self._scale_shift_cache[property_key]
 
@@ -490,6 +503,23 @@ class AtomsDataModule(pl.LightningDataModule):
         rms = torch.sqrt(torch.mean(forces * forces)).item()
         logger.debug(f"Forces will be scaled by forces_rms: {rms:.3f}.")
         return rms
+
+    def infer_head_keys(self, max_samples: int = 1, default_heads: Optional[List[str]] = None) -> List[str]:
+        dataset = self.train_dataset or getattr(self, "_train_dataset", None) or self.dataset
+        if dataset is None:
+            return list(default_heads or [])
+        keys: set = set()
+        limit = min(len(dataset), max_samples)
+        for i in range(limit):
+            sample = dataset[i]
+            if isinstance(sample, AtomsData):
+                keys.update(normalize_target_key(k) for k in sample.targets.keys())
+            elif isinstance(sample, dict):
+                _, targets = split_atoms_targets(sample)
+                keys.update(normalize_target_key(k) for k in targets.keys())
+        if not keys:
+            return list(default_heads or [])
+        return sorted(keys)
 
     def build_context(self, heads: List) -> "DataContext":
         # heads may be HeadConfig or dict-like with key field
@@ -548,7 +578,34 @@ class AtomsDataModule(pl.LightningDataModule):
         # Avoid Lightning's default __str__ which inspects dataloaders.
         return self.__repr__()
 
-    def _format_table(self) -> str:
+    def log_summary(self) -> str:
+        heads = self._heads_summary()
+        return self._format_table(heads=heads)
+
+    def _heads_summary(self) -> str:
+        try:
+            heads = self.infer_head_keys(default_heads=["energy"])
+        except Exception:
+            heads = ["energy"]
+
+        ctx = None
+        try:
+            resolved = resolve_heads(heads)
+            ctx = self.build_context(resolved)
+        except Exception:
+            ctx = None
+
+        head_parts = []
+        for h in heads:
+            stats = ctx.head_scale_shift.get(h, {}) if ctx is not None else {}
+            shift = stats.get("mean")
+            scale = stats.get("std")
+            shift_str = f"{shift:.3f}" if shift is not None else "None"
+            scale_str = f"{scale:.3f}" if scale is not None else "None"
+            head_parts.append(f"{h}(shift={shift_str},scale={scale_str})")
+        return ", ".join(head_parts)
+
+    def _format_table(self, heads: Optional[str] = None) -> str:
         train_size = len(self._train_dataset) if self._train_dataset is not None else (self.num_train if isinstance(self.num_train, (int, float)) else 0)
         val_size = len(self._val_dataset) if self._val_dataset is not None else (self.num_val if isinstance(self.num_val, (int, float)) else 0)
         test_size = len(self._test_dataset) if self._test_dataset is not None else (self.num_test if isinstance(self.num_test, (int, float)) else 0)
@@ -556,8 +613,28 @@ class AtomsDataModule(pl.LightningDataModule):
 
         headers = ["Train", "Val", "Test", "Batch", "Cutoff", "Path"]
         row = [str(train_size), str(val_size), str(test_size), str(self.batch_size), str(self.cutoff), str(path)]
+        domain_name = getattr(self, "domain_name", None)
+        if domain_name is not None:
+            headers = ["Domain"] + headers
+            row = [str(domain_name)] + row
+        if heads is not None:
+            headers = headers + ["Heads"]
+            row = row + [heads]
 
-        widths = [max(len(headers[i]), len(row[i])) for i in range(len(headers))]
+        fixed = {
+            "Domain": 12,
+            "Train": 8,
+            "Val": 8,
+            "Test": 8,
+            "Batch": 8,
+            "Cutoff": 8,
+            "Path": 48,
+            "Heads": 60,
+        }
+        widths = [
+            max(fixed.get(headers[i], 0), len(headers[i]), len(row[i]))
+            for i in range(len(headers))
+        ]
 
         def fmt(values):
             return " | ".join(v.ljust(widths[i]) for i, v in enumerate(values))
@@ -567,7 +644,7 @@ class AtomsDataModule(pl.LightningDataModule):
         return f"{self.__class__.__name__}(\n{table}\n)"
 
 
-def build_datamodule(datapath=None, **kwargs):
+def build_datamodule(datapath=None, domain_weights: Optional[Dict[str, float]] = None, **kwargs):
     """
     Factory that returns a single AtomsDataModule or a MultiDomainDataModule
     when ``datapath`` is provided as a dict. Domain entries can override any
@@ -575,16 +652,21 @@ def build_datamodule(datapath=None, **kwargs):
     """
     if isinstance(datapath, dict):
         domain_modules = {}
+        collected_weights = {}
         shared_kwargs = {k: v for k, v in kwargs.items() if k != "datapath"}
         for domain, domain_cfg in datapath.items():
             domain_kwargs = dict(shared_kwargs)
             if isinstance(domain_cfg, dict):
-                domain_kwargs.update({k: v for k, v in domain_cfg.items() if k != "datapath"})
+                if "weight" in domain_cfg:
+                    collected_weights[domain] = float(domain_cfg["weight"])
+                domain_kwargs.update({k: v for k, v in domain_cfg.items() if k not in ("datapath", "heads")})
                 domain_kwargs["datapath"] = domain_cfg.get("datapath", None)
             else:
                 domain_kwargs["datapath"] = domain_cfg
             domain_modules[domain] = AtomsDataModule(**domain_kwargs)
-        return MultiDomainDataModule(domain_modules)
+        merged_weights = dict(domain_weights or {})
+        merged_weights.update(collected_weights)
+        return MultiDomainDataModule(domain_modules, domain_weights=merged_weights)
     return AtomsDataModule(datapath=datapath, **kwargs)
 
 class DataModuleFactory:
@@ -605,6 +687,7 @@ class MultiDomainDataModule(pl.LightningDataModule):
     def __init__(
         self,
         domain_modules: Dict[str, AtomsDataModule],
+        domain_weights: Optional[Dict[str, float]] = None,
         train_batch_size: Optional[int] = None,
         train_num_workers: Optional[int] = None,
         train_shuffle: Optional[bool] = None,
@@ -612,6 +695,7 @@ class MultiDomainDataModule(pl.LightningDataModule):
     ) -> None:
         super().__init__()
         self.domain_modules = domain_modules
+        self.domain_weights = domain_weights or {}
         self.domain_to_id = {name: i for i, name in enumerate(self.domain_modules.keys())}
         self.id_to_domain = {i: name for name, i in self.domain_to_id.items()}
         self._train_batch_size = train_batch_size
@@ -622,40 +706,53 @@ class MultiDomainDataModule(pl.LightningDataModule):
         self._train_dataset = None
         self._val_loaders = None
         self._test_loaders = None
+        self._setup_logged = False
 
     def setup(self, stage: Optional[str] = None) -> None:
         for name, dm in self.domain_modules.items():
-            logger.debug(f"Building data module for: {name}")
+            if not self._setup_logged:
+                logger.debug(f"Building data module for: {name}")
             dm.setup(stage)
             domain_id = self.domain_to_id[name]
+            domain_weight = self.domain_weights.get(name, 1.0)
             if dm._train_dataset is not None:
-                dm._train_dataset = _DomainTaggedDataset(dm._train_dataset, domain_id, task=name)
+                dm._train_dataset = _DomainTaggedDataset(dm._train_dataset, domain_id, task=name, weight=domain_weight)
             if dm._val_dataset is not None:
-                dm._val_dataset = _DomainTaggedDataset(dm._val_dataset, domain_id, task=name)
+                dm._val_dataset = _DomainTaggedDataset(dm._val_dataset, domain_id, task=name, weight=domain_weight)
             if dm._test_dataset is not None:
-                dm._test_dataset = _DomainTaggedDataset(dm._test_dataset, domain_id, task=name)
+                dm._test_dataset = _DomainTaggedDataset(dm._test_dataset, domain_id, task=name, weight=domain_weight)
             dm._train_dataloader = None
             dm._val_dataloader = None
             dm._test_dataloader = None
 
         train_datasets = [dm.train_dataset for dm in self.domain_modules.values() if dm.train_dataset is not None]
         self._train_dataset = ConcatDataset(train_datasets) if len(train_datasets) > 0 else None
-
         self._val_loaders = [dl for dm in self.domain_modules.values() if (dl := dm.val_dataloader()) is not None]
         self._test_loaders = [dl for dm in self.domain_modules.values() if (dl := dm.test_dataloader()) is not None]
+        self._setup_logged = True
+
+    def log_summary(self) -> str:
+        tables = []
+        for name, dm in self.domain_modules.items():
+            prev_domain = getattr(dm, "domain_name", None)
+            try:
+                dm.domain_name = name
+                tables.append(dm.log_summary())
+            finally:
+                if prev_domain is None:
+                    try:
+                        delattr(dm, "domain_name")
+                    except AttributeError:
+                        pass
+                else:
+                    dm.domain_name = prev_domain
+        return "\n".join(tables)
 
     def train_dataloader(self) -> Optional[torch.utils.data.DataLoader]:
-        if self._train_dataset is None:
+        loaders = {name: dm.train_dataloader() for name, dm in self.domain_modules.items() if dm.train_dataset is not None}
+        if not loaders:
             return None
-        template_dm = next(iter(self.domain_modules.values()))
-        return torch.utils.data.DataLoader(
-            self._train_dataset,
-            batch_size=self._train_batch_size or template_dm.batch_size,
-            collate_fn=template_dm._collate_fn,
-            num_workers=self._train_num_workers if self._train_num_workers is not None else template_dm._num_workers,
-            shuffle=self._train_shuffle if self._train_shuffle is not None else template_dm.shuffle,
-            pin_memory=self._train_pin_memory if self._train_pin_memory is not None else template_dm._pin_memory,
-        )
+        return CombinedLoader(loaders, mode="max_size_cycle")
 
     def val_dataloader(self):
         return self._val_loaders
@@ -690,3 +787,13 @@ class MultiDomainDataModule(pl.LightningDataModule):
             global_ctx.avg_num_neighbors = max(avg_neighbors)
         contexts["global"] = global_ctx
         return contexts
+
+    def infer_domain_head_keys(
+        self,
+        max_samples: int = 1,
+        default_heads: Optional[List[str]] = None,
+    ) -> Dict[str, List[str]]:
+        return {
+            name: dm.infer_head_keys(max_samples=max_samples, default_heads=default_heads)
+            for name, dm in self.domain_modules.items()
+        }
