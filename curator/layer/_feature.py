@@ -169,7 +169,7 @@ class FeatureCalculator(nn.Module):
         compute_maha_dist: bool = False,
         precision: Optional[torch.Tensor] = None,
         feature_mean: Optional[torch.Tensor] = None,
-        max_dataset_size: Optional[int] = None,
+        max_dataset_size: Union[int, str, None] = None,  # None or "all" means use entire dataset
         batch_size: int = 8,  # batch size for computing covariance matrix, keep small to avoid OOM
     ) -> None:
         super().__init__()
@@ -180,6 +180,9 @@ class FeatureCalculator(nn.Module):
         self.target_layer = target_layer
         self.dataset = dataset
         self.compute_maha_dist = compute_maha_dist
+        # Handle max_dataset_size: None or "all" means use entire dataset
+        if isinstance(max_dataset_size, str) and max_dataset_size.lower() == "all":
+            max_dataset_size = None
         self.max_dataset_size = max_dataset_size
         self.batch_size = batch_size
         self._skip_forward: bool = False  # avoid re-entrancy when repr_callback routes back here
@@ -316,7 +319,8 @@ class FeatureCalculator(nn.Module):
         try:
             self._skip_forward = True  # prevent recursive call when repr_callback is the parent model
             for i, batch in enumerate(iterator):
-                logger.info(f"Processing batch {i+1}/{len(iterator)}")
+                if i % 100 == 0:
+                    logger.info(f"Processing batch {i+1}/{len(iterator)}")
                 batch = {k: v.to(device) for k, v in batch.items()}
                 feats = self._compute_feature(batch, predict=True)[properties.feature].to('cpu')  # use cpu to save memory
                 features.append(feats)

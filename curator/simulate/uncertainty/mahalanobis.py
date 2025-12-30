@@ -19,7 +19,7 @@ class MahalanobisUncertainty(BaseUncertainty):
         low_threshold: float = 0.95,
         calculator: Optional[Calculator] = None,
         dataset: Union[str, None] = None,
-        max_structures: Optional[int] = 128,
+        max_structures: Union[int, str, None] = 128,  # None or "all" means use entire dataset
         batch_size: int = 8,  # batch size for computing covariance matrix
         kernel: str = "local-full-g",
     ) -> None:
@@ -30,6 +30,11 @@ class MahalanobisUncertainty(BaseUncertainty):
         self.dataset = dataset
         self.feature_calculator: Optional[FeatureCalculator] = None
         uncertainty_keys = (properties.maha_dist, "is_outlier", "is_warning")
+        
+        # Handle max_structures: None or "all" means use entire dataset
+        if max_structures is None or (isinstance(max_structures, str) and max_structures.lower() == "all"):
+            max_structures = None
+        self.max_structures = max_structures
 
         super().__init__(
             uncertainty_keys=uncertainty_keys,
@@ -52,7 +57,7 @@ class MahalanobisUncertainty(BaseUncertainty):
                 self.feature_calculator = FeatureCalculator(
                     dataset=dataset,
                     compute_maha_dist=True,
-                    max_dataset_size=max_structures,
+                    max_dataset_size=self.max_structures,
                     batch_size=batch_size,
                     kernel=kernel,
                 )
