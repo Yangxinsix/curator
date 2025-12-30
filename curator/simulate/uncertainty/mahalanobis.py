@@ -20,6 +20,7 @@ class MahalanobisUncertainty(BaseUncertainty):
         calculator: Optional[Calculator] = None,
         dataset: Union[str, None] = None,
         max_structures: Optional[int] = 128,
+        batch_size: int = 8,  # batch size for computing covariance matrix
         kernel: str = "local-full-g",
     ) -> None:
         from curator.layer import FeatureCalculator
@@ -52,6 +53,7 @@ class MahalanobisUncertainty(BaseUncertainty):
                     dataset=dataset,
                     compute_maha_dist=True,
                     max_dataset_size=max_structures,
+                    batch_size=batch_size,
                     kernel=kernel,
                 )
                 self.calc.model.output_modules.append(self.feature_calculator)

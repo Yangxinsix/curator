@@ -228,7 +228,24 @@ class GlobalRescaleShift(torch.nn.Module):
                 self.shift_by[key] = buffer
 
     def _load_from_state_dict(self, state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs):
-        # Call parent's _load_from_state_dict first
+        # First, register any missing scale_by__* and shift_by__* buffers from state_dict
+        # This handles the case where model was initialized without scale_by/shift_by
+        if not hasattr(self, 'scale_by') or self.scale_by is None:
+            self.scale_by = {}
+        if not hasattr(self, 'shift_by') or self.shift_by is None:
+            self.shift_by = {}
+            
+        for key in state_dict:
+            if key.startswith(prefix + "scale_by__"):
+                buffer_name = key[len(prefix):]
+                if not hasattr(self, buffer_name):
+                    self.register_buffer(buffer_name, torch.tensor(0.0))
+            elif key.startswith(prefix + "shift_by__"):
+                buffer_name = key[len(prefix):]
+                if not hasattr(self, buffer_name):
+                    self.register_buffer(buffer_name, torch.tensor(0.0))
+        
+        # Call parent's _load_from_state_dict
         super()._load_from_state_dict(state_dict, prefix, local_metadata, strict, missing_keys, unexpected_keys, error_msgs)
         # Rebuild the scale_by and shift_by dicts from buffers
         self._rebuild_scale_shift_dicts()

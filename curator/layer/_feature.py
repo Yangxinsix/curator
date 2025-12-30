@@ -68,8 +68,32 @@ class FeatureExtractor(nn.Module):
     def forward(self, data: properties.Type, predict: bool=False) -> properties.Type:
         # repr_callback may modify the original data in place, so we need to make a copy of the data
         new_data = data.copy()
-        if predict: # in predict mode, modify the data in place
+        if predict:
+            # In predict mode, we need to run the model forward AND backward to capture both
+            # features (from forward hooks) and gradients (from backward hooks).
+            # We enable grad for positions to allow backward pass.
+            pos = new_data[properties.positions]
+            requires_grad_backup = pos.requires_grad
+            if not pos.requires_grad:
+                new_data[properties.positions] = pos.requires_grad_(True)
+            
             new_data = self.repr_callback(new_data)
+            
+            # Perform backward pass to trigger gradient hooks
+            # Use energy sum as the scalar for backward
+            energy = new_data.get(properties.energy, None)
+            if energy is not None and energy.requires_grad:
+                try:
+                    # Use retain_graph=False since we don't need the graph afterwards
+                    energy.sum().backward(retain_graph=False)
+                except RuntimeError:
+                    # If backward fails (e.g., no grad path), gradients won't be captured
+                    pass
+            
+            # Restore requires_grad state if it was changed
+            if not requires_grad_backup and properties.positions in new_data:
+                new_data[properties.positions] = new_data[properties.positions].detach()
+                
         data[properties.feature] = self._features
         data[properties.gradient] = self._grads[::-1]
         self._reset()
@@ -89,11 +113,11 @@ class FeatureExtractor(nn.Module):
         if util.find_spec("e3nn.o3"):
             from e3nn import o3
             types.append(o3.Linear)
+        # Add cuequivariance Linear if available
         try:
-            from curator.layer._cuequivariance_wrapper import Linear as CueqLinear
-            types.append(CueqLinear)
+            import cuequivariance_torch as cuet
+            types.append(cuet.Linear)
         except Exception:
-            # If the cuequivariant Linear is unavailable, skip it.
             pass
         return tuple(types)
 
@@ -170,6 +194,7 @@ class FeatureCalculator(nn.Module):
         precision: Optional[torch.Tensor] = None,
         feature_mean: Optional[torch.Tensor] = None,
         max_dataset_size: Optional[int] = None,
+        batch_size: int = 8,  # batch size for computing covariance matrix, keep small to avoid OOM
     ) -> None:
         super().__init__()
         self.n_random_features = n_random_features
@@ -180,6 +205,7 @@ class FeatureCalculator(nn.Module):
         self.dataset = dataset
         self.compute_maha_dist = compute_maha_dist
         self.max_dataset_size = max_dataset_size
+        self.batch_size = batch_size
         self._skip_forward: bool = False  # avoid re-entrancy when repr_callback routes back here
 
         if self.compute_maha_dist and properties.maha_dist not in self.model_outputs:
@@ -279,9 +305,12 @@ class FeatureCalculator(nn.Module):
         if dataset is None:
             raise ValueError("Mahalanobis distance requested but no dataset or precision/feature_mean provided.")
         if isinstance(dataset, str):
-            from curator.data import AseDataset
+            from curator.data import AseDataset, MatScipyNeighborList
             logger.info(f'Calculating features from provided dataset <{dataset}>.')
-            dataset = AseDataset(dataset, cutoff=find_layer_by_name_recursive(self.repr_callback, 'cutoff'))
+            cutoff = find_layer_by_name_recursive(self.repr_callback, 'cutoff')
+            # Include neighbor list transform with cell_displacements to match training data preprocessing
+            transforms = [MatScipyNeighborList(cutoff=cutoff, return_cell_displacements=True)]
+            dataset = AseDataset(dataset, cutoff=cutoff, transforms=transforms)
             logger.info(f'Calculating precision matrix from {len(dataset)} structures.')
 
         # collect features
@@ -291,15 +320,22 @@ class FeatureCalculator(nn.Module):
         image_idx = [] if 'local' in self.kernel else None
         device = next(self.repr_callback.parameters()).device
         from curator.data import collate_atomsdata
-        from torch.utils.data import DataLoader
+        from torch.utils.data import DataLoader, Subset
+        
+        # Limit dataset size if max_dataset_size is specified
+        if self.max_dataset_size is not None and len(dataset) > self.max_dataset_size:
+            indices = torch.randperm(len(dataset))[:self.max_dataset_size].tolist()
+            dataset = Subset(dataset, indices)
+            logger.info(f"Subsampled dataset to {self.max_dataset_size} structures for covariance calculation.")
 
+        # Use self.batch_size for DataLoader, capped by dataset length
+        batch_size = min(self.batch_size, len(dataset))
         loader_kwargs = dict(
-            batch_size=self.max_dataset_size if self.max_dataset_size is not None else 1,
+            batch_size=batch_size,
             shuffle=False,
             collate_fn=collate_atomsdata,
         )
         iterator = DataLoader(dataset, **loader_kwargs)
-        # No need to slice the iterator, since batch_size == max_dataset_size
 
         try:
             self._skip_forward = True  # prevent recursive call when repr_callback is the parent model
@@ -370,11 +406,43 @@ class FeatureCalculator(nn.Module):
     def _compute_feature(self, data: properties.Type, predict: bool=False) -> properties.Type:
         if not hasattr(self, 'feature_extractor') or not hasattr(self, 'random_projections'):
             raise RuntimeError("Feature extractor is not initialized; ensure repr_callback is provided.")
-        data = self.feature_extractor(data, predict=predict)       # this will modify the data in place if in predict mode
+        
+        # Get current features/gradients captured by hooks (if any)
+        feats = self.feature_extractor._features
+        grads = self.feature_extractor._grads
+        
+        logger.debug(f"Before feature_extractor: feats={len(feats)}, grads={len(grads)}")
+        
+        # If we have features but no gradients, we need to trigger backward pass
+        # This happens when the model ran forward but backward hasn't been called yet
+        # (e.g., FeatureCalculator runs before GradientOutput)
+        if feats and not grads:
+            # Trigger backward to capture gradients
+            energy = data.get(properties.energy, None)
+            if energy is not None:
+                pos = data.get(properties.positions)
+                if pos is not None and not pos.requires_grad:
+                    # Need to enable grad on positions to allow backward
+                    data[properties.positions] = pos.requires_grad_(True)
+                try:
+                    if energy.requires_grad:
+                        logger.debug("Triggering backward pass to capture gradients")
+                        energy.sum().backward(retain_graph=True)  # Use retain_graph=True to allow later gradient computation
+                        # Update grads after backward
+                        grads = self.feature_extractor._grads
+                        logger.debug(f"After backward: grads={len(grads)}")
+                except RuntimeError as e:
+                    logger.warning(f"Failed to compute gradients for features: {e}")
+        
+        # Now call feature_extractor to collect features/gradients into data
+        data = self.feature_extractor(data, predict=predict)
         feats, grads = data[properties.feature], data[properties.gradient]
+        
+        logger.debug(f"After feature_extractor: feats={len(feats)}, grads={len(grads)}")
+        
         if not feats or not grads:
             raise RuntimeError(
-                "FeatureExtractor did not capture features/gradients. "
+                f"FeatureExtractor did not capture features/gradients (feats={len(feats) if feats else 0}, grads={len(grads) if grads else 0}). "
                 "Ensure the repr_callback forward/backward runs with hooks attached before calling FeatureCalculator, "
                 "or call with predict=True so repr_callback executes within FeatureCalculator."
             )

@@ -326,7 +326,11 @@ class BatchNeighborList(nn.Module):
         num_offset = torch.zeros_like(data[properties.n_atoms])
         num_offset[1:] = data[properties.n_atoms][:-1]
         num_offset = torch.cumsum(num_offset, dim=0)
-        batch_pairs, batch_pair_diff, batch_pair_dist = [], [], []
+        batch_pairs, batch_pair_diff, batch_pair_dist, batch_cell_displacements = [], [], [], []
+        
+        # Check if the underlying neighbor_list returns cell_displacements
+        return_cell_displacements = getattr(self.neighbor_list, 'return_cell_displacements', False)
+        
         for i, num_atoms in enumerate(data[properties.n_atoms]):
             atoms_dict = {
                 properties.R: data[properties.positions][num_offset[i]:num_offset[i]+num_atoms],
@@ -338,10 +342,14 @@ class BatchNeighborList(nn.Module):
             batch_pair_diff.append(atoms_dict[properties.edge_diff])
             if self.return_distance:
                 batch_pair_dist.append(atoms_dict[properties.edge_dist])
+            if return_cell_displacements and properties.cell_displacements in atoms_dict:
+                batch_cell_displacements.append(atoms_dict[properties.cell_displacements])
 
         data[properties.edge_idx] = torch.cat(batch_pairs)
         data[properties.edge_diff] = torch.cat(batch_pair_diff)
         if self.return_distance:
             data[properties.edge_dist] = torch.cat(batch_pair_dist)
+        if return_cell_displacements and batch_cell_displacements:
+            data[properties.cell_displacements] = torch.cat(batch_cell_displacements)
         
         return data
