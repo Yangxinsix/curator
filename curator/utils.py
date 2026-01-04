@@ -27,29 +27,47 @@ def create_model_from_mace(
     mace_model,
     head: Optional[Union[str, int]] = None,
 ):
-    from curator.layer import GlobalRescaleShift, Strain, AtomwiseReduce, PairwiseDistance, GradientOutput, RealAgnosticInteractionBlock, RealAgnosticResidualInteractionBlock, AgnesiTransform, SoftTransform, PairRepulsionEnergy, ZBLBasis, MACEReadoutAdapter
+    from curator.layer import (
+        GlobalRescaleShift,
+        PairwiseDistance,
+        GradientOutput,
+        RealAgnosticInteractionBlock, 
+        RealAgnosticResidualInteractionBlock, 
+        AgnesiTransform, 
+        SoftTransform, 
+        PairRepulsionEnergy, 
+        ZBLBasis, 
+        MultiDomainMACEAtomwiseNN,
+    )
+    from curator.layer._rescale import MultiDomainRescaleShift
     from curator.model import NeuralNetworkPotential, MACE
+    from curator.data.properties import HeadConfig
+    from functools import partial
 
     heads = list(getattr(mace_model, "heads", []))
-    head_idx = None
-    if len(heads) > 1:
-        if head is None:
-            if "Default" in heads:
-                head = "Default"
-            elif "default" in heads:
-                head = "default"
+    # New semantics:
+    # - multi-head + head=None => convert all heads into domains ("0..num_heads-1")
+    # - otherwise => convert a single head into domain "0"
+    all_heads_to_domains = (head is None and len(heads) > 1)
+    if all_heads_to_domains:
+        domains = [str(i) for i in range(len(heads))]
+        domain_to_head_idx = {str(i): int(i) for i in range(len(heads))}
+    else:
+        domains = ["0"]
+        head_idx: Optional[int] = None
+        if len(heads) > 1:
+            if isinstance(head, int):
+                if head < 0 or head >= len(heads):
+                    raise ValueError(f"Head index {head} out of range for heads={heads}")
+                head_idx = int(head)
+            elif head is not None:
+                head_name = str(head)
+                if head_name not in heads:
+                    raise ValueError(f"Head {head_name} not found in heads={heads}")
+                head_idx = heads.index(head_name)
             else:
-                non_pt = [h for h in heads if h != "pt_head"]
-                head = non_pt[0] if non_pt else heads[0]
-        if isinstance(head, int):
-            if head < 0 or head >= len(heads):
-                raise ValueError(f"Head index {head} out of range for heads={heads}")
-            head_idx = head
-        else:
-            head_name = str(head)
-            if head_name not in heads:
-                raise ValueError(f"Head {head_name} not found in heads={heads}")
-            head_idx = heads.index(head_name)
+                head_idx = 0
+        domain_to_head_idx = {"0": int(head_idx or 0)}
 
     interaction_map = {
         'RealAgnosticInteractionBlock': RealAgnosticInteractionBlock,
@@ -78,7 +96,21 @@ def create_model_from_mace(
                 distance_transform = SoftTransform()
             else:
                 raise ValueError(f"Unsupported distance_transform '{dt.__class__.__name__}' in MACE model")
-            distance_transform.load_state_dict(dt.state_dict(), strict=False)
+            distance_transform.load_state_dict(
+                {k: v.detach().cpu() for k, v in dt.state_dict().items()},
+                strict=False,
+            )
+
+    # Configure Curator-native multi-domain readout (no embedded MACE modules).
+    readout_head = HeadConfig(
+        key=properties.energy,
+        is_atomwise=True,
+        reduction="sum",
+        atomwise_key=properties.atomic_energy,
+        write_atomwise=False,
+        dim=1,
+    )
+    readout = partial(MultiDomainMACEAtomwiseNN, domains=domains, heads=[readout_head])
     curator_mace = MACE(
         cutoff=float(mace_model.r_max),
         num_interactions=len(mace_model.interactions),
@@ -94,58 +126,154 @@ def create_model_from_mace(
         interaction_cls_first=interaction_cls_first,
         distance_transform=distance_transform,
         filter_forbidden_irreps=False,
-    )
-    curator_mace.readout = MACEReadoutAdapter(
-        mace_model.readouts,
-        num_interactions=len(mace_model.interactions),
-        hidden_irreps=curator_mace.hidden_irreps,
-        head_idx=head_idx,
+        readout=readout,
+        heads=[readout_head],
     )
 
-    atomic_energies = mace_model.atomic_energies_fn.atomic_energies
-    if atomic_energies.ndim > 1 and head_idx is not None:
-        if atomic_energies.shape[0] == len(heads):
-            atomic_energies = atomic_energies[head_idx]
-        elif atomic_energies.shape[1] == len(heads):
-            atomic_energies = atomic_energies[:, head_idx]
-        else:
-            atomic_energies = atomic_energies[0]
-    atomic_energies = atomic_energies.squeeze()
+    # Copy MACE readout weights into Curator readout modules.
+    def _map_mace_mlp_state_keys(sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        mapped: Dict[str, torch.Tensor] = {}
+        for k, v in sd.items():
+            nk = k
+            # Some upstream variants store nested keys like "linear_1.linear.weight".
+            nk = nk.replace("linear_1.linear.", "0.linear.")
+            nk = nk.replace("linear_2.linear.", "1.linear.")
+            if "linear_1." in nk:
+                nk = nk.replace("linear_1.", "0.linear.")
+            if "linear_2." in nk:
+                nk = nk.replace("linear_2.", "1.linear.")
+            # Collapse accidental double nesting (e.g., "linear.linear.weight").
+            nk = nk.replace("linear.linear.", "linear.")
+            mapped[nk] = v
+        return mapped
 
-    from curator.data.properties import HeadConfig
-    energy_head = HeadConfig(
-        key=properties.energy,
-        is_atomwise=True,
-        reduction="sum",
-        atomwise_key=properties.atomic_energy,
-        write_atomwise=False,
-        dim=1,
-        scale_by=float(torch.atleast_1d(mace_model.scale_shift.scale)[head_idx or 0]),
-        shift_by=float(torch.atleast_1d(mace_model.scale_shift.shift)[head_idx or 0]),
-        atomwise_shift=False,
-        atomwise_normalization=True,
-        per_species_shift={
-            int(idx): float(e)
-            for idx, e in zip(mace_model.atomic_numbers, atomic_energies)
-        },
-    )
+    def _squeeze_if_compatible(src: torch.Tensor, target_shape: torch.Size) -> torch.Tensor:
+        if src.shape != target_shape and src.dim() == len(target_shape) + 1 and src.shape[0] == 1:
+            return src.squeeze(0)
+        return src
+
+    def _prepare_state_for_loading(dst: torch.nn.Module, sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        dst_sd = dst.state_dict()
+        out: Dict[str, torch.Tensor] = {}
+        for k, v in sd.items():
+            if torch.is_tensor(v):
+                v = v.detach().cpu()
+            if k in dst_sd:
+                out[k] = _squeeze_if_compatible(v, dst_sd[k].shape)
+            else:
+                out[k] = v
+        return out
+
+    num_heads = len(heads) if len(heads) > 0 else 1
+    mlp_count_irreps = 0
+    try:
+        from e3nn import o3 as _o3
+        mlp_hidden = getattr(mace_model.readouts[-1], "hidden_irreps", None)
+        if mlp_hidden is not None:
+            mlp_count_irreps = int(_o3.Irreps(mlp_hidden).dim)
+    except Exception:
+        mlp_count_irreps = 0
+
+    if not hasattr(curator_mace.readout, "domain_modules"):
+        raise TypeError("Curator MACE readout is not multi-domain; expected MultiDomainMACEAtomwiseNN.")
+    for dom, hidx in domain_to_head_idx.items():
+        dst_domain = curator_mace.readout.domain_modules[str(dom)]
+        for i, src_readout in enumerate(mace_model.readouts):
+            dst_readout = dst_domain.readouts[i]
+            sd = {k: v.detach().cpu() for k, v in src_readout.state_dict().items()}
+            if num_heads > 1:
+                sd = _slice_mace_readout_state(
+                    sd,
+                    head_idx=hidx,
+                    num_heads=num_heads,
+                    mlp_count_irreps=mlp_count_irreps,
+                )
+            if i == len(mace_model.readouts) - 1:
+                sd = _map_mace_mlp_state_keys(sd)
+            sd = _prepare_state_for_loading(dst_readout, sd)
+            _load_state_dict_by_shape(dst_readout, sd)
     output_modules = []
     if hasattr(mace_model, "pair_repulsion_fn"):
         pair_fn = ZBLBasis()
-        pair_fn.load_state_dict(mace_model.pair_repulsion_fn.state_dict(), strict=False)
+        pair_fn.load_state_dict(
+            {k: v.detach().cpu() for k, v in mace_model.pair_repulsion_fn.state_dict().items()},
+            strict=False,
+        )
         output_modules.append(PairRepulsionEnergy(pair_fn, atomic_numbers=curator_mace.atomic_numbers))
+
+    # Build per-domain rescale/shift from MACE scale_shift and atomic energies.
+    md_rescale = MultiDomainRescaleShift(heads=[{"key": properties.energy}])
+    scale_all = torch.atleast_1d(getattr(mace_model.scale_shift, "scale", torch.tensor([1.0]))).detach().cpu()
+    shift_all = torch.atleast_1d(getattr(mace_model.scale_shift, "shift", torch.tensor([0.0]))).detach().cpu()
+    atomic_energies_all = getattr(mace_model.atomic_energies_fn, "atomic_energies", None)
+
+    def _pick_head_value(vec: torch.Tensor, idx: int) -> float:
+        v = vec
+        if v.ndim > 1:
+            v = v.reshape(-1)
+        if len(heads) > 0 and v.numel() == len(heads):
+            return float(v[idx].item())
+        return float(v.reshape(-1)[0].item())
+
+    def _atomic_energies_for_head(idx: int) -> torch.Tensor:
+        ae = atomic_energies_all
+        if ae is None:
+            return torch.zeros((len(mace_model.atomic_numbers),), dtype=torch.get_default_dtype())
+        if torch.is_tensor(ae) and ae.ndim > 1 and len(heads) > 0:
+            if ae.shape[0] == len(heads):
+                ae = ae[idx]
+            elif ae.shape[1] == len(heads):
+                ae = ae[:, idx]
+            else:
+                ae = ae[0]
+        ae_t = ae if torch.is_tensor(ae) else torch.as_tensor(ae)
+        return ae_t.detach().cpu().squeeze()
+
+    for dom, hidx in domain_to_head_idx.items():
+        ae = _atomic_energies_for_head(hidx)
+        ae_list = ae.reshape(-1).tolist() if torch.is_tensor(ae) else list(ae)
+        energy_head = HeadConfig(
+            key=properties.energy,
+            is_atomwise=True,
+            reduction="sum",
+            atomwise_key=properties.atomic_energy,
+            write_atomwise=False,
+            dim=1,
+            scale_by=_pick_head_value(scale_all, hidx),
+            shift_by=_pick_head_value(shift_all, hidx),
+            atomwise_shift=False,
+            atomwise_normalization=True,
+            per_species_shift={
+                int(z): float(e)
+                for z, e in zip(mace_model.atomic_numbers, ae_list)
+            },
+        )
+        md_rescale.domain_modules[str(dom)] = GlobalRescaleShift(heads=[energy_head])
+
     output_modules.extend(
         [
-            GlobalRescaleShift(heads=[energy_head]),
+            md_rescale,
             GradientOutput(model_outputs=['energy', 'forces'], grad_on_edge_diff=True, grad_on_positions=False),
         ]
     )
-    curator_mace.embeddings.radial_basis.basis.load_state_dict(mace_model.radial_embedding.bessel_fn.state_dict(), strict=False)
-    curator_mace.embeddings.chemical_embedding.linear.load_state_dict(mace_model.node_embedding.linear.state_dict(), strict=False)
+    curator_mace.embeddings.radial_basis.basis.load_state_dict(
+        {k: v.detach().cpu() for k, v in mace_model.radial_embedding.bessel_fn.state_dict().items()},
+        strict=False,
+    )
+    curator_mace.embeddings.chemical_embedding.linear.load_state_dict(
+        {k: v.detach().cpu() for k, v in mace_model.node_embedding.linear.state_dict().items()},
+        strict=False,
+    )
     for i in range(len(mace_model.interactions)):
         curator_mace.interactions[i].avg_num_neighbors = torch.tensor(mace_model.interactions[i].avg_num_neighbors)
-        _load_state_dict_by_shape(curator_mace.interactions[i], mace_model.interactions[i].state_dict())
-        _load_state_dict_by_shape(curator_mace.products[i], mace_model.products[i].state_dict())
+        _load_state_dict_by_shape(
+            curator_mace.interactions[i],
+            {k: v.detach().cpu() for k, v in mace_model.interactions[i].state_dict().items()},
+        )
+        _load_state_dict_by_shape(
+            curator_mace.products[i],
+            {k: v.detach().cpu() for k, v in mace_model.products[i].state_dict().items()},
+        )
     nnp = NeuralNetworkPotential(
         input_modules=input_modules,
         representation=curator_mace,
