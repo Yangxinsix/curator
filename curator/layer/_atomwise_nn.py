@@ -64,7 +64,6 @@ class AtomwiseNN(nn.Module):
         use_e3nn: bool = False,
         activation: Union[Callable, nn.Module, str, List[Callable], List[nn.Module], List[str]] = 'silu',
         heads: Optional[List[Union[HeadConfig, Dict, str]]] = None,
-        domains: Optional[List[Union[str, int]]] = None,  # optional domain-specific heads
         *args,
         **kwargs,
     ):
@@ -79,7 +78,6 @@ class AtomwiseNN(nn.Module):
         self.out_features = out_features
         self.use_e3nn = use_e3nn
         self.n_hidden_layers = n_hidden_layers
-        self.domains = [str(d) for d in domains] if domains is not None else []
 
         # Setup neuron sizes
         n_neurons = [in_features]
@@ -213,7 +211,13 @@ class MACEAtomwiseNN(AtomwiseNN):
         else:
             self.MLP_irreps = MLP_irreps
 
-        super().__init__(in_features=o3.Irreps(str(self.hidden_irreps[0])), n_hidden=self.MLP_irreps, use_e3nn=True, *args, **kwargs)
+        super().__init__(
+            in_features=o3.Irreps(str(self.hidden_irreps[0])),
+            n_hidden=self.MLP_irreps,
+            use_e3nn=True,
+            *args,
+            **kwargs,
+        )
         self.num_interactions = num_interactions
 
         self.readouts = nn.ModuleList()

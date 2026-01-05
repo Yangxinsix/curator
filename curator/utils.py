@@ -45,29 +45,32 @@ def create_model_from_mace(
     from functools import partial
 
     heads = list(getattr(mace_model, "heads", []))
-    # New semantics:
-    # - multi-head + head=None => convert all heads into domains ("0..num_heads-1")
-    # - otherwise => convert a single head into domain "0"
+    # Curator semantics:
+    # - domain == data origin
+    # MACE semantics:
+    # - head == data origin
+    # Therefore: convert MACE heads into Curator domains.
     all_heads_to_domains = (head is None and len(heads) > 1)
     if all_heads_to_domains:
         domains = [str(i) for i in range(len(heads))]
         domain_to_head_idx = {str(i): int(i) for i in range(len(heads))}
     else:
         domains = ["0"]
-        head_idx: Optional[int] = None
+        mace_head_idx: Optional[int] = None
         if len(heads) > 1:
             if isinstance(head, int):
                 if head < 0 or head >= len(heads):
                     raise ValueError(f"Head index {head} out of range for heads={heads}")
-                head_idx = int(head)
+                mace_head_idx = int(head)
             elif head is not None:
                 head_name = str(head)
                 if head_name not in heads:
                     raise ValueError(f"Head {head_name} not found in heads={heads}")
-                head_idx = heads.index(head_name)
+                mace_head_idx = heads.index(head_name)
             else:
-                head_idx = 0
-        domain_to_head_idx = {"0": int(head_idx or 0)}
+                mace_head_idx = 0
+        domain_to_head_idx = {"0": int(mace_head_idx or 0)}
+    num_mace_heads = len(heads) if len(heads) > 0 else 1
 
     interaction_map = {
         'RealAgnosticInteractionBlock': RealAgnosticInteractionBlock,
@@ -101,7 +104,9 @@ def create_model_from_mace(
                 strict=False,
             )
 
-    # Configure Curator-native multi-domain readout (no embedded MACE modules).
+    # Configure Curator-native multi-domain readout with a *single* domain (domain-agnostic).
+    # Note: Curator heads are output specs (energy/forces/etc), not related to MACE heads.
+
     readout_head = HeadConfig(
         key=properties.energy,
         is_atomwise=True,
@@ -110,7 +115,24 @@ def create_model_from_mace(
         write_atomwise=False,
         dim=1,
     )
-    readout = partial(MultiDomainMACEAtomwiseNN, domains=domains, heads=[readout_head])
+    readout = partial(
+        MultiDomainMACEAtomwiseNN,
+        domains=domains,
+        heads=[readout_head],
+        activation=torch.nn.functional.silu,  # match MACE normalize2mom(silu) behavior
+    )
+
+    # Per-head MLP size needed for remove_pt_head-style slicing.
+    try:
+        from e3nn import o3 as _o3
+        total_mlp_hidden = _o3.Irreps(getattr(mace_model.readouts[-1], "hidden_irreps", "16x0e"))
+        total_mul = int(total_mlp_hidden.count(_o3.Irrep(0, 1)))
+        per_head_mul = total_mul // num_mace_heads if (num_mace_heads > 0 and total_mul % num_mace_heads == 0) else total_mul
+        mlp_count_irreps = int(per_head_mul)
+        mlp_irreps = _o3.Irreps(f"{mlp_count_irreps}x0e")
+    except Exception:
+        mlp_count_irreps = 0
+        mlp_irreps = getattr(mace_model.readouts[-1], "hidden_irreps", None)
     curator_mace = MACE(
         cutoff=float(mace_model.r_max),
         num_interactions=len(mace_model.interactions),
@@ -119,7 +141,7 @@ def create_model_from_mace(
         hidden_irreps=mace_model.interactions[0].hidden_irreps,
         edge_sh_irreps=mace_model.spherical_harmonics.irreps_out,
         avg_num_neighbors=mace_model.interactions[0].avg_num_neighbors,
-        MLP_irreps=mace_model.readouts[-1].hidden_irreps,
+        MLP_irreps=mlp_irreps,
         num_basis=len(mace_model.radial_embedding.bessel_fn.bessel_weights),
         power=float(mace_model.radial_embedding.cutoff_fn.p),
         interaction_cls=interaction_cls,
@@ -130,20 +152,16 @@ def create_model_from_mace(
         heads=[readout_head],
     )
 
-    # Copy MACE readout weights into Curator readout modules.
+    # Copy MACE readout weights into Curator MACEAtomwiseNN modules.
+    # Each Curator domain gets a single-head equivalent of the corresponding MACE head,
+    # using the same slicing rules as mace.tools.scripts_utils.remove_pt_head.
+
     def _map_mace_mlp_state_keys(sd: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         mapped: Dict[str, torch.Tensor] = {}
         for k, v in sd.items():
             nk = k
-            # Some upstream variants store nested keys like "linear_1.linear.weight".
-            nk = nk.replace("linear_1.linear.", "0.linear.")
-            nk = nk.replace("linear_2.linear.", "1.linear.")
-            if "linear_1." in nk:
-                nk = nk.replace("linear_1.", "0.linear.")
-            if "linear_2." in nk:
-                nk = nk.replace("linear_2.", "1.linear.")
-            # Collapse accidental double nesting (e.g., "linear.linear.weight").
-            nk = nk.replace("linear.linear.", "linear.")
+            nk = nk.replace("linear_1.", "0.linear.")
+            nk = nk.replace("linear_2.", "1.linear.")
             mapped[nk] = v
         return mapped
 
@@ -164,16 +182,6 @@ def create_model_from_mace(
                 out[k] = v
         return out
 
-    num_heads = len(heads) if len(heads) > 0 else 1
-    mlp_count_irreps = 0
-    try:
-        from e3nn import o3 as _o3
-        mlp_hidden = getattr(mace_model.readouts[-1], "hidden_irreps", None)
-        if mlp_hidden is not None:
-            mlp_count_irreps = int(_o3.Irreps(mlp_hidden).dim)
-    except Exception:
-        mlp_count_irreps = 0
-
     if not hasattr(curator_mace.readout, "domain_modules"):
         raise TypeError("Curator MACE readout is not multi-domain; expected MultiDomainMACEAtomwiseNN.")
     for dom, hidx in domain_to_head_idx.items():
@@ -181,11 +189,11 @@ def create_model_from_mace(
         for i, src_readout in enumerate(mace_model.readouts):
             dst_readout = dst_domain.readouts[i]
             sd = {k: v.detach().cpu() for k, v in src_readout.state_dict().items()}
-            if num_heads > 1:
+            if num_mace_heads > 1:
                 sd = _slice_mace_readout_state(
                     sd,
                     head_idx=hidx,
-                    num_heads=num_heads,
+                    num_heads=num_mace_heads,
                     mlp_count_irreps=mlp_count_irreps,
                 )
             if i == len(mace_model.readouts) - 1:
@@ -201,19 +209,17 @@ def create_model_from_mace(
         )
         output_modules.append(PairRepulsionEnergy(pair_fn, atomic_numbers=curator_mace.atomic_numbers))
 
-    # Build per-domain rescale/shift from MACE scale_shift and atomic energies.
-    md_rescale = MultiDomainRescaleShift(heads=[{"key": properties.energy}])
+    # Build per-domain scale/shift/E0 from MACE scale_shift and atomic energies.
     scale_all = torch.atleast_1d(getattr(mace_model.scale_shift, "scale", torch.tensor([1.0]))).detach().cpu()
     shift_all = torch.atleast_1d(getattr(mace_model.scale_shift, "shift", torch.tensor([0.0]))).detach().cpu()
     atomic_energies_all = getattr(mace_model.atomic_energies_fn, "atomic_energies", None)
+    md_rescale = MultiDomainRescaleShift(heads=[{"key": properties.energy}])
 
     def _pick_head_value(vec: torch.Tensor, idx: int) -> float:
-        v = vec
-        if v.ndim > 1:
-            v = v.reshape(-1)
+        v = vec.reshape(-1)
         if len(heads) > 0 and v.numel() == len(heads):
             return float(v[idx].item())
-        return float(v.reshape(-1)[0].item())
+        return float(v[0].item())
 
     def _atomic_energies_for_head(idx: int) -> torch.Tensor:
         ae = atomic_energies_all
@@ -231,7 +237,7 @@ def create_model_from_mace(
 
     for dom, hidx in domain_to_head_idx.items():
         ae = _atomic_energies_for_head(hidx)
-        ae_list = ae.reshape(-1).tolist() if torch.is_tensor(ae) else list(ae)
+        ae_list = ae.reshape(-1).tolist()
         energy_head = HeadConfig(
             key=properties.energy,
             is_atomwise=True,
@@ -243,10 +249,7 @@ def create_model_from_mace(
             shift_by=_pick_head_value(shift_all, hidx),
             atomwise_shift=False,
             atomwise_normalization=True,
-            per_species_shift={
-                int(z): float(e)
-                for z, e in zip(mace_model.atomic_numbers, ae_list)
-            },
+            per_species_shift={int(z): float(e) for z, e in zip(mace_model.atomic_numbers, ae_list)},
         )
         md_rescale.domain_modules[str(dom)] = GlobalRescaleShift(heads=[energy_head])
 
@@ -296,10 +299,15 @@ def _slice_mace_readout_state(
 ) -> Dict[str, torch.Tensor]:
     sliced: Dict[str, torch.Tensor] = {}
     for name, param in state_dict.items():
+        # Collapse a multi-head MACE readout module down to a single head.
+        # Mirrors mace.tools.scripts_utils.remove_pt_head slicing rules.
         if "linear_1.weight" in name and mlp_count_irreps:
             sliced[name] = param.reshape(-1, num_heads, mlp_count_irreps)[:, head_idx, :].flatten()
         elif "linear_2.weight" in name:
-            sliced[name] = param.reshape(num_heads, -1, num_heads)[head_idx, :, head_idx].flatten() / (num_heads ** 0.5)
+            sliced[name] = (
+                param.reshape(num_heads, -1, num_heads)[head_idx, :, head_idx].flatten()
+                / (num_heads ** 0.5)
+            )
         elif "linear.weight" in name:
             sliced[name] = param.reshape(-1, num_heads)[:, head_idx].flatten()
         elif "output_mask" in name and param.numel() == num_heads:
