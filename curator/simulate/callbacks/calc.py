@@ -7,6 +7,7 @@ from ..core.callbacks import Callback
 from ..core.context import SimContext
 from ..core.calculator import MLCalculator
 from curator.utils import load_models
+from ase import Atoms
 import torch.nn as nn
 
 class CalculatorAssign(Callback):
@@ -49,14 +50,18 @@ class CalculatorAssign(Callback):
         self.log = logger or logging.getLogger(__name__)
         self.device = device
 
-    def _make_calc(self) -> Calculator:
+    def _make_calc(self, atoms: Optional[Atoms] = None) -> Calculator:
         # Already a calculator
         if isinstance(self._calculator, Calculator):
             return self._calculator
 
         # Factory returning a calculator
         if callable(self._calculator) and not isinstance(self._calculator, (str, bytes)):
-            return self._calculator()
+            try:
+                return self._calculator()
+            except Exception as e:
+                self.log.warning(f"Calculator factory failed: {e}")
+                return self._calculator(atoms=atoms)
 
         # Model-like: path(s) or module(s)
         model_like: Any = self._calculator
@@ -69,7 +74,7 @@ class CalculatorAssign(Callback):
             for single in atoms:
                 self._assign_and_warmup(single)
             return
-        atoms.calc = self._make_calc()
+        atoms.calc = self._make_calc(atoms)
         if self.warmup:
             try:
                 _ = atoms.get_potential_energy()

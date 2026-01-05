@@ -7,7 +7,16 @@ simulator:
     temperature_K: 300
   callbacks:
   - _target_: curator.simulate.callbacks.calc.CalculatorAssign
-    calculator: ${model_path}
+    calculator:
+      _target_: ase.calculators.plumed.Plumed
+      _partial_: true
+      calc:
+        _target_: curator.simulate.core.calculator.MLCalculator
+        model: ${model_path}
+        device: ${device}
+      input: null
+      timestep: ${simulator.engine.timestep}
+      kT: ${simulator.engine.temperature_K}
     warmup: true
     require_forces: false
     apply_to_neb_images: false
@@ -34,11 +43,11 @@ simulator:
   start_index: null
   run_kwargs:
     steps: 1000
-cfg: ase.yaml
+cfg: /home/xinyang/curator/test/ase_md_defaults/config.yaml
 seed: 1234
 run_path: /home/xinyang/curator/test/ase_md_defaults
 model_path: /home/xinyang/curator/test/best_model.ckpt
-dataset: /home/xinyang/curator/test/LiFePO4.traj
-device: cuda
+dataset: /home/xinyang/curator/test/torchsim_uncertainty/dataset_small.traj
+device: cpu
 deploy: null
 calculator: ${model_path}
