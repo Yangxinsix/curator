@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# model files
+*.pt
+*.pth
+*.ckpt
+*.pkl
+
+# data files
+*.h5
+*.hdf5
+*.npy
+*.npz
+
+# training logs and outputs
+runs/
+outputs/
+wandb/
+lightning_logs/
+mlruns/
+*.log
+
+# Jupyter
+.ipynb_checkpoints/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
+
+# temporary files
+*.tmp
+*.bak
