@@ -87,6 +87,7 @@ class TorchSimEngine(BaseEngine):
 
             # Expose state to callbacks
             self.ctx.state["sim_state"] = state
+            self.ctx.state["model_outputs"] = getattr(self.model, "last_outputs", None) or {}
             try:
                 # Optional: keep ctx.atoms in sync for legacy callbacks
                 atoms = ts.io.state_to_atoms(state)

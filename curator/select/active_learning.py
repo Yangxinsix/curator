@@ -16,82 +16,6 @@ from curator.layer._feature import FeatureExtractor, RandomProjections
 
 logger = logging.getLogger(__name__)
 
-class FeatureExtractor(nn.Module):
-    """Extract features from neural networks"""
-
-    def __init__(self, model: nn.Module, target_layer: str = 'readout_mlp',) -> None:
-        """Extract features from neural networks
-
-        Args:
-            model (nn.Module): pytorch model
-            target_layer (str): name of target layer to extract features from
-        """
-        super().__init__()
-        self.model = model
-        self.target_layer = target_layer
-        self._features = []
-        self._grads = []
-        self.hooks = []
-        layer = find_layer_by_name_recursive(self.model, self.target_layer)
-        assert layer is not None, f"Target layer {self.target_layer} is not found!"
-
-        #  No need to specify MACE now because we have a better mechanism for accessing readout_mlp!
-        # representation = getattr(self.model, "representation", None)
-        # if representation is not None and representation.__class__.__name__ == "MACE":
-        #     layer = layer[-1]
-
-        for child in layer.children():
-            if isinstance(child, (nn.Linear, o3.Linear)):
-                self.hooks.append(child.register_forward_pre_hook(self.save_feats_hook))
-                self.hooks.append(child.register_backward_hook(self.save_grads_hook))
-
-    def save_feats_hook(self, _, in_feat):
-        new_feat = torch.cat((in_feat[0].detach().clone(), torch.ones_like(in_feat[0][:, 0:1])), dim=-1)
-        self._features.append(new_feat)
-
-    def save_grads_hook(self, _, __, grad_output):
-        self._grads.append(grad_output[0].detach().clone())
-
-    def unhook(self):
-        for hook in self.hooks:
-            hook.remove()
-
-    def forward(self, model_inputs: Dict[str, torch.Tensor]):
-        self._features = []
-        self._grads = []
-        _ = self.model(model_inputs)
-        return self._features, self._grads[::-1]
-    
-class RandomProjections:
-    """Store parameters of random projections"""
-    def __init__(
-            self, 
-            model: nn.Module, 
-            num_features: int,
-            dtype = torch.get_default_dtype(),
-            target_layer: str = 'readout_mlp',
-        ):
-        self.num_features = num_features
-        self.in_feat_proj = []
-        self.out_grad_proj = []
-        device = next(model.parameters()).device
-        if self.num_features > 0:
-            layer = find_layer_by_name_recursive(model, target_layer)
-            representation = getattr(model, "representation", None)
-            if representation is not None and representation.__class__.__name__ == "MACE":
-                layer = layer[-1]
-            # Input feature projection matrices (in_features + 1 for bias term), output gradient projection matrices
-            for l in layer.children():
-                if isinstance(l, nn.Linear):
-                    self.in_feat_proj.append(torch.randn(l.in_features + 1, self.num_features, dtype=dtype, device=device))
-                    self.out_grad_proj.append(torch.randn(l.out_features, self.num_features, dtype=dtype, device=device))
-                elif isinstance(l, o3.Linear):
-                    self.in_feat_proj.append(torch.randn(l.irreps_in.dim + 1, self.num_features, dtype=dtype, device=device))
-                    self.out_grad_proj.append(torch.randn(l.irreps_out.dim, self.num_features, dtype=dtype, device=device))
-            
-    def __repr__(self):
-        return f'{self.__class__.__name__}(num_features={self.num_features})'
-    
 class FeatureStatistics:
     """Generate features from trained models and datasets."""
 
@@ -547,135 +471,6 @@ class DistanceMetrics:
         image_idx = torch.arange(num_atoms.shape[0], device=device)
         return torch.repeat_interleave(image_idx, num_atoms)
 
-class DistanceMetrics:
-    """Compute simple distance metrics from cached feature statistics."""
-
-    def __init__(
-        self,
-        train_stats: FeatureStatistics,
-        dataset_stats: Optional[FeatureStatistics] = None,
-        regularization: float = 1e-6,
-    ) -> None:
-        self.train_stats = train_stats
-        self.dataset_stats = dataset_stats
-        self.regularization = regularization
-        self._mean_cache: Dict[str, torch.Tensor] = {}
-        self._precision_cache: Dict[str, torch.Tensor] = {}
-
-    def get_mahalanobis_distance(
-        self,
-        stats: Optional[FeatureStatistics] = None,
-        kernel: Optional[str] = None,
-        local: bool = False,
-        reduction: Optional[str] = None,
-    ) -> torch.Tensor:
-        kernel = kernel or self._default_kernel(local)
-        stats = self._resolve_stats(stats)
-        features = self._collapse_models(stats.get_features(kernel=kernel))
-        mean = self.get_feature_mean(kernel)
-        precision = self.get_feature_precision(kernel)
-        diff = features - mean
-        dist_sq = torch.einsum('bi,ij,bj->b', diff, precision, diff)
-        distances = torch.sqrt(torch.clamp(dist_sq, min=0.0))
-        return self._reduce(distances, stats, local, reduction)
-
-    def get_euclidean_distance(
-        self,
-        stats: Optional[FeatureStatistics] = None,
-        kernel: Optional[str] = None,
-        local: bool = False,
-        reduction: Optional[str] = None,
-    ) -> torch.Tensor:
-        kernel = kernel or self._default_kernel(local)
-        stats = self._resolve_stats(stats)
-        features = self._collapse_models(stats.get_features(kernel=kernel))
-        mean = self.get_feature_mean(kernel)
-        diff = features - mean
-        distances = torch.sqrt(torch.clamp(torch.sum(diff * diff, dim=-1), min=0.0))
-        return self._reduce(distances, stats, local, reduction)
-
-    def get_cosine_distance(
-        self,
-        stats: Optional[FeatureStatistics] = None,
-        kernel: Optional[str] = None,
-        local: bool = False,
-        reduction: Optional[str] = None,
-    ) -> torch.Tensor:
-        kernel = kernel or self._default_kernel(local)
-        stats = self._resolve_stats(stats)
-        features = self._collapse_models(stats.get_features(kernel=kernel))
-        mean = self.get_feature_mean(kernel)
-        norm_features = torch.linalg.norm(features, dim=-1)
-        norm_mean = torch.linalg.norm(mean)
-        similarity = torch.einsum('bi,i->b', features, mean) / (norm_features * norm_mean + 1e-12)
-        distances = 1 - similarity
-        return self._reduce(distances, stats, local, reduction)
-
-    def set_dataset_stats(self, stats: FeatureStatistics) -> None:
-        """Update dataset statistics without rebuilding the helper."""
-        self.dataset_stats = stats
-
-    def get_feature_mean(self, kernel: str = 'gnn') -> torch.Tensor:
-        if kernel not in self._mean_cache:
-            feats = self._collapse_models(self.train_stats.get_features(kernel=kernel))
-            self._mean_cache[kernel] = torch.mean(feats, dim=0)
-        return self._mean_cache[kernel]
-
-    def get_feature_precision(self, kernel: str = 'gnn') -> torch.Tensor:
-        if kernel not in self._precision_cache:
-            feats = self._collapse_models(self.train_stats.get_features(kernel=kernel))
-            mean = self.get_feature_mean(kernel)
-            centered = feats - mean
-            denom = max(centered.shape[0] - 1, 1)
-            covariance = centered.T @ centered / denom
-            eye = torch.eye(covariance.shape[0], device=covariance.device, dtype=covariance.dtype)
-            covariance = covariance + self.regularization * eye
-            self._precision_cache[kernel] = torch.linalg.inv(covariance)
-        return self._precision_cache[kernel]
-
-    def _resolve_stats(self, stats: Optional[FeatureStatistics]) -> FeatureStatistics:
-        if stats is not None:
-            return stats
-        if self.dataset_stats is None:
-            raise ValueError("Dataset statistics are not provided.")
-        return self.dataset_stats
-
-    @staticmethod
-    def _collapse_models(features: torch.Tensor) -> torch.Tensor:
-        if features.dim() != 3:
-            raise ValueError("Expected features tensor with shape (n_models, n_items, n_features).")
-        return features.mean(dim=0)
-
-    @staticmethod
-    def _default_kernel(local: bool) -> str:
-        return 'local_gnn' if local else 'gnn'
-
-    def _reduce(
-        self,
-        distances: torch.Tensor,
-        stats: FeatureStatistics,
-        local: bool,
-        reduction: Optional[str],
-    ) -> torch.Tensor:
-        if not local or reduction is None:
-            return distances
-        if reduction not in {'mean', 'sum', 'max'}:
-            raise ValueError(f"Unsupported reduction '{reduction}'.")
-        image_idx = self._get_image_idx(stats)
-        if reduction == 'mean':
-            return scatter_mean(distances, image_idx, dim=0)
-        if reduction == 'sum':
-            return scatter_add(distances, image_idx, dim=0)
-        max_result = scatter_max(distances, image_idx, dim=0)
-        return max_result[0] if isinstance(max_result, tuple) else max_result
-
-    @staticmethod
-    def _get_image_idx(stats: FeatureStatistics) -> torch.Tensor:
-        num_atoms = stats.get_num_atoms()
-        device = num_atoms.device
-        image_idx = torch.arange(num_atoms.shape[0], device=device)
-        return torch.repeat_interleave(image_idx, num_atoms)
-
 class GeneralActiveLearning:
     """Provides methods for selecting batches during active learning.
 
@@ -724,10 +519,10 @@ class GeneralActiveLearning:
         
         # pool-based selection or pool + train based selection
         if datasets.get('train'):
-            matrix = self._get_kernel_matrix(stats['pool'], stats['train'])
+            matrix, num_atoms = self._get_kernel_matrix(stats['pool'], stats['train'])
             n_train = len(datasets['train'])
         else:
-            matrix = self._get_kernel_matrix(stats['pool'])
+            matrix, num_atoms = self._get_kernel_matrix(stats['pool'])
             n_train = 0
         
         if self.selection == 'max_dist_greedy':
@@ -739,6 +534,8 @@ class GeneralActiveLearning:
         elif self.selection == 'lcmd_greedy':
             idxs = lcmd_greedy(matrix=matrix, batch_size=al_batch_size, n_train=n_train)
         elif self.selection == 'max_det_greedy_local':
+            if num_atoms is None:
+                raise RuntimeError("Local selection requires per-structure num_atoms metadata.")
             idxs = max_det_greedy_local(matrix=matrix, batch_size=al_batch_size, num_atoms=num_atoms)
         elif self.selection == False:
             idxs = torch.tensor([0])
@@ -751,15 +548,19 @@ class GeneralActiveLearning:
 
         return idxs.cpu().tolist()
 
-    def _get_kernel_matrix(self, pool_stats: FeatureStatistics, train_stats: Optional[FeatureStatistics]=None) -> KernelMatrix:
+    def _get_kernel_matrix(
+        self,
+        pool_stats: FeatureStatistics,
+        train_stats: Optional[FeatureStatistics]=None,
+    ) -> Tuple[KernelMatrix, Optional[torch.Tensor]]:
         stats_list = [pool_stats] if train_stats == None else [pool_stats, train_stats]
         
         if self.kernel == 'full-g':
-            return FeatureKernelMatrix(torch.cat([s.get_features(kernel='full-gradient') for s in stats_list], dim=1))
+            return FeatureKernelMatrix(torch.cat([s.get_features(kernel='full-gradient') for s in stats_list], dim=1)), None
         elif self.kernel == 'll-g':
-            return FeatureKernelMatrix(torch.cat([s.get_features(kernel='ll-gradient') for s in stats_list], dim=1))
+            return FeatureKernelMatrix(torch.cat([s.get_features(kernel='ll-gradient') for s in stats_list], dim=1)), None
         elif self.kernel == 'gnn':
-            return FeatureKernelMatrix(torch.cat([s.get_features(kernel='gnn') for s in stats_list], dim=1))
+            return FeatureKernelMatrix(torch.cat([s.get_features(kernel='gnn') for s in stats_list], dim=1)), None
         elif self.kernel == 'local_full-g':
             matrix = FeatureKernelMatrix(torch.cat([s.get_features(kernel='local_full-g') for s in stats_list], dim=1))
             num_atoms = torch.cat([s.get_num_atoms() for s in stats_list])
@@ -773,20 +574,24 @@ class GeneralActiveLearning:
             num_atoms = torch.cat([s.get_num_atoms() for s in stats_list])
             return matrix, num_atoms 
         elif self.kernel == 'full-F_inv':
-            return FeatureCovKernelMatrix(torch.cat([s.get_features(kernel='full-gradient') for s in stats_list], dim=1),
-                                          train_stats.get_F_reg_inv())
+            return FeatureCovKernelMatrix(
+                torch.cat([s.get_features(kernel='full-gradient') for s in stats_list], dim=1),
+                train_stats.get_F_reg_inv(),
+            ), None
         elif self.kernel == 'll-F_inv':
-            return FeatureCovKernelMatrix(torch.cat([s.get_features(kernel='ll-gradient') for s in stats_list], dim=1),
-                                          train_stats.get_F_reg_inv())
+            return FeatureCovKernelMatrix(
+                torch.cat([s.get_features(kernel='ll-gradient') for s in stats_list], dim=1),
+                train_stats.get_F_reg_inv(),
+            ), None
         elif self.kernel == 'qbc-energy':
-            return DiagonalKernelMatrix(pool_stats.get_ens_stats()['Energy-Var'])
+            return DiagonalKernelMatrix(pool_stats.get_ens_stats()['Energy-Var']), None
         elif self.kernel == 'qbc-force':
-            return DiagonalKernelMatrix(pool_stats.get_ens_stats()['Forces-Var'])
+            return DiagonalKernelMatrix(pool_stats.get_ens_stats()['Forces-Var']), None
         elif self.kernel == 'ae-energy':
-            return DiagonalKernelMatrix(pool_stats.get_ens_stats()['Energy-AE'])
+            return DiagonalKernelMatrix(pool_stats.get_ens_stats()['Energy-AE']), None
         elif self.kernel == 'ae-force':
-            return DiagonalKernelMatrix(pool_stats.get_ens_stats()['Forces-AE'])
+            return DiagonalKernelMatrix(pool_stats.get_ens_stats()['Forces-AE']), None
         elif self.kernel == 'random':
-            return DiagonalKernelMatrix(torch.rand([sum([len(s.dataset) for s in stats_list])]))
+            return DiagonalKernelMatrix(torch.rand([sum([len(s.dataset) for s in stats_list])])), None
         else:
             raise RuntimeError(f"Unknown active learning kernel {self.kernel}!")

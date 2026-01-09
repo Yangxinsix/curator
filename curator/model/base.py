@@ -124,8 +124,11 @@ class NeuralNetworkPotential(nn.Module):
         self.collect_outputs()
         self.register_callbacks()
         
-    def forward(self, data: properties.Type) -> properties.Type:
+    def forward(self, data: properties.Type, force_domain: Optional[Union[str, int]] = None) -> properties.Type:
         data = data.copy()
+        if force_domain is not None:
+            dom = torch.tensor([int(force_domain)], dtype=torch.long, device=data[properties.n_atoms].device)
+            data[properties.domain] = dom
         for m in self.input_modules:
             data = m(data)
             

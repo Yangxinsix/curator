@@ -10,6 +10,10 @@ from typing import Dict, Optional, Callable, List, Union, Sequence
 import itertools
 import logging
 from .utils import find_layer_by_name_recursive
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - optional dependency
+    tqdm = None
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +297,13 @@ class FeatureCalculator(nn.Module):
         from curator.data import collate_atomsdata
         from torch.utils.data import DataLoader
 
+        def _move_to_device(value, target_device):
+            if torch.is_tensor(value):
+                return value.to(target_device)
+            if isinstance(value, dict):
+                return {k: _move_to_device(v, target_device) for k, v in value.items()}
+            return value
+
         loader_kwargs = dict(
             batch_size=self.max_dataset_size if self.max_dataset_size is not None else 1,
             shuffle=False,
@@ -303,9 +314,13 @@ class FeatureCalculator(nn.Module):
 
         try:
             self._skip_forward = True  # prevent recursive call when repr_callback is the parent model
-            for i, batch in enumerate(iterator):
-                logger.info(f"Processing batch {i+1}/{len(iterator)}")
-                batch = {k: v.to(device) for k, v in batch.items()}
+            progress = iterator
+            if tqdm is not None:
+                progress = tqdm(iterator, total=len(iterator), desc="Computing covariance features")
+            for i, batch in enumerate(progress):
+                if tqdm is None:
+                    logger.info(f"Processing batch {i+1}/{len(iterator)}")
+                batch = {k: _move_to_device(v, device) for k, v in batch.items()}
                 feats = self._compute_feature(batch, predict=True)[properties.feature].to('cpu')  # use cpu to save memory
                 features.append(feats)
                 # Handle image_idx appropriately for global vs local features
@@ -325,7 +340,11 @@ class FeatureCalculator(nn.Module):
                 else:
                     # Global: One entry per image (batch)
                     # image_idx should be a tensor of image indices, one per structure in batch
-                    n_images = batch[properties.n_atoms].shape[0] if torch.is_tensor(batch[properties.n_atoms]) else len(batch[properties.n_atoms])
+                    n_images = (
+                        batch[properties.n_atoms].shape[0]
+                        if torch.is_tensor(batch[properties.n_atoms])
+                        else len(batch[properties.n_atoms])
+                    )
                     batch_img_idx = torch.arange(i * n_images, i * n_images + n_images, dtype=torch.long)
                     image_idx.append(batch_img_idx)
         finally:

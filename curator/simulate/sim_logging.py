@@ -67,7 +67,7 @@ def log_simulation_summary(logger: logging.Logger, config: DictConfig) -> None:
     ]
     logger.debug("Simulation setup:")
     for k, v in summary:
-        logger.info("  %-10s: %s", k, v)
+        logger.debug("  %-10s: %s", k, v)
 
     if eng_cfg is not None:
         extra = []
@@ -75,5 +75,5 @@ def log_simulation_summary(logger: logging.Logger, config: DictConfig) -> None:
             if key in eng_cfg:
                 extra.append(f"{key}={eng_cfg.get(key)}")
         if extra:
-            logger.info("  Engine params: %s", ", ".join(extra))
-    logger.info("  Callbacks   : %s", cb_names)
+            logger.debug("  Engine params: %s", ", ".join(extra))
+    logger.debug("  Callbacks   : %s", cb_names)

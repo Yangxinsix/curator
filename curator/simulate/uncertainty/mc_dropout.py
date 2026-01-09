@@ -35,6 +35,7 @@ class MCDropoutUncertainty(BaseUncertainty):
     def __call__(self, atoms: Atoms) -> Dict[str, Union[float, bool, None]]:
         import numpy as np
 
+        _ = self._ensure_calculator(atoms)
         samples = [self.predictor(atoms) for _ in range(self.n)]
         arr = np.asarray(samples, dtype=float)
         values = {

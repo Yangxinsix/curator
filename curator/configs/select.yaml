@@ -8,6 +8,7 @@ dataset: null
 split_file: null
 train_set: null
 pool_set: null # This can also be a list
+data_url: null
 batch_size: 100
 kernel: full-g
 method: lcmd_greedy

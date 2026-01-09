@@ -7,6 +7,7 @@ import ase
 import numpy as np
 import torch
 from typing import Optional, List, Union
+from curator.interface.plumed import Plumed
 
 class MLCalculator(Calculator):
     """ ML model calulator used for ASE applications """
@@ -20,6 +21,7 @@ class MLCalculator(Calculator):
         energy_scale: float = 1.0,
         forces_scale: float = 1.0,
         stress_scale: float = 1.0,
+        plumed_bias: Optional[Plumed] = None,
         device=None,
         **kwargs
     ) -> None:
@@ -46,6 +48,7 @@ class MLCalculator(Calculator):
         self.energy_scale = energy_scale
         self.forces_scale = forces_scale
         self.stress_scale = stress_scale
+        self.plumed_bias = plumed_bias
 
     def _convert_to_cpu(self, tensor):
         tensor = tensor.detach().cpu()
@@ -108,6 +111,21 @@ class MLCalculator(Calculator):
             self.results["forces"] *= self.forces_scale
         if "stress" in self.results:
             self.results["stress"] *= self.stress_scale
+
+        if self.plumed_bias is not None:
+            self._apply_plumed_bias()
+
+    def _apply_plumed_bias(self) -> None:
+        if "energy" not in self.results or "forces" not in self.results:
+            return
+        energy = float(self.results["energy"])
+        forces = np.asarray(self.results["forces"])
+        try:
+            e_new, f_new = self.plumed_bias.apply_atoms(self.atoms, energy, forces)
+        except Exception:
+            return
+        self.results["energy"] = float(np.asarray(e_new).reshape(-1)[0])
+        self.results["forces"] = np.asarray(f_new)
 
 class EnsembleCalculator(Calculator):
     """ Ensemble calulator for ML models used for ASE applications """

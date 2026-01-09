@@ -54,6 +54,11 @@ class CalculatorAssign(Callback):
         if isinstance(self._calculator, Calculator):
             return self._calculator
 
+        # Model instance
+        if isinstance(self._calculator, nn.Module):
+            self._calculator = MLCalculator(model=self._calculator, device=self.device)
+            return self._calculator
+
         # Factory returning a calculator
         if callable(self._calculator) and not isinstance(self._calculator, (str, bytes)):
             return self._calculator()
@@ -76,8 +81,30 @@ class CalculatorAssign(Callback):
 
     def on_sim_start(self, ctx: SimContext):
         if ctx.atoms is not None:
+            self._maybe_reuse_torchsim_model(ctx)
             self._assign_and_warmup(ctx.atoms)
             self.log.debug("Calcator assigned to atoms.")
+
+    def _maybe_reuse_torchsim_model(self, ctx: SimContext) -> None:
+        if self._calculator is None:
+            return
+        try:
+            from curator.simulate.engines.torchsim import TorchSimEngine
+            from curator.interface.torchsim import CuratorTorchSimAdapter
+        except Exception:
+            return
+        engine = getattr(ctx, "engine", None)
+        if not isinstance(engine, TorchSimEngine):
+            return
+        adapter = getattr(engine, "model", None)
+        if not isinstance(adapter, CuratorTorchSimAdapter):
+            return
+        model = getattr(adapter, "model", None)
+        if model is None:
+            return
+        if isinstance(self._calculator, (str, bytes, nn.Module, list, tuple)):
+            self._calculator = model
+            self.log.debug("Reusing TorchSim adapter model for calculator assignment.")
 
     def on_engine_setup(self, ctx: SimContext):
         if self.apply_to_neb_images and "neb_images" in ctx.state:

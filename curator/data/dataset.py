@@ -92,8 +92,7 @@ class BambooDataset(torch.utils.data.Dataset):
     def to_ase_atoms(self, index):
         sample = self.__getitem__(index)
         if isinstance(sample, AtomsData):
-            atoms_dict = dict(sample.atoms)
-            atoms_dict.update(sample.targets)
+            atoms_dict = sample.to_dict()
         else:
             atoms_dict = sample
         atoms = Atoms(

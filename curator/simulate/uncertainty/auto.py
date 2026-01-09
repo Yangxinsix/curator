@@ -6,12 +6,12 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator
 
 from curator.model import EnsembleModel
-from curator.simulate.core.calculator import MLCalculator
 from .mahalanobis import MahalanobisUncertainty
 from .ensemble import EnsembleUncertainty
+from .base import BaseUncertainty
 
 
-class AutoUncertainty:
+class AutoUncertainty(BaseUncertainty):
     """
     Pick Mahalanobis for single-model runs (when dataset is provided), otherwise Ensemble uncertainty.
     - maha_kwargs: forwarded to MahalanobisUncertainty
@@ -26,8 +26,14 @@ class AutoUncertainty:
         ensemble_kwargs: Optional[Dict[str, Any]] = None,
         device: Optional[Any] = None,
     ) -> None:
-        self.device = device
-        self.calculator = self._resolve_calculator(calculator)
+        super().__init__(
+            uncertainty_keys=(),
+            calculator=calculator,
+            low_threshold=None,
+            high_threshold=None,
+            threshold_key=None,
+            device=device,
+        )
         self.dataset = dataset
         self.maha_kwargs = dict(maha_kwargs or {})
         if self.dataset is not None and "dataset" not in self.maha_kwargs:
@@ -37,37 +43,48 @@ class AutoUncertainty:
 
         self.ensemble_kwargs = dict(ensemble_kwargs or {})
 
-        self._backend = self._select_backend()
-        self.threshold_key = getattr(self._backend, "threshold_key", None) if self._backend else None
-        self.uncertainty_keys = getattr(self._backend, "uncertainty_keys", ()) if self._backend else ()
-        self.device = device
+        self._backend = None
 
     def _select_backend(self):
-        model = getattr(self.calculator, "model", None)
+        if self.calc is None:
+            return None
+        model = getattr(self.calc, "model", None)
         is_ensemble = isinstance(model, EnsembleModel)
 
         if not is_ensemble and self.dataset is not None:
-            return MahalanobisUncertainty(calculator=self.calculator, **self.maha_kwargs)
+            return MahalanobisUncertainty(calculator=self.calc, **self.maha_kwargs)
 
         if is_ensemble:
-            return EnsembleUncertainty(calculator=self.calculator, **self.ensemble_kwargs)
+            return EnsembleUncertainty(calculator=self.calc, **self.ensemble_kwargs)
 
         return None
 
+    def attach_to_model(self, model):
+        is_ensemble = isinstance(model, EnsembleModel)
+        if not is_ensemble and self.dataset is not None:
+            self._backend = MahalanobisUncertainty(calculator=None, **self.maha_kwargs)
+        elif is_ensemble:
+            self._backend = EnsembleUncertainty(calculator=None, **self.ensemble_kwargs)
+        else:
+            self._backend = None
+            return
+        if hasattr(self._backend, "attach_to_model"):
+            self._backend.attach_to_model(model)
+        self.threshold_key = getattr(self._backend, "threshold_key", None)
+        self.uncertainty_keys = getattr(self._backend, "uncertainty_keys", ())
+
     def __call__(self, atoms: Atoms):
         if self._backend is None:
-            return {}
+            calc = self._ensure_calculator(atoms)
+            if calc is None:
+                return {}
+            self._backend = self._select_backend()
+            if self._backend is None:
+                return {}
+            self.threshold_key = getattr(self._backend, "threshold_key", None)
+            self.uncertainty_keys = getattr(self._backend, "uncertainty_keys", ())
         return self._backend(atoms)
 
-    def _resolve_calculator(self, calc_like: Any) -> Calculator:
-        # Already a calculator
-        if isinstance(calc_like, Calculator):
-            return calc_like
-        # Factory returning calculator
-        if callable(calc_like) and not isinstance(calc_like, (str, bytes)):
-            made = calc_like()
-            if not isinstance(made, Calculator):
-                raise TypeError(f"Calculator factory must return Calculator, got {type(made)}")
-            return made
-        # Model-like (path/paths/module/list)
-        return MLCalculator(model=calc_like, device=self.device)
+    @property
+    def calculator(self) -> Optional[Calculator]:
+        return self.calc

@@ -12,6 +12,7 @@ from pathlib import Path, PosixPath
 from typing import Any, List, Optional, Tuple, Union, Dict
 import numpy as np
 import torch.serialization as torch_serialization
+import copy
 
 from ase.data import chemical_symbols
 import torch, re
@@ -133,10 +134,17 @@ def create_model_from_mace(
     except Exception:
         mlp_count_irreps = 0
         mlp_irreps = getattr(mace_model.readouts[-1], "hidden_irreps", None)
+    # Extract correlation values from each product layer
+    # Each product has one or more contractions, we take the first one's correlation
+    correlation_list = [
+        prod.symmetric_contractions.contractions[0].correlation 
+        for prod in mace_model.products
+    ]
+    
     curator_mace = MACE(
         cutoff=float(mace_model.r_max),
         num_interactions=len(mace_model.interactions),
-        correlation=[contraction.correlation for contraction in mace_model.products[0].symmetric_contractions.contractions],
+        correlation=correlation_list,
         species=[chemical_symbols[i] for i in mace_model.atomic_numbers],
         hidden_irreps=mace_model.interactions[0].hidden_irreps,
         edge_sh_irreps=mace_model.spherical_harmonics.irreps_out,
@@ -657,6 +665,153 @@ def load_models(
             raise TypeError("List elements must be all nn.Module or all str/Path.")
     
     return models
+
+def copy_domain_modules(model: torch.nn.Module, source_domain, target_domains=None, logger=None) -> int:
+    """Copy parameters from source domain module into other domain modules."""
+    if source_domain is None:
+        return 0
+    src = str(source_domain)
+    targets = None
+    if target_domains is not None:
+        targets = [str(d) for d in target_domains]
+    copied = 0
+    for module in model.modules():
+        domain_modules = getattr(module, "domain_modules", None)
+        if domain_modules is None or not hasattr(domain_modules, "items"):
+            continue
+        if src not in domain_modules:
+            continue
+        src_mod = domain_modules[src]
+        if targets is None:
+            domain_targets = [k for k in domain_modules.keys() if k != src]
+        else:
+            domain_targets = [k for k in targets if k != src and k in domain_modules]
+        for dom in domain_targets:
+            try:
+                domain_modules[dom].load_state_dict(src_mod.state_dict(), strict=False)
+                copied += 1
+                if logger:
+                    logger.debug("Copied domain module %s -> %s in %s", src, dom, module.__class__.__name__)
+            except Exception as exc:
+                if logger:
+                    logger.warning(
+                        "Failed to copy domain module %s -> %s in %s: %s",
+                        src,
+                        dom,
+                        module.__class__.__name__,
+                        exc,
+                    )
+    return copied
+
+def update_model_domain_config(
+    model_cfg: DictConfig,
+    domain_mode: str,
+    new_domains,
+    logger=None,
+) -> Optional[List[str]]:
+    """Update model.representation.readout.domains based on domain_mode."""
+    if model_cfg is None or domain_mode is None or new_domains is None:
+        return None
+    try:
+        rep_cfg = model_cfg.representation
+    except Exception:
+        if logger:
+            logger.warning("Model config missing representation; cannot set domains.")
+        return None
+    if rep_cfg is None or not hasattr(rep_cfg, "readout"):
+        if logger:
+            logger.warning("Model config missing representation.readout; cannot set domains.")
+        return None
+    domains = [str(d) for d in ensure_list(new_domains)]
+    if not domains:
+        return None
+    readout_cfg = rep_cfg.readout
+    existing = []
+    if hasattr(readout_cfg, "get"):
+        existing = readout_cfg.get("domains", []) or []
+    elif hasattr(readout_cfg, "domains"):
+        existing = readout_cfg.domains or []
+    existing = [str(d) for d in ensure_list(existing)] if existing else []
+    if domain_mode == "extend":
+        merged = existing[:]
+        for dom in domains:
+            if dom not in merged:
+                merged.append(dom)
+        domains = merged
+    elif domain_mode != "replace":
+        if logger:
+            logger.warning("Unknown domain_mode=%s; expected 'extend' or 'replace'.", domain_mode)
+        return None
+    with open_dict(rep_cfg):
+        rep_cfg.readout.domains = domains
+    if logger:
+        logger.debug("Set readout domains to %s (mode=%s).", domains, domain_mode)
+    return domains
+
+def update_model_domains(
+    model: torch.nn.Module,
+    new_domains,
+    mode: str = "extend",
+    template_domain: str = "0",
+    init_strategy: str = "random",
+    logger=None,
+) -> int:
+    """Extend or replace domain_modules in-place for a model."""
+    domains = [str(d) for d in ensure_list(new_domains or [])]
+    if not domains:
+        return 0
+    if mode not in ("extend", "replace"):
+        if logger:
+            logger.warning("Unknown mode=%s; expected 'extend' or 'replace'.", mode)
+        return 0
+    if init_strategy not in ("random", "copy"):
+        if logger:
+            logger.warning("Unknown init_strategy=%s; expected 'random' or 'copy'.", init_strategy)
+        init_strategy = "random"
+
+    def _reset_params(mod: torch.nn.Module) -> None:
+        for sub in mod.modules():
+            reset = getattr(sub, "reset_parameters", None)
+            if callable(reset):
+                reset()
+
+    updated = 0
+    for module in model.modules():
+        domain_modules = getattr(module, "domain_modules", None)
+        if domain_modules is None or not hasattr(domain_modules, "items"):
+            continue
+        template_key = str(template_domain)
+        template_mod = None
+        if template_key in domain_modules:
+            template_mod = domain_modules[template_key]
+        elif len(domain_modules) > 0:
+            template_key, template_mod = next(iter(domain_modules.items()))
+        if mode == "replace":
+            for k in list(domain_modules.keys()):
+                if k not in domains:
+                    del domain_modules[k]
+        for dom in domains:
+            if dom in domain_modules:
+                continue
+            if template_mod is None:
+                if logger:
+                    logger.warning("No template domain found for module %s; skipping %s.", module.__class__.__name__, dom)
+                continue
+            new_mod = copy.deepcopy(template_mod)
+            if init_strategy == "random":
+                _reset_params(new_mod)
+            domain_modules[dom] = new_mod
+            updated += 1
+        if hasattr(module, "domains"):
+            if mode == "replace":
+                module.domains = domains[:]
+            else:
+                existing = [str(d) for d in (getattr(module, "domains") or [])]
+                for dom in domains:
+                    if dom not in existing:
+                        existing.append(dom)
+                module.domains = existing
+    return updated
 
 def ensure_list(value: Any):
     """Convert dictionary-like Hydra nodes to list values."""
@@ -1673,7 +1828,8 @@ def update_model(model):
     import warnings
     from functools import partial
     from curator.layer import MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
-    from curator.layer._rescale import MultiDomainRescaleShift
+    from curator.layer._rescale import GlobalRescaleShift, MultiDomainRescaleShift
+    from curator.data.properties import HeadConfig, HEAD_PRESETS
 
     def _get_readout_module(rep):
         ro = getattr(rep, "readout", None)
@@ -1753,23 +1909,71 @@ def update_model(model):
                 )
                 warnings.warn('Replace GradientOutput module.')
             if m.__class__.__name__ == 'GlobalRescaleShift':
-                scale_by = m.scale_by.detach().clone().cpu().squeeze().item()
-                shift_by = m.shift_by.detach().clone().cpu().squeeze().item()
-                grs = m.__class__(
-                    scale_by=scale_by,
-                    shift_by=shift_by,
+                scale_by = getattr(m, "scale_by", None)
+                if torch.is_tensor(scale_by):
+                    scale_by = scale_by.detach().clone().cpu().squeeze().item()
+                shift_by = getattr(m, "shift_by", None)
+                if torch.is_tensor(shift_by):
+                    shift_by = shift_by.detach().clone().cpu().squeeze().item()
+                scale_keys = list(getattr(m, "scale_keys", []))
+                shift_keys = list(getattr(m, "shift_keys", []))
+                output_keys = list(getattr(m, "output_keys", []))
+                if not output_keys:
+                    output_keys = list(dict.fromkeys(scale_keys + shift_keys)) or ["energy"]
+
+                atomwise_shift = bool(getattr(m, "atomwise_shift", False))
+                atomwise_norm = bool(getattr(m, "atomwise_normalization", False))
+                shift_by_e0 = getattr(m, "shift_by_E0", torch.tensor(False))
+                if torch.is_tensor(shift_by_e0):
+                    shift_by_e0 = bool(shift_by_e0.item())
+                per_species_shift = None
+                if shift_by_e0:
+                    atomic_energies = getattr(m, "atomic_energies", None)
+                    if torch.is_tensor(atomic_energies):
+                        values = atomic_energies.detach().cpu().tolist()
+                        per_species_shift = {i: float(v) for i, v in enumerate(values) if v != 0.0}
+
+                heads = []
+                for key in output_keys:
+                    use_atomwise_shift = atomwise_shift if key in shift_keys else False
+                    use_atomwise_norm = atomwise_norm if key in shift_keys else False
+                    if key in HEAD_PRESETS:
+                        base = HEAD_PRESETS[key]
+                        heads.append(
+                            HeadConfig(
+                                key=base.key,
+                                dim=base.dim,
+                                is_atomwise=base.is_atomwise,
+                                reduction=base.reduction,
+                                atomwise_key=base.atomwise_key,
+                                write_atomwise=base.write_atomwise,
+                                scale_by=scale_by if key in scale_keys else None,
+                                shift_by=shift_by if key in shift_keys else None,
+                                atomwise_shift=use_atomwise_shift,
+                                atomwise_normalization=use_atomwise_norm,
+                                per_species_shift=(
+                                    per_species_shift
+                                    if key in {properties.energy, properties.atomic_energy, "energy", "atomic_energy"}
+                                    else None
+                                ),
+                            )
+                        )
+                    else:
+                        heads.append(
+                            HeadConfig(
+                                key=key,
+                                dim=1,
+                                is_atomwise=False,
+                                reduction=None,
+                                scale_by=scale_by if key in scale_keys else None,
+                                shift_by=shift_by if key in shift_keys else None,
+                            )
+                        )
+
+                grs = GlobalRescaleShift(
+                    heads=heads,
                     scale_trainable=isinstance(getattr(m, "scale_by", None), torch.nn.Parameter),
                     shift_trainable=isinstance(getattr(m, "shift_by", None), torch.nn.Parameter),
-                    scale_keys=list(m.scale_keys),
-                    shift_keys=list(m.shift_keys),
-                    atomwise_shift=bool(getattr(m, "atomwise_shift", False)),
-                    atomwise_normalization=bool(m.atomwise_normalization),
-                    output_keys=list(m.output_keys),
-                    atomic_energies=(
-                        m.atomic_energies.detach().clone()
-                        if getattr(m, "shift_by_E0", torch.tensor(False)).item()
-                        else None
-                    )
                 )
                 md = MultiDomainRescaleShift(heads=grs.heads)
                 md.domain_modules["0"] = grs
@@ -1791,6 +1995,33 @@ def update_model(model):
     )
 
     return new_model
+
+def _register_legacy_outputspec() -> None:
+    try:
+        import curator.layer._atomwise_nn as atomwise
+    except Exception:
+        return
+    if hasattr(atomwise, "OutputSpec"):
+        return
+
+    class OutputSpec:
+        def __init__(
+            self,
+            key: str,
+            dim: int = 1,
+            is_atomwise: bool = False,
+            reduction: Optional[str] = "sum",
+            atomwise_key: Optional[str] = None,
+            write_atomwise: bool = False,
+        ) -> None:
+            self.key = key
+            self.dim = dim
+            self.is_atomwise = is_atomwise
+            self.reduction = reduction
+            self.atomwise_key = atomwise_key
+            self.write_atomwise = write_atomwise
+
+    atomwise.OutputSpec = OutputSpec
 
 def upgrade_checkpoint(
     ckpt_path: Union[str, Path],
@@ -1815,6 +2046,7 @@ def upgrade_checkpoint(
         output_path = ckpt_path.with_name(f"{ckpt_path.stem}_converted{ckpt_path.suffix}")
     output_path = Path(output_path)
 
+    _register_legacy_outputspec()
     obj = torch.load(ckpt_path, map_location=device)
 
     if isinstance(obj, torch.nn.Module):

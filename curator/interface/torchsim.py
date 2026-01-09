@@ -16,6 +16,7 @@ from curator.data import (
 from curator.layer import find_layer_by_name_recursive
 from curator.model import EnsembleModel
 from curator.utils import load_models
+from curator.interface.plumed import Plumed
 try:
     from torch_sim.models.interface import ModelInterface
     from torch_sim.state import SimState
@@ -60,6 +61,7 @@ class CuratorTorchSimAdapter(ModelInterface):
         energy_scale: float = 1.0,
         forces_scale: float = 1.0,
         stress_scale: float = 1.0,
+        plumed_bias: Optional[Plumed] = None,
         detach: bool = True,
         dtype: Optional[torch.dtype] = None,
     ) -> None:
@@ -87,6 +89,7 @@ class CuratorTorchSimAdapter(ModelInterface):
         self.energy_scale = energy_scale
         self.forces_scale = forces_scale
         self.stress_scale = stress_scale
+        self.plumed_bias = plumed_bias
 
         self.transforms = list(transforms) if transforms is not None else []
         self._move_transforms_to_device(self._device)
@@ -139,7 +142,14 @@ class CuratorTorchSimAdapter(ModelInterface):
                 outputs = self._forward_with_manual_forces(batch)
             else:
                 raise
-        return self._postprocess(outputs, batch, detach=detach, to_cpu=to_cpu)
+        processed = self._postprocess(outputs, batch, detach=detach, to_cpu=to_cpu)
+        if self.plumed_bias is not None:
+            processed = self.plumed_bias.apply_outputs(processed, batch)
+        self.last_outputs = processed
+        return processed
+
+    def __call__(self, inputs, **kwargs):
+        return self.forward(inputs, **kwargs)
 
     def _forward_with_manual_forces(self, batch: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         """Fallback path when the checkpoint's GradientOutput autograd fails (e.g., detached energy)."""
@@ -240,6 +250,7 @@ class CuratorTorchSimAdapter(ModelInterface):
             cell_row = cell_tensor.transpose(-2, -1)
         else:
             cell_row = cell_tensor.mT
+        cell_row_full = cell_row
         if cell_row.ndim == 3:
             cell_row = cell_row.reshape(-1, 3)
         mapping = {
@@ -249,6 +260,14 @@ class CuratorTorchSimAdapter(ModelInterface):
             properties.image_idx: state.system_idx,
             properties.n_atoms: state.n_atoms_per_system if hasattr(state, "n_atoms_per_system") else torch.tensor([state.n_atoms], device=state.device),
         }
+        if cell_row_full is not None:
+            if cell_row_full.ndim == 2:
+                cell_row_full = cell_row_full.unsqueeze(0)
+            mapping["plumed_cell"] = cell_row_full
+        if hasattr(state, "masses"):
+            mapping["masses"] = state.masses
+        if hasattr(state, "charges"):
+            mapping[properties.atomic_charge] = state.charges
 
         data = {k: v for k, v in mapping.items() if v is not None}
         for transform in self.transforms:
@@ -308,7 +327,6 @@ class CuratorTorchSimAdapter(ModelInterface):
             if s.ndim == 2 and s.shape[0] == 9:
                 s = s.view(1, 3, 3)
             result[properties.stress] = s
-
         return result
 
     @staticmethod

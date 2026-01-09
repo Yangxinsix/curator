@@ -1,8 +1,5 @@
-# General modules for all tasks
-from hydra.utils import instantiate
 import hydra
-from hydra import compose, initialize
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, OmegaConf
 import sys, os, json
 from pathlib import Path
 import argparse
@@ -11,27 +8,10 @@ try:
 except ImportError:  # pragma: no cover
     argcomplete = None
 
-import pytorch_lightning.callbacks
-import pytorch_lightning.loggers
-from .utils import (
-    read_user_config,
-    CustomFormatter,
-    register_resolvers,
-    find_best_model,
-    load_models,
-    upgrade_checkpoint,
-    convert_mace_to_curator,
-    normalize_config_sequences,
-    prune_config_targets,
-    update_config_from_datamodule,
-    log_logo,
-)
 import logging
 import socket
 import contextlib
 from typing import Optional, Union, Dict, List
-from pytorch_lightning import seed_everything
-from curator.simulate.sim_logging import log_simulation_summary
 
 # very ugly solution for solving pytorch lighting and myqueue conflictions
 if "SLURM_NTASKS" in os.environ:
@@ -43,9 +23,41 @@ if "SLURM_JOB_NAME" in os.environ:
 log = logging.getLogger('curator')
 log.setLevel(logging.DEBUG)
 
-# register omegaconf resolvers
-register_resolvers()
+def _configure_cli_logger(
+    logger: logging.Logger,
+    log_path: str,
+    formatter: logging.Formatter,
+    stream: bool = True,
+) -> None:
+    log_path = os.path.abspath(log_path)
+    for handler in list(logger.handlers):
+        if isinstance(handler, logging.StreamHandler) and getattr(handler, "stream", None) in (sys.stdout, sys.stderr):
+            logger.removeHandler(handler)
+    if not any(
+        isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == log_path
+        for h in logger.handlers
+    ):
+        fh = logging.FileHandler(log_path, mode="w")
+        fh.setFormatter(formatter)
+        fh.setLevel(logging.DEBUG)
+        logger.addHandler(fh)
+    if stream:
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(formatter)
+        logger.addHandler(sh)
+    logger.propagate = False
 
+_resolvers_registered = False
+
+
+def _ensure_resolvers():
+    global _resolvers_registered
+    if _resolvers_registered:
+        return
+    from .utils import register_resolvers
+
+    register_resolvers()
+    _resolvers_registered = True
 
 # Trainining with Pytorch Lightning (only with weights and biasses)
 @hydra.main(config_path="configs", config_name="train", version_base=None)
@@ -58,19 +70,37 @@ def train(config: DictConfig) -> None:
         None
 
     """
+    _ensure_resolvers()
+    from hydra.utils import instantiate
     import torch
     import pytorch_lightning
     from pytorch_lightning import (
     LightningDataModule, 
     Trainer,
     )
+    from pytorch_lightning import seed_everything
+    import pytorch_lightning.loggers
     from curator.model import LitNNP
     from e3nn.util.jit import script
+    from .utils import (
+        read_user_config,
+        CustomFormatter,
+        find_best_model,
+        normalize_config_sequences,
+        prune_config_targets,
+    update_config_from_datamodule,
+    log_logo,
+    copy_domain_modules,
+    update_model_domain_config,
+    update_model_domains,
+)
 
-    # set up logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "training.log"), mode="w")
-    fh.setFormatter(CustomFormatter())
-    log.addHandler(fh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "training.log"),
+        CustomFormatter(),
+        stream=True,
+    )
     log_logo(log)
     
     # Load the arguments 
@@ -105,6 +135,11 @@ def train(config: DictConfig) -> None:
     # something must be inferred from data before instantiating the model
     update_config_from_datamodule(config, datamodule, logger=log)
 
+    domain_mode = getattr(config.task, "domain_mode", None)
+    new_domains = getattr(config.task, "new_domains", None)
+    if domain_mode is not None and new_domains is not None:
+        update_model_domain_config(config.model, domain_mode, new_domains, logger=log)
+
     model = hydra.utils.instantiate(config.model)
     resume_ckpt = None
     checkpoint_outputs = None
@@ -127,6 +162,30 @@ def train(config: DictConfig) -> None:
                 "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
                 resume_ckpt,
             )
+
+    init_from = getattr(config.task, "init_new_domains_from", None)
+    if init_from is not None:
+        if not getattr(config.task, "load_weights_only", False):
+            log.warning("init_new_domains_from is set but load_weights_only is false; skipping domain copy.")
+        else:
+            target_domains = getattr(config.task, "init_domains", None)
+            copied = copy_domain_modules(model, init_from, target_domains=target_domains, logger=log)
+            if copied == 0:
+                log.warning("No domain modules were copied; check domain ids and model readout config.")
+
+    domain_mode = getattr(config.task, "domain_mode", None)
+    new_domains = getattr(config.task, "new_domains", None)
+    if domain_mode in ("extend", "replace") and new_domains is not None:
+        init_strategy = "copy" if init_from is not None else "random"
+        updated = update_model_domains(
+            model,
+            new_domains,
+            mode=domain_mode,
+            template_domain=init_from or "0",
+            init_strategy=init_strategy,
+            logger=log,
+        )
+        log.debug("Updated model domains: mode=%s new_domains=%s updated=%s", domain_mode, new_domains, updated)
 
     if config.compile:
         log.debug("Compiling model with torch.compile")
@@ -178,10 +237,14 @@ def tmp_train(config: DictConfig):
         None
     
     """
+    _ensure_resolvers()
     import torch
+    from hydra.utils import instantiate
     from e3nn.util.jit import script
     from torch_ema import ExponentialMovingAverage
+    from pytorch_lightning import seed_everything
     from .utils import EarlyStopping
+    from .utils import read_user_config, normalize_config_sequences, CustomFormatter
     from curator.train import train
 
     # Load the arguments
@@ -201,11 +264,12 @@ def tmp_train(config: DictConfig):
     else:
         log.debug("Seed randomly...")
     
-    # Setup the logger
-    # set up logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "training.log"), mode="w")
-    fh.setFormatter(CustomFormatter())
-    log.addHandler(fh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "training.log"),
+        CustomFormatter(),
+        stream=True,
+    )
     
     # Set up datamodule and load training and validation set
     # Initiate the datamodule
@@ -363,6 +427,7 @@ def _convert_parse_args(argv: Optional[List[str]] = None):
 
 def convert_main(argv: Optional[List[str]] = None):
     args = _convert_parse_args(argv)
+    from .utils import upgrade_checkpoint, convert_mace_to_curator
 
     device = args.device
     target = None
@@ -473,10 +538,12 @@ def deploy(
         None
     
     """
+    _ensure_resolvers()
     import torch
     from e3nn.util.jit import script
     from curator.model import EnsembleModel
     from curator.layer.utils import find_layer_by_name_recursive
+    from .utils import read_user_config, normalize_config_sequences, load_models
 
     cfg = None
     if cfg_path is not None:
@@ -516,6 +583,9 @@ def deploy(
 
 @hydra.main(config_path="configs", config_name="evaluate", version_base=None)
 def evaluate(config: DictConfig):
+    _ensure_resolvers()
+    from hydra.utils import instantiate
+    from .utils import read_user_config, prune_config_targets, load_models
     from curator.model import EnsembleModel
     from curator.simulate import MLCalculator
 
@@ -527,11 +597,12 @@ def evaluate(config: DictConfig):
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
 
-    # set logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "predict.log"), mode="w")
-    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
-    fh.setLevel(logging.DEBUG)
-    log.addHandler(fh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "predict.log"),
+        logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"),
+        stream=True,
+    )
     log.debug("Running on host: " + str(socket.gethostname()))
 
     # Load model. Uses a compiled model, if any, otherwise a uncompiled model
@@ -559,6 +630,11 @@ def simulate(config: DictConfig):
     Returns:
         None
     """
+    _ensure_resolvers()
+    from hydra.utils import instantiate
+    from pytorch_lightning import seed_everything
+    from .utils import read_user_config, normalize_config_sequences, prune_config_targets, log_logo, CustomFormatter
+    from curator.simulate.sim_logging import log_simulation_summary
     from curator.model import EnsembleModel
     from curator.simulate import MLCalculator
 
@@ -572,16 +648,12 @@ def simulate(config: DictConfig):
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     
-    # set logger
-    # set up logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "simulation.log"), mode="w")
-    fh.setFormatter(CustomFormatter())
-    log.addHandler(fh)
-    # mirror to stdout for live feedback
-    if not any(isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) is sys.stdout for h in log.handlers):
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setFormatter(CustomFormatter())
-        log.addHandler(sh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "simulation.log"),
+        CustomFormatter(),
+        stream=True,
+    )
     log_logo(log)
 
     # Brief simulation summary for easier debugging
@@ -608,6 +680,10 @@ def select(config: DictConfig):
     Returns:
         None
     """
+    _ensure_resolvers()
+    from hydra.utils import instantiate
+    from pytorch_lightning import seed_everything
+    from .utils import read_user_config, prune_config_targets, load_models, log_logo
     from curator.data import read_trajectory
     import torch
     from ase.io import read, Trajectory
@@ -615,6 +691,7 @@ def select(config: DictConfig):
     from curator.select import GeneralActiveLearning
     import json
     from curator.data import AseDataset
+    from curator.data.utils import _prepare_data_source
 
     # Load the arguments
     if config.cfg is not None:
@@ -622,12 +699,12 @@ def select(config: DictConfig):
     
     prune_config_targets(config, logger=log)
 
-    # set up logger
-    # set logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "selection.log"), mode="w")
-    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
-    fh.setLevel(logging.DEBUG)
-    log.addHandler(fh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "selection.log"),
+        logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"),
+        stream=True,
+    )
     log_logo(log)
 
     # Save yaml file in run_path
@@ -647,6 +724,9 @@ def select(config: DictConfig):
     models = load_models(config.model_path, config.device, load_compiled=False)
     cutoff = models[0].representation.cutoff
 
+    pool_atoms = None
+    pool_source = config.pool_set
+
     # Load the pool data set and training data set
     if config.dataset and config.split_file:
         dataset = AseDataset(read_trajectory(config.dataset), cutoff=cutoff, transforms=instantiate(config.transforms))
@@ -655,6 +735,18 @@ def select(config: DictConfig):
         data_dict = {}
         for k in split:
             data_dict[k] = torch.utils.data.Subset(dataset, split[k])
+    elif config.data_url:
+        data_url = dict(config.data_url)
+        if "url" not in data_url:
+            raise RuntimeError("data_url must include a 'url' field.")
+        log.info("Preparing pool data from URL: %s", data_url["url"])
+        pool_atoms = _prepare_data_source(**data_url)
+        pool_source = data_url.get("url")
+        data_dict = {
+            "pool": AseDataset(pool_atoms, cutoff=cutoff, transforms=instantiate(config.transforms))
+        }
+        if config.train_set:
+            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff, transforms=instantiate(config.transforms))
     elif config.pool_set:
         data_dict = {'pool': AseDataset(read_trajectory(config.pool_set), cutoff=cutoff, transforms=instantiate(config.transforms))}
         if config.train_set:
@@ -681,8 +773,11 @@ def select(config: DictConfig):
     indices = al.select(models, data_dict, al_batch_size=config.batch_size, debug=config.debug)
 
     # Save the selected indices
-    datapath = config.dataset if config.dataset and config.split_file else config.pool_set
-    datapath = datapath if isinstance(datapath, str) else list(datapath)
+    datapath = config.dataset if config.dataset and config.split_file else pool_source
+    if datapath is None:
+        datapath = "unknown"
+    elif not isinstance(datapath, str):
+        datapath = list(datapath)
     al_info = {
         'kernel': config.kernel,
         'selection': config.method,
@@ -694,7 +789,10 @@ def select(config: DictConfig):
     
     log.debug(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for selected structures!")
     if config.save_images:
-        pool_set = read_trajectory(config.pool_set)
+        if pool_atoms is None:
+            pool_set = read_trajectory(config.pool_set)
+        else:
+            pool_set = pool_atoms
         selected_images = [pool_set[i] for i in indices]
         save_path = config.save_images if isinstance(config.save_images, str) else os.path.join(config.run_path, 'selected.traj')
         with Trajectory(config.save_images if isinstance(config.save_images, str) else 'selected.traj', 'w') as traj:
@@ -712,6 +810,9 @@ def label(config: DictConfig):
     Returns:
         None
     """
+    _ensure_resolvers()
+    from hydra.utils import instantiate
+    from .utils import read_user_config, log_logo
     from curator.data import read_trajectory
     from ase.db import connect
     from ase.io import Trajectory
@@ -724,12 +825,12 @@ def label(config: DictConfig):
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="label")
 
-    # set up logger
-    # set logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "labelling.log"), mode="w")
-    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
-    fh.setLevel(logging.DEBUG)
-    log.addHandler(fh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "labelling.log"),
+        logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"),
+        stream=True,
+    )
     log_logo(log)
 
     # Save yaml file in run_path

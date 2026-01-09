@@ -38,16 +38,14 @@ class _DomainTaggedDataset(Dataset):
 
     def __getitem__(self, idx):
         sample = self.dataset[idx]
-        if isinstance(sample, AtomsData):
-            sample.atoms[properties.domain] = torch.tensor([self.domain_id], dtype=torch.long)
-            if self.task is not None:
-                sample.task = self.task
-            sample.weight = self.weight
-        elif isinstance(sample, dict):
+        if isinstance(sample, dict):
             sample = sample.copy()
-            sample[properties.domain] = torch.tensor([self.domain_id], dtype=torch.long)
-            sample["task"] = self.task or sample.get("task", "default")
-            sample["weight"] = self.weight
+        sample[properties.domain] = torch.tensor([self.domain_id], dtype=torch.long)
+        if self.task is not None:
+            sample["task"] = self.task
+        elif isinstance(sample, dict):
+            sample["task"] = sample.get("task", "default")
+        sample["weight"] = self.weight
         return sample
 
 class AtomsDataModule(pl.LightningDataModule):
@@ -513,7 +511,7 @@ class AtomsDataModule(pl.LightningDataModule):
         for i in range(limit):
             sample = dataset[i]
             if isinstance(sample, AtomsData):
-                keys.update(normalize_target_key(k) for k in sample.targets.keys())
+                keys.update(normalize_target_key(k) for k in sample.normalized_targets().keys())
             elif isinstance(sample, dict):
                 _, targets = split_atoms_targets(sample)
                 keys.update(normalize_target_key(k) for k in targets.keys())

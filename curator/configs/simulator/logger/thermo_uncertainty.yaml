@@ -7,6 +7,6 @@ low: null
 high: null
 uncertainty_backend:
   _target_: curator.simulate.uncertainty.auto.AutoUncertainty
-  calculator: ${model_path}
+  calculator: null
   dataset: ${dataset}
   device: ${device}

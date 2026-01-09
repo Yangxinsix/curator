@@ -3,7 +3,7 @@ from __future__ import annotations
 import numpy as np
 import logging
 import os
-from typing import Any, Dict, List, Optional, Union, Callable
+from typing import Any, Dict, List, Optional, Sequence, Union, Callable
 import torch
 try:
     import torch_sim as ts
@@ -17,6 +17,8 @@ from .thermo_uncertainty import ThermoWithUncertainty
 from ..core.context import SimContext
 from ...utils import CustomFormatter
 from ..core.callbacks import Callback
+from ..engines.torchsim import TorchSimEngine
+from ...interface.torchsim import CuratorTorchSimAdapter
 
 
 class TorchSimThermoLogger(ThermoWithUncertainty):
@@ -61,6 +63,7 @@ class TorchSimThermoLogger(ThermoWithUncertainty):
         self._per_loggers: List[logging.Logger] = []
         self._batch_header_printed = False
         self._per_header_printed: List[bool] = []
+        self._missing_outputs_logged = False
         # override variable funcs to use SimState
         self.variable_funcs.update(
             {
@@ -183,7 +186,6 @@ class TorchSimThermoLogger(ThermoWithUncertainty):
     def _get_unc_value(self, ctx: SimContext, key: str, idx: Optional[int] = None) -> float:
         return super()._get_unc_value(ctx, key, idx)
 
-
     def _format_var(self, ctx: SimContext, var: str, idx: Optional[int] = None) -> str:
         """Fetch and format a variable for a given system index."""
         func = self.variable_funcs.get(var)
@@ -201,39 +203,52 @@ class TorchSimThermoLogger(ThermoWithUncertainty):
             val = "N/A"
         return super()._format_value(val)
 
-    def on_sim_start(self, ctx: SimContext):
-        """
-        Suppress the base header for batched runs; custom header is emitted in on_step.
-        """
-        st = self._state(ctx)
-        if (st is not None and getattr(st, "n_systems", 1) > 1) or isinstance(ctx.atoms, list):
-            return
-        super().on_sim_start(ctx)
+    def _attach_backend(self, ctx: SimContext) -> None:
+        engine = getattr(ctx, "engine", None)
+        if isinstance(engine, TorchSimEngine):
+            adapter = getattr(engine, "model", None)
+            if isinstance(adapter, CuratorTorchSimAdapter) and self._unc_backend is not None:
+                if hasattr(self._unc_backend, "attach_to_model"):
+                    self._unc_backend.attach_to_model(adapter.model)
 
-    # Override on_step for batched logging
-    def on_step(self, ctx: SimContext):
-        if (ctx.step % self.interval) != 0:
-            return
-
-        # compute uncertainties if backend provided
-        if self._unc_backend is not None:
-            try:
-                atoms_obj = ctx.atoms
-                if isinstance(atoms_obj, list):
-                    ctx.state["uncertainty"] = [self._unc_backend(a) or {} for a in atoms_obj]
-                else:
-                    ctx.state["uncertainty"] = self._unc_backend(atoms_obj) or {}
-            except Exception as exc:
-                if self.log is not None:
-                    self.log.exception(f"Uncertainty backend failed at step {ctx.step}: {exc}")
+    def _maybe_update_uncertainty(self, ctx: SimContext) -> None:
+        outputs = ctx.state.get("model_outputs")
+        if outputs is None:
+            if self._unc_backend is not None and not self._missing_outputs_logged:
+                self.log.debug("torchsim logger missing model outputs; uncertainty skipped for this step")
+                self._missing_outputs_logged = True
+            if self._unc_backend is not None:
                 ctx.state["uncertainty"] = {}
+            return
+        if self._unc_backend is None:
+            return
 
-        # apply uncertainty rules
+        if not self._logged_uncertainty:
+            self.log.debug(f"uncertainty backend state: {self._unc_backend}")
+        if hasattr(self._unc_backend, "extract_from_outputs"):
+            ctx.state["uncertainty"] = self._unc_backend.extract_from_outputs(outputs) or {}
+        else:
+            ctx.state["uncertainty"] = {}
+        if not self._backend_ready:
+            self._include = self._resolve_include_keys()
+            self._ensure_uncertainty_columns()
+            self._backend_ready = True
+
+    def _log_header_once(self) -> None:
+        if self.header and not self._header_printed:
+            header_line = "".join(f"{var:>15}" for var in self.variables)
+            self.log.info(header_line)
+            self._header_printed = True
+
+    def _log_snapshot_once(self, ctx: SimContext) -> None:
+        if not self._logged_uncertainty:
+            self.log.info(f"uncertainty snapshot: {ctx.state.get('uncertainty')}")
+            self._logged_uncertainty = True
+
+    def _apply_uncertainty_rules(self, ctx: SimContext) -> None:
         unc_data = ctx.state.get("uncertainty", {})
-        atoms_obj = ctx.atoms
         if isinstance(unc_data, list):
             for i, d in enumerate(unc_data):
-                atom_ref = atoms_obj[i] if isinstance(atoms_obj, list) and i < len(atoms_obj) else atoms_obj
                 ctx.state["system_index"] = i
                 ctx.state["uncertainty"] = d
                 self._apply_band_and_stop(ctx)
@@ -241,67 +256,88 @@ class TorchSimThermoLogger(ThermoWithUncertainty):
             ctx.state["system_index"] = None
             self._apply_band_and_stop(ctx)
 
+    def _maybe_prepare_batch_loggers(self, n_sys: int) -> None:
+        if not self.per_system_logs or not self.log_dir or self._per_loggers or n_sys <= 0:
+            return
+        os.makedirs(self.log_dir, exist_ok=True)
+        for i in range(n_sys):
+            lg = logging.getLogger(f"{self.log.name}.sys{i}")
+            lg.setLevel(self.log.level or logging.INFO)
+            fh = logging.FileHandler(os.path.join(self.log_dir, f"simulation_{i}.log"), mode="w")
+            fh.setFormatter(CustomFormatter())
+            lg.addHandler(fh)
+            lg.propagate = False
+            self._per_loggers.append(lg)
+        self._per_header_printed = [False for _ in range(n_sys)]
+
+    def _log_batched_step(self, ctx: SimContext, n_sys: int) -> None:
+        """Log a single combined line for all systems."""
+        vars_no_step = [v for v in self.variables if v != "step"]
+
+        if self.header and not self._batch_header_printed:
+            header_line = f"{'step':>15}" + "".join(
+                "".join(f"{col:>15}" for col in (["sys"] + vars_no_step)) for _ in range(n_sys)
+            )
+            self.log.info(header_line)
+            self._batch_header_printed = True
+
+        values: List[str] = []
+        if "step" in self.variables:
+            values.append(self._format_var(ctx, "step", None))
+        for i in range(n_sys):
+            values.append(super()._format_value(i))
+            for var in vars_no_step:
+                values.append(self._format_var(ctx, var, i))
+
+        line = "".join(values)
+        self.log.info(line)
+        if not self._per_loggers:
+            return
+        stride = 1 + len(vars_no_step)
+        for idx, lg in enumerate(self._per_loggers):
+            if self.header and idx < len(self._per_header_printed) and not self._per_header_printed[idx]:
+                header_line = f"{'step':>15}{'sys':>15}" + "".join(f"{v:>15}" for v in vars_no_step)
+                lg.info(header_line)
+                self._per_header_printed[idx] = True
+
+            if "step" in self.variables:
+                step_val = values[0]
+                start = 1 + stride * idx
+                block = [step_val] + values[start:start + stride]
+            else:
+                start = stride * idx
+                block = values[start:start + stride]
+            lg.info("".join(block))
+
+    def on_sim_start(self, ctx: SimContext):
+        self._attach_backend(ctx)
+        self._backend_ready = False
+        self._missing_outputs_logged = False
+        return super().on_sim_start(ctx)
+
+    def on_step(self, ctx: SimContext):
+        if (ctx.step % self.interval) != 0:
+            return
+
+        # 1) Update uncertainty from torchsim outputs (no extra forward pass).
+        self._maybe_update_uncertainty(ctx)
+        # 2) Apply uncertainty thresholds and keep a one-time snapshot.
+        self._apply_uncertainty_rules(ctx)
+        self._log_snapshot_once(ctx)
+
         st = self._state(ctx)
         n_sys = int(getattr(st, "n_systems", 1)) if st is not None else 1
-        # prepare per-system loggers on first use
-        if self.per_system_logs and self.log_dir and not self._per_loggers and n_sys > 0:
-            os.makedirs(self.log_dir, exist_ok=True)
-            for i in range(n_sys):
-                lg = logging.getLogger(f"{self.log.name}.sys{i}")
-                lg.setLevel(self.log.level or logging.INFO)
-                fh = logging.FileHandler(os.path.join(self.log_dir, f"simulation_{i}.log"), mode="w")
-                fh.setFormatter(CustomFormatter())
-                lg.addHandler(fh)
-                lg.propagate = False
-                self._per_loggers.append(lg)
-            self._per_header_printed = [False for _ in range(n_sys)]
-
-        # print header with sys column if batched
         if n_sys > 1 and st is not None:
-            # Build a block-per-system table: step once, then all vars for sys0, then sys1, etc.
-            vars_no_step = [v for v in self.variables if v != "step"]
+            self._maybe_prepare_batch_loggers(n_sys)
+            self._log_batched_step(ctx, n_sys)
+            return
 
-            if self.header and not self._batch_header_printed:
-                # Single header line: step + (sys, properties)*n_sys
-                header_line = f"{'step':>15}" + "".join(
-                    "".join(f"{col:>15}" for col in (["sys"] + vars_no_step)) for _ in range(n_sys)
-                )
-                self.log.info(header_line)
-                self._batch_header_printed = True
-
-            values: List[str] = []
-            # step once
-            if "step" in self.variables:
-                values.append(self._format_var(ctx, "step", None))
-            # system blocks
-            for i in range(n_sys):
-                values.append(super()._format_value(i))
-                for var in vars_no_step:
-                    values.append(self._format_var(ctx, var, i))
-
-            line = "".join(values)
-            self.log.info(line)
-            if self._per_loggers:
-                stride = 1 + len(vars_no_step)
-                for idx, lg in enumerate(self._per_loggers):
-                    # Per-system header (only its own properties)
-                    if self.header and idx < len(self._per_header_printed) and not self._per_header_printed[idx]:
-                        header_line = f"{'step':>15}{'sys':>15}" + "".join(f"{v:>15}" for v in vars_no_step)
-                        lg.info(header_line)
-                        self._per_header_printed[idx] = True
-
-                    if "step" in self.variables:
-                        step_val = values[0]
-                        start = 1 + stride * idx
-                        block = [step_val] + values[start:start + stride]
-                    else:
-                        start = stride * idx
-                        block = values[start:start + stride]
-                    lg.info("".join(block))
-        else:
-            super().on_step(ctx)
+        # 3) Non-batched: standard thermo line.
+        self._log_header_once()
+        return super(ThermoWithUncertainty, self).on_step(ctx)
 
 
+#TODO: Refactor this class to convert torchsim trajectory to ase atoms object after the simulation is done.
 class TorchSimTrajectoryWriter(Callback):
     """Alias for TrajectoryWriter maintained for backwards compatibility."""
 

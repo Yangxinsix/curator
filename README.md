@@ -53,6 +53,16 @@ CURATOR contains four procedures for constructing a machine learning potential, 
 
 A minimal working example is provided in the `/example` directory. This demonstrates the molecular dynamics of LiFePO₄.
 
+Selection can also download and prefilter pool data directly from a URL by providing a `data_url` dictionary in the select config. For example:
+```yaml
+data_url:
+  url: "https://github.com/ACEsuit/mace-foundations/releases/download/mace_matpes_0/matpes-pbe-replay-data.xyz"
+  required_elements: ["Li", "Fe", "P", "O"]
+  match: "all"
+  extract: true
+  save_filtered: true
+```
+
 
 A working example is presented in `/example` where you will model the diffusivity of LiFePO4 using both MD simulation and NEB. 
 First you download the curator package as described above. Then you create a directory somewhere. You then need to copy the user configuration script `user_cfg.yaml` , the inital dataset `init_dataset.traj`, the MD simulation trajectories `LiFePO4_MD_0.traj`,`LiFePO4_MD_1.traj`,`LiFePO4_MD_4.traj`, and the initial and final images for the NEB `NEB_init_pristine.traj` and `NEB_final_pristine.traj`(You can also optimize these NEB structures yourself if you want you). You need to change the datapaths in the user configuration file such that it matches your directory. To run the workflow you need to have a myqueue configuration folder and file `/.myqueue/config.py`. It can also be downloaded from the example case, but it should be customized to your HPC or local computer. To run the workflow on your HPC please change the nodename and cores in `user_cfg.yaml` for each task. To run the workflow you either need to copy the workflow script `curator-workflow` from the exmaple folder into the same diretcory as `user_cfg.yaml` or locate the path to the script in `Curator/scripts`. You then write `mq workflow curator-workflow` in the terminal and the workflow will starts. A more illustrative example and video tutorial will be published soon. 

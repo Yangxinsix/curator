@@ -30,12 +30,15 @@ class EnsembleUncertainty(BaseUncertainty):
         values: Dict[str, float] = {}
         if atoms.calc and all(key in atoms.calc.results for key in self.uncertainty_keys):
             values = {key: float(atoms.calc.results[key]) for key in self.uncertainty_keys}
-        elif self.calc is not None:
-            self.calc.calculate(atoms)
-            values = {
-                key: float(self.calc.results[key])
-                for key in self.uncertainty_keys
-                if key in self.calc.results
-            }
-
+        else:
+            calc = self._ensure_calculator(atoms)
+            if calc is not None:
+                calc.calculate(atoms)
+                values = {
+                    key: float(calc.results[key])
+                    for key in self.uncertainty_keys
+                    if key in calc.results
+                }
+            else:
+                values = {}
         return self._format_output(values)

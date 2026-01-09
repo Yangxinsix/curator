@@ -9,6 +9,10 @@ warmup_steps: 0
 save_entire_model: True
 load_entire_model: False
 load_weights_only: True
+init_new_domains_from: null
+init_domains: null
+domain_mode: null
+new_domains: null
 
 # customize loss ratios
 energy_weight: 1
