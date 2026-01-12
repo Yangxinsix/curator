@@ -128,7 +128,7 @@ class AtomwiseNN(nn.Module):
         output_dict: Dict[str, torch.Tensor] = {}
 
         for i, head in enumerate(self.heads):
-            prop = out[i].squeeze()
+            prop = out[i].squeeze(-1)
             key = self.model_outputs[i]
             per_atom = self.per_atom_flags[i]
             aggregation_mode = self.aggregation_modes[i]

@@ -107,15 +107,18 @@ class RandomProjections(nn.Module):
         self,
         module: nn.Module,
         num_features: int,
-        dtype = torch.get_default_dtype(),
+        dtype: Optional[torch.dtype] = None,
         target_layer: str = 'readout_mlp',
     ):
         super(RandomProjections, self).__init__()
 
         self.num_features = num_features
+        self.target_layer = target_layer
         self.in_feat_proj_buffers = []  # Store references to projection matrices for later use
         self.out_grad_proj_buffers = []
         device = next(module.parameters()).device
+        if dtype is None:
+            dtype = next(module.parameters()).dtype
         linear_types = FeatureExtractor._resolve_linear_types()
 
         if self.num_features > 0:

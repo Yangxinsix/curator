@@ -143,8 +143,6 @@ class CuratorTorchSimAdapter(ModelInterface):
             else:
                 raise
         processed = self._postprocess(outputs, batch, detach=detach, to_cpu=to_cpu)
-        if self.plumed_bias is not None:
-            processed = self.plumed_bias.apply_outputs(processed, batch)
         self.last_outputs = processed
         return processed
 
@@ -250,7 +248,6 @@ class CuratorTorchSimAdapter(ModelInterface):
             cell_row = cell_tensor.transpose(-2, -1)
         else:
             cell_row = cell_tensor.mT
-        cell_row_full = cell_row
         if cell_row.ndim == 3:
             cell_row = cell_row.reshape(-1, 3)
         mapping = {
@@ -260,10 +257,6 @@ class CuratorTorchSimAdapter(ModelInterface):
             properties.image_idx: state.system_idx,
             properties.n_atoms: state.n_atoms_per_system if hasattr(state, "n_atoms_per_system") else torch.tensor([state.n_atoms], device=state.device),
         }
-        if cell_row_full is not None:
-            if cell_row_full.ndim == 2:
-                cell_row_full = cell_row_full.unsqueeze(0)
-            mapping["plumed_cell"] = cell_row_full
         if hasattr(state, "masses"):
             mapping["masses"] = state.masses
         if hasattr(state, "charges"):
@@ -327,6 +320,8 @@ class CuratorTorchSimAdapter(ModelInterface):
             if s.ndim == 2 and s.shape[0] == 9:
                 s = s.view(1, 3, 3)
             result[properties.stress] = s
+        if self.plumed_bias is not None:
+            result = self.plumed_bias.apply_batch(result, inputs)
         return result
 
     @staticmethod

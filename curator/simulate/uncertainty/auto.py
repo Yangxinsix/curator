@@ -72,6 +72,8 @@ class AutoUncertainty(BaseUncertainty):
             self._backend.attach_to_model(model)
         self.threshold_key = getattr(self._backend, "threshold_key", None)
         self.uncertainty_keys = getattr(self._backend, "uncertainty_keys", ())
+        self.low_threshold = getattr(self._backend, "low_threshold", None)
+        self.high_threshold = getattr(self._backend, "high_threshold", None)
 
     def __call__(self, atoms: Atoms):
         if self._backend is None:
@@ -83,6 +85,8 @@ class AutoUncertainty(BaseUncertainty):
                 return {}
             self.threshold_key = getattr(self._backend, "threshold_key", None)
             self.uncertainty_keys = getattr(self._backend, "uncertainty_keys", ())
+            self.low_threshold = getattr(self._backend, "low_threshold", None)
+            self.high_threshold = getattr(self._backend, "high_threshold", None)
         return self._backend(atoms)
 
     @property

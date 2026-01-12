@@ -165,7 +165,12 @@ class ConvNetLayer(Interaction):
         edge_features = self.tp(
             node_feat[edge_idx[:, 1]], edge_diff_embedding, weight
         )
-        node_feat = scatter_add(edge_features, edge_idx[:, 0], dim=0)
+        out_feat = torch.zeros(
+            (node_feat.shape[0], edge_features.shape[1]),
+            device=edge_features.device,
+            dtype=edge_features.dtype,
+        )
+        node_feat = scatter_add(edge_features, edge_idx[:, 0], dim=0, out=out_feat)
 
         node_feat = self.truncate_ghost(node_feat, n_local)
         # Necessary to get TorchScript to be able to type infer when its not None

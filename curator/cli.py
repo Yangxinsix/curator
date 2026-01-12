@@ -23,6 +23,10 @@ if "SLURM_JOB_NAME" in os.environ:
 log = logging.getLogger('curator')
 log.setLevel(logging.DEBUG)
 
+class _ConsoleProgressFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not getattr(record, "progress", False)
+
 def _configure_cli_logger(
     logger: logging.Logger,
     log_path: str,
@@ -44,6 +48,7 @@ def _configure_cli_logger(
     if stream:
         sh = logging.StreamHandler(sys.stdout)
         sh.setFormatter(formatter)
+        sh.addFilter(_ConsoleProgressFilter())
         logger.addHandler(sh)
     logger.propagate = False
 
@@ -117,7 +122,6 @@ def train(config: DictConfig) -> None:
     # Set up seed
     if hasattr(config, "trainer") and getattr(config.trainer, "accelerator", None) == "cpu":
         try:
-            import torch
             torch.cuda.is_available = lambda: False  # avoid CUDA init on CPU-only runs
             torch.cuda.device_count = lambda: 0
         except Exception:
@@ -756,21 +760,35 @@ def select(config: DictConfig):
 
 
     # Check the size of pool data set
-    if len(data_dict['pool']) < config.batch_size * 10: 
+    data_batch_size = OmegaConf.select(config, "data_batch_size")
+    select_batch_size = OmegaConf.select(config, "select_batch_size")
+    if select_batch_size is None:
+        select_batch_size = OmegaConf.select(config, "batch_size")
+    if data_batch_size is None:
+        data_batch_size = select_batch_size
+
+    if len(data_dict['pool']) < select_batch_size * 10: 
             log.warning(f"The pool data set ({len(data_dict['pool'])}) is not large enough for selection! " 
-                + f"It should be larger than 10 times batch size ({config.batch_size*10}). "
+                + f"It should be larger than 10 times batch size ({select_batch_size*10}). "
                 + "Check your simulation!")
-    elif len(data_dict['pool']) < config.batch_size:
-        raise RuntimeError(f"""The pool data set ({len(data_dict['pool'])}) is not large enough for selection! Add more data or change batch size {config.batch_size}.""")
+    elif len(data_dict['pool']) < select_batch_size:
+        raise RuntimeError(f"""The pool data set ({len(data_dict['pool'])}) is not large enough for selection! Add more data or change batch size {select_batch_size}.""")
 
     # Select structures based on the active learning method
     al = GeneralActiveLearning(
         kernel=config.kernel, 
         selection=config.method, 
         n_random_features=config.n_random_features,
+    )
+    indices = al.select(
+        models,
+        data_dict,
+        data_batch_size=data_batch_size,
+        select_batch_size=select_batch_size,
+        debug=config.debug,
+        load_features=config.load_features,
         save_features=config.save_features,
     )
-    indices = al.select(models, data_dict, al_batch_size=config.batch_size, debug=config.debug)
 
     # Save the selected indices
     datapath = config.dataset if config.dataset and config.split_file else pool_source
@@ -787,7 +805,7 @@ def select(config: DictConfig):
     with open(config.run_path+'/selected.json', 'w') as f:
         json.dump(al_info, f)
     
-    log.debug(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for selected structures!")
+    log.debug(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for {len(indices)} selected structures!")
     if config.save_images:
         if pool_atoms is None:
             pool_set = read_trajectory(config.pool_set)
@@ -798,7 +816,7 @@ def select(config: DictConfig):
         with Trajectory(config.save_images if isinstance(config.save_images, str) else 'selected.traj', 'w') as traj:
             for atoms in selected_images:
                 traj.write(atoms)
-        log.debug(f"Saving selected images into {save_path}.")
+        log.debug(f"Saving {len(indices)} selected images into {save_path}.")
 
 # Label the dataset selected by active learning
 @hydra.main(config_path="configs", config_name="label", version_base=None)   

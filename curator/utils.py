@@ -543,16 +543,36 @@ def load_trained_model(
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    def _torch_load(model_file: Path, device, load_weights_only: bool):
+        try:
+            return torch.load(model_file, map_location=torch.device(device), weights_only=load_weights_only)
+        except TypeError:
+            return torch.load(model_file, map_location=torch.device(device))
+
     # TorchScript
     if model_file.suffix == '.pt' and load_compiled:
-        model = torch.jit.load(model_file, map_location=torch.device(device))
+        try:
+            model = torch.jit.load(model_file, map_location=torch.device(device))
+        except RuntimeError as exc:
+            if "cuda" in str(exc).lower() and str(device).startswith("cuda"):
+                device = torch.device("cpu")
+                model = torch.jit.load(model_file, map_location=device)
+            else:
+                raise
         try:
             model.to(device)
         except Exception:
             pass
         return model
 
-    obj = torch.load(model_file, map_location=torch.device(device))
+    try:
+        obj = _torch_load(model_file, device, load_weights_only)
+    except RuntimeError as exc:
+        if "cuda" in str(exc).lower() and str(device).startswith("cuda"):
+            device = torch.device("cpu")
+            obj = _torch_load(model_file, device, load_weights_only)
+        else:
+            raise
 
     if isinstance(obj, torch.nn.Module):
         obj.to(device)
@@ -640,7 +660,7 @@ def load_models(
     for m in model_like:
         if isinstance(m, (str, Path)):
             p = Path(m)
-            if p.is_file() and p.suffix in {'.pt', '.pth', '.ckpt'}:
+            if p.is_file():
                 models.append(
                     load_model(
                         p,
@@ -650,17 +670,22 @@ def load_models(
                         cfg=cfg,
                     )
                 )
-            else:
-                best, _ = find_best_model(p)
-                models.append(
-                    load_model(
-                        best,
-                        device,
-                        load_compiled,
-                        load_weights_only=load_weights_only,
-                        cfg=cfg,
-                    )
+                continue
+            best_info = find_best_model(p)
+            if best_info is None:
+                raise FileNotFoundError(
+                    f"Could not find a model file in '{p}'. Expected a file path or a run directory."
                 )
+            best, _ = best_info
+            models.append(
+                load_model(
+                    best,
+                    device,
+                    load_compiled,
+                    load_weights_only=load_weights_only,
+                    cfg=cfg,
+                )
+            )
         else:
             raise TypeError("List elements must be all nn.Module or all str/Path.")
     
@@ -1246,8 +1271,12 @@ def read_user_config(
     for path in sorted(converted_fields):
         override_list.append(f"~{path}")
 
+    deferred_updates = []
     for k, v in get_all_pairs(user_cfg):
         key = ".".join(k)
+        if isinstance(v, (DictConfig, ListConfig, dict, list)):
+            deferred_updates.append((key, v))
+            continue
         # process value
         value = str(escape_all(v)).replace("'", "")
         if value == 'None':
@@ -1275,9 +1304,12 @@ def read_user_config(
         context = initialize(version_base=None, config_path=config_path)
     with context:
         composed_cfg = compose(config_name=config_name, overrides=override_list)
-    
+
     # Allow write access to unknown fields
     OmegaConf.set_struct(composed_cfg, False)
+
+    for key, value in deferred_updates:
+        OmegaConf.update(composed_cfg, key, value, merge=True)
 
     normalize_config_sequences(composed_cfg)
     prune_config_targets(composed_cfg)

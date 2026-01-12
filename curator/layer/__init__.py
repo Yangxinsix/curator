@@ -18,7 +18,7 @@ from ._painn_update import PainnUpdate
 from ._pairwise_distance import PairwiseDistance, get_pair_distance
 from ._pair_repulsion import ZBLBasis, PairRepulsionEnergy
 from ._symmetric_contraction import Contraction, SymmetricContraction
-from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift
+from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift, MultiDomainRescaleShift
 from ._strain import Strain
 from ._feature import FeatureExtractor, FeatureCalculator, RandomProjections
 from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
@@ -84,6 +84,7 @@ __all__ = [
     GradientOutput,           # output modules (output forces and stress)
     GlobalRescaleShift,            # output modules (postprocess energy)
     PerSpeciesRescaleShift,
+    MultiDomainRescaleShift,
     FeatureExtractor,
     FeatureCalculator, 
     RandomProjections,

@@ -21,6 +21,10 @@ except ImportError:
     from curator.utils import scatter_add, scatter_mean
 
 logger = logging.getLogger(__name__)    # console output
+try:
+    from tqdm.auto import tqdm
+except Exception:  # pragma: no cover
+    tqdm = None
 class Representation(nn.Module):
     """
     Shared mixin/base to standardize handling of head configs and readout instantiation
@@ -385,7 +389,7 @@ class LitNNP(pl.LightningModule):
         return None
 
     def on_train_start(self):
-        logger.info("\n")
+        self._write_log_only("\n")
         logger.debug("Start training model")
         logger.info(f"{self.optimizers()}")
     
@@ -393,30 +397,30 @@ class LitNNP(pl.LightningModule):
     #     logger.info("\nStart validating model")
         
     def on_test_start(self):
-        logger.info("\n")
+        self._write_log_only("\n")
         logger.debug("Start testing model")
 
     def on_train_epoch_start(self):
-        logger.info("\n")
-        logger.debug("Training")
+        self._write_log_only("\n")
+        self._write_log_only("Training")
         self._debug_rescale_logged["train"] = False
         if self.metric_names is not None:
-            logger.info(self._format_header(include_loader=True))
+            self._write_log_only(self._format_header(include_loader=True))
         
     def on_validation_epoch_start(self):
         torch.set_grad_enabled(True)
-        logger.info("\n")
-        logger.debug("Validating")
+        self._write_log_only("\n")
+        self._write_log_only("Validation")
         self._debug_rescale_logged["val"] = False
         if self.metric_names is not None:
-            logger.info(self._format_header(include_loader=True))
+            self._write_log_only(self._format_header(include_loader=True))
     
     def on_test_epoch_start(self):
         torch.set_grad_enabled(True)
-        logger.info("\n")
-        logger.debug("Testing")
+        self._write_log_only("\n")
+        self._write_log_only("Testing")
         self._debug_rescale_logged["test"] = False
-        logger.info(self._format_header(include_loader=True))
+        self._write_log_only(self._format_header(include_loader=True))
     
     def training_step(self, batch: Dict, batch_idx: List[int]) -> torch.Tensor:
         if self._is_combined_batch(batch):
@@ -437,7 +441,7 @@ class LitNNP(pl.LightningModule):
                         batch_size=max(1, num_abs_dict.get(k, 1)),
                         on_step=True,
                         on_epoch=True,
-                        prog_bar=True,
+                        prog_bar=False,
                         sync_dist=True,
                         add_dataloader_idx=False,
                     )
@@ -449,7 +453,7 @@ class LitNNP(pl.LightningModule):
                 self.log_head(display_loss, display_metrics, "train")
                 if batch_idx % self.trainer.log_every_n_steps == 0:
                     values = self._format_metric_values("train", display_loss, display_metrics)
-                    logger.info(self._format_row(self.current_epoch, batch_idx, self._loader_label(idx), values))
+                    self._write_log_only(self._format_row(self.current_epoch, batch_idx, self._loader_label(idx), values))
 
             self.log(
                 "train_total_loss",
@@ -471,7 +475,7 @@ class LitNNP(pl.LightningModule):
                 batch_size=max(1, num_abs_dict[k]),
                 on_step=True,
                 on_epoch=True,
-                prog_bar=True,
+                prog_bar=k.endswith("_total_loss"),
                 sync_dist=True,
             )
         self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
@@ -480,7 +484,7 @@ class LitNNP(pl.LightningModule):
 
         if batch_idx % self.trainer.log_every_n_steps == 0:
             values = self._format_metric_values("train", loss_dict, batch_metrics)
-            logger.info(self._format_row(self.current_epoch, batch_idx, self._loader_label(0), values))
+            self._write_log_only(self._format_row(self.current_epoch, batch_idx, self._loader_label(0), values))
 
         return loss_dict['train_total_loss']
 
@@ -533,7 +537,15 @@ class LitNNP(pl.LightningModule):
         loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_batch, 'val')
         self._apply_batch_weight(loss_dict, num_abs_dict, batch)
         for k in loss_dict.keys():
-            self.log(k, loss_dict[k].detach().cpu().item(), batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True) 
+            self.log(
+                k,
+                loss_dict[k].detach().cpu().item(),
+                batch_size=num_abs_dict[k],
+                on_step=True,
+                on_epoch=True,
+                prog_bar=k.endswith("_total_loss"),
+                sync_dist=True,
+            )
         
         # nothing need to be scaled for calculating metrics        
         batch_metrics = {}
@@ -547,7 +559,7 @@ class LitNNP(pl.LightningModule):
         # logging metrics to console
         if batch_idx % self.trainer.log_every_n_steps == 0:
             values = self._format_metric_values("val", loss_dict, batch_metrics)
-            logger.info(self._format_row(self.current_epoch, batch_idx, self._loader_label(dataloader_idx), values))
+            self._write_log_only(self._format_row(self.current_epoch, batch_idx, self._loader_label(dataloader_idx), values))
         
         return loss_dict['val_total_loss']
     
@@ -570,7 +582,15 @@ class LitNNP(pl.LightningModule):
         loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_targets, 'test')
         self._apply_batch_weight(loss_dict, num_abs_dict, batch)
         for k in loss_dict.keys():
-            self.log(k, loss_dict[k].detach().cpu().item(), batch_size=num_abs_dict[k], on_step=True, on_epoch=True, prog_bar=True, sync_dist=True) 
+            self.log(
+                k,
+                loss_dict[k].detach().cpu().item(),
+                batch_size=num_abs_dict[k],
+                on_step=True,
+                on_epoch=True,
+                prog_bar=k.endswith("_total_loss"),
+                sync_dist=True,
+            )
                
         batch_metrics = {}
         for output in self.outputs:
@@ -580,7 +600,7 @@ class LitNNP(pl.LightningModule):
         # logging metrics to console
         if batch_idx % self.trainer.log_every_n_steps == 0:
             values = self._format_metric_values("test", loss_dict, batch_metrics)
-            logger.info(self._format_row(self.current_epoch, batch_idx, self._loader_label(dataloader_idx), values))
+            self._write_log_only(self._format_row(self.current_epoch, batch_idx, self._loader_label(dataloader_idx), values))
         
         return loss_dict['test_loss']
     
@@ -588,47 +608,65 @@ class LitNNP(pl.LightningModule):
         pass
     
     def on_validation_epoch_end(self):
-        logger.info("\n")
-        logger.debug("Epoch summary:")
-        logger.info(self._format_epoch_header())
+        self._write_log_only("\n")
+        self._write_log_and_console("Epoch summary")
+        header = self._format_epoch_header()
+        self._write_log_only(header)
+        self._write_console(header)
         train_loader_indices = sorted(self._collect_dataloader_indices("train"))
         if train_loader_indices:
             for loader_idx in train_loader_indices:
                 values = self._format_epoch_metric_values("train", loader_idx)
-                logger.info(self._format_epoch_row("Train", self.current_epoch, self._loader_label(loader_idx), values))
+                row = self._format_epoch_row("Train", self.current_epoch, self._loader_label(loader_idx), values)
+                self._write_log_only(row)
+                self._write_console(row)
         else:
             values = self._format_epoch_metric_values("train", 0)
-            logger.info(self._format_epoch_row("Train", self.current_epoch, self._loader_label(0), values))
+            row = self._format_epoch_row("Train", self.current_epoch, self._loader_label(0), values)
+            self._write_log_only(row)
+            self._write_console(row)
 
         loader_indices = sorted(self._collect_dataloader_indices("val"))
         if loader_indices:
             for loader_idx in loader_indices:
                 values = self._format_epoch_metric_values("val", loader_idx)
-                logger.info(self._format_epoch_row("Validation", self.current_epoch, self._loader_label(loader_idx), values))
+                row = self._format_epoch_row("Validation", self.current_epoch, self._loader_label(loader_idx), values)
+                self._write_log_only(row)
+                self._write_console(row)
         else:
             values = self._format_epoch_metric_values("val", 0)
-            logger.info(self._format_epoch_row("Validation", self.current_epoch, self._loader_label(0), values))
+            row = self._format_epoch_row("Validation", self.current_epoch, self._loader_label(0), values)
+            self._write_log_only(row)
+            self._write_console(row)
 
         for output in self.outputs:
             output.reset_metrics(subset='train')
             output.reset_metrics(subset='val')
         if not self.metric_names_initialized:
             self.metric_names_initialized = True
+        self._write_console("")
 
     def on_test_epoch_end(self):
-        logger.info("\n")
-        logger.debug("Epoch summary:")
-        logger.info(self._format_epoch_header())
+        self._write_log_only("\n")
+        self._write_log_and_console("Epoch summary")
+        header = self._format_epoch_header()
+        self._write_log_only(header)
+        self._write_console(header)
         loader_indices = sorted(self._collect_dataloader_indices("test"))
         if loader_indices:
             for loader_idx in loader_indices:
                 values = self._format_epoch_metric_values("test", loader_idx)
-                logger.info(self._format_epoch_row("Test", self.current_epoch, self._loader_label(loader_idx), values))
+                row = self._format_epoch_row("Test", self.current_epoch, self._loader_label(loader_idx), values)
+                self._write_log_only(row)
+                self._write_console(row)
         else:
             values = self._format_epoch_metric_values("test", 0)
-            logger.info(self._format_epoch_row("Test", self.current_epoch, self._loader_label(0), values))
+            row = self._format_epoch_row("Test", self.current_epoch, self._loader_label(0), values)
+            self._write_log_only(row)
+            self._write_console(row)
         for output in self.outputs:
             output.reset_metrics(subset='test')
+        self._write_console("")
 
     def save_configuration(self, config: DictConfig):
         self.config = config
@@ -716,6 +754,24 @@ class LitNNP(pl.LightningModule):
     # ------------------------------------------------------------------ #
     # Logging and debug helpers
     # ------------------------------------------------------------------ #
+    def _write_log_only(self, message: str) -> None:
+        # Log progress lines to file only; console stream filters these out.
+        logger.info(message, extra={"progress": True})
+
+    def _write_console(self, message: str) -> None:
+        # Write to the terminal without breaking tqdm progress bars.
+        if self.trainer is not None and not getattr(self.trainer, "is_global_zero", True):
+            return
+        if tqdm is None:
+            print(message)
+        else:
+            tqdm.write(message)
+
+    def _write_log_and_console(self, message: str) -> None:
+        # Keep a log record and echo to the terminal.
+        self._write_log_only(message)
+        self._write_console(message)
+
     def log_head(self, loss_dict, metrics_dict, stage='train'):
         # get metric names for first epoch
         if not self.metric_names_initialized:
@@ -731,7 +787,7 @@ class LitNNP(pl.LightningModule):
                         self.metric_names.append(name)
 
             if not self.metric_names_logged:
-                logger.info(self._format_header(include_loader=True))
+                self._write_log_only(self._format_header(include_loader=True))
                 self.metric_names_logged = True
 
     def _format_metric_values(self, stage: str, loss_dict: Dict, metrics_dict: Dict) -> List[float]:

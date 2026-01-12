@@ -81,6 +81,7 @@ class ThermoWithUncertainty(MDThermoLogger):
         self._backend_ready = False
 
     def on_sim_start(self, ctx: SimContext):
+        self._attach_backend(ctx)
         if self.save_path:
             self._traj = Trajectory(self.save_path, "w")
         self._low_hits_total = 0
@@ -88,6 +89,31 @@ class ThermoWithUncertainty(MDThermoLogger):
         self._ensure_uncertainty_columns()
         self._header_printed = False
         return None
+
+    def _attach_backend(self, ctx: SimContext) -> None:
+        if self._unc_backend is None:
+            return
+        if not hasattr(self._unc_backend, "attach_to_model"):
+            return
+        atoms = ctx.atoms
+        if atoms is None:
+            return
+        if isinstance(atoms, (list, tuple)):
+            for at in atoms:
+                self._attach_backend_to_atoms(at)
+            return
+        self._attach_backend_to_atoms(atoms)
+
+    def _attach_backend_to_atoms(self, atoms) -> None:
+        calc = getattr(atoms, "calc", None)
+        model = getattr(calc, "model", None) if calc is not None else None
+        if model is None:
+            return
+        try:
+            self._unc_backend.attach_to_model(model)
+        except Exception as exc:
+            if self.log is not None:
+                self.log.exception(f"Uncertainty backend attach failed: {exc}")
 
     def on_step(self, ctx: SimContext):
         # Only act on thermo cadence
@@ -140,6 +166,8 @@ class ThermoWithUncertainty(MDThermoLogger):
                 data = data[idx]
             else:
                 data = {}
+        if key in ("is_warning", "is_outlier"):
+            return bool(data.get(key, False))
         try:
             return float(data.get(key, float("nan")))
         except Exception:

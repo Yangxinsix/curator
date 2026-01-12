@@ -58,7 +58,7 @@ Selection can also download and prefilter pool data directly from a URL by provi
 data_url:
   url: "https://github.com/ACEsuit/mace-foundations/releases/download/mace_matpes_0/matpes-pbe-replay-data.xyz"
   required_elements: ["Li", "Fe", "P", "O"]
-  match: "all"
+  filtering_type: superset
   extract: true
   save_filtered: true
 ```

@@ -58,7 +58,8 @@ def _prepare_data_source(
     url: str,
     cache_dir: Optional[Union[str, PosixPath]] = None,
     required_elements: Optional[Sequence[Union[str, int]]] = None,
-    match: str = "all",
+    # filtering_type supports: none, subset, superset, exact, overlap
+    filtering_type: str = "superset",
     extract: bool = True,
     filename: Optional[str] = None,
     save_filtered: bool = True,
@@ -182,7 +183,34 @@ def _prepare_data_source(
         raise ValueError(f"No readable structures found for '{download_path}'.")
 
     if not required_elements:
-        logger.info("No element filter applied; returning %d structures", len(atoms_list))
+        logger.info(
+            "No element filter applied (required_elements=%s, filtering_type=%s); returning %d structures",
+            required_elements,
+            filtering_type,
+            len(atoms_list),
+        )
+        return atoms_list
+    if isinstance(required_elements, str) and required_elements.lower() == "all":
+        logger.info(
+            "No element filter applied (required_elements=%s, filtering_type=%s); returning %d structures",
+            required_elements,
+            filtering_type,
+            len(atoms_list),
+        )
+        return atoms_list
+    if isinstance(required_elements, (list, tuple, ListConfig)) and len(required_elements) == 1:
+        if isinstance(required_elements[0], str) and required_elements[0].lower() == "all":
+            logger.info(
+                "No element filter applied (required_elements=%s, filtering_type=%s); returning %d structures",
+                required_elements,
+                filtering_type,
+                len(atoms_list),
+            )
+            return atoms_list
+
+    filtering = str(filtering_type).lower() if filtering_type is not None else "superset"
+    if filtering == "none":
+        logger.info("Filtering type set to none; returning %d structures", len(atoms_list))
         return atoms_list
 
     required_numbers = set()
@@ -195,21 +223,27 @@ def _prepare_data_source(
         else:
             required_numbers.add(int(elem))
 
-    if match not in {"all", "any"}:
-        raise ValueError("match must be 'all' or 'any'.")
-
     logger.info(
-        "Filtering structures with elements=%s (match=%s)",
+        "Filtering structures with elements=%s (filtering_type=%s)",
         list(required_elements),
-        match,
+        filtering,
     )
     filtered = []
     for atoms in atoms_list:
         present = set(atoms.get_atomic_numbers().tolist())
-        if match == "all":
+        if filtering == "subset":
+            keep = present.issubset(required_numbers)
+        elif filtering == "exact":
+            keep = present == required_numbers
+        elif filtering == "superset":
             keep = required_numbers.issubset(present)
+        elif filtering == "overlap":
+            keep = bool(present.intersection(required_numbers))
         else:
-            keep = bool(required_numbers & present)
+            raise ValueError(
+                "Filtering type is not recognised. Must be one of: "
+                "none, subset, superset, exact, overlap."
+            )
         if keep:
             filtered.append(atoms)
     logger.info("Filtered structures: %d / %d", len(filtered), len(atoms_list))

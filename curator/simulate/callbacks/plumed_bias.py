@@ -38,6 +38,9 @@ class PlumedBias(Callback):
             for img in ctx.state["neb_images"]:
                 self._attach_to_atoms_calc(img)
 
+    def on_sim_end(self, ctx: SimContext):
+        self.plumed.log_stats()
+
     def _attach_to_engine(self, ctx: SimContext) -> None:
         engine = getattr(ctx, "engine", None)
         if engine is None:

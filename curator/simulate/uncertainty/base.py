@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 import logging
 from typing import Any, Dict, Optional, Sequence, Union
 
+import numpy as np
+
 from ase import Atoms
 from ase.calculators.calculator import Calculator
 
@@ -69,13 +71,48 @@ class BaseUncertainty(ABC):
     def extract_from_outputs(self, outputs: Optional[Dict[str, Any]]) -> Dict[str, Union[float, bool, None]]:
         if not outputs:
             return {}
-        values: Dict[str, float] = {}
+        values: Dict[str, Any] = {}
+        batch_len: Optional[int] = None
         for key in self.uncertainty_keys:
             if key in outputs:
-                values[key] = float(outputs[key])
+                raw = outputs[key]
+                arr = None
+                if hasattr(raw, "detach"):
+                    try:
+                        raw_cpu = raw.detach().cpu()
+                        if getattr(raw_cpu, "numel", lambda: 1)() > 1:
+                            arr = raw_cpu.view(-1).numpy()
+                        else:
+                            values[key] = float(raw_cpu.item())
+                            continue
+                    except Exception:
+                        pass
+                if arr is None and isinstance(raw, (list, tuple, np.ndarray)):
+                    arr = np.asarray(raw).reshape(-1)
+                if arr is None:
+                    values[key] = float(raw)
+                    continue
+                if batch_len is None:
+                    batch_len = int(len(arr))
+                values[key] = arr
         if not values:
             return {}
-        return self._format_output(values)
+        if batch_len is None:
+            return self._format_output(values)
+
+        results = []
+        for i in range(batch_len):
+            row: Dict[str, float] = {}
+            for key in self.uncertainty_keys:
+                if key not in values:
+                    continue
+                val = values[key]
+                if isinstance(val, np.ndarray):
+                    row[key] = float(val[i])
+                else:
+                    row[key] = float(val)
+            results.append(self._format_output(row))
+        return results
 
     def _format_output(self, values: Dict[str, float]) -> Dict[str, Union[float, bool, None]]:
         """Return a result dictionary including warning and outlier flags."""

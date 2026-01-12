@@ -1,11 +1,12 @@
 _target_: curator.simulate.callbacks.plumed_bias.PlumedBias
 plumed:
   _target_: curator.interface.plumed.Plumed
-  input_lines: []
-  timestep: 1.0
-  kT: 1.0
-  log: ""
-  restart: false
+  plumed_kwargs:
+    input_lines: []
+    timestep: 1.0
+    kT: 1.0
+    log: ""
+    restart: false
   use_charge: false
   update_charge: false
   debug: false
