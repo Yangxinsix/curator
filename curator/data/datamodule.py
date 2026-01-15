@@ -515,7 +515,7 @@ class AtomsDataModule(pl.LightningDataModule):
             raise KeyError(f"Property '{property_key}' not found in training dataset samples.")
         values = torch.cat(values)
         rms = torch.sqrt(torch.mean(values * values)).item()
-        logger.debug(f"RMS for '{property_key}': {rms:.3f}.")
+        logger.debug(f"Computed root mean square for '{property_key}': {rms:.3f}.")
         return rms
 
     def build_context(self, heads: List) -> "DataContext":
