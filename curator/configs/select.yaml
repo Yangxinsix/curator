@@ -16,6 +16,10 @@ method: lcmd_greedy
 n_random_features: 500
 load_features: null
 save_features: null
+export_kernels: null
+export_raw_features: true
+export_normalized_features: true
 save_images: false
 debug: false
 transforms: []
+filters: []

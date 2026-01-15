@@ -78,27 +78,19 @@ def train(config: DictConfig) -> None:
     _ensure_resolvers()
     from hydra.utils import instantiate
     import torch
-    import pytorch_lightning
-    from pytorch_lightning import (
-    LightningDataModule, 
-    Trainer,
-    )
+    from pytorch_lightning.loggers import WandbLogger
     from pytorch_lightning import seed_everything
-    import pytorch_lightning.loggers
-    from curator.model import LitNNP
-    from e3nn.util.jit import script
+    from curator.model import LitNNP, NeuralNetworkPotential
     from .utils import (
         read_user_config,
         CustomFormatter,
         find_best_model,
         normalize_config_sequences,
         prune_config_targets,
-    update_config_from_datamodule,
-    log_logo,
-    copy_domain_modules,
-    update_model_domain_config,
-    update_model_domains,
-)
+        update_config_from_datamodule,
+        log_logo,
+        update_model_domains,
+    )
 
     _configure_cli_logger(
         log,
@@ -134,17 +126,33 @@ def train(config: DictConfig) -> None:
     
     # Initiate the datamodule
     log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_path}")
-    datamodule: LightningDataModule = hydra.utils.instantiate(config.data)
+    datamodule = instantiate(config.data)
     datamodule.setup()
     # something must be inferred from data before instantiating the model
     update_config_from_datamodule(config, datamodule, logger=log)
 
+    # Extend or replace domains
     domain_mode = getattr(config.task, "domain_mode", None)
     new_domains = getattr(config.task, "new_domains", None)
-    if domain_mode is not None and new_domains is not None:
-        update_model_domain_config(config.model, domain_mode, new_domains, logger=log)
+    if domain_mode is None and config.model_path is not None:
+        if hasattr(datamodule, "domain_modules") and len(datamodule.domain_modules) > 1:
+            domain_mode = "extend"
+            config.task.domain_mode = domain_mode
+            log.debug("Auto-set domain_mode=extend for multi-domain fine-tune.")
+    if domain_mode in ("extend", "replace") and new_domains is None:
+        if hasattr(datamodule, "domain_modules") and hasattr(datamodule, "domain_to_id"):
+            inferred = []
+            for name in datamodule.domain_modules.keys():
+                if str(name).lower().startswith("replay"):
+                    continue
+                dom_id = datamodule.domain_to_id.get(name)
+                if dom_id is not None:
+                    inferred.append(str(dom_id))
+            if inferred:
+                new_domains = inferred
+                config.task.new_domains = inferred
+                log.debug("Inferred new_domains from datapath (excluding replay): %s", inferred)
 
-    model = hydra.utils.instantiate(config.model)
     resume_ckpt = None
     checkpoint_outputs = None
 
@@ -153,32 +161,33 @@ def train(config: DictConfig) -> None:
         log.debug(f"Loading trained model from {config.model_path}")
         if config.task.load_entire_model:
             state_dict = torch.load(config.model_path)
-            model = state_dict['model']
-            checkpoint_outputs = state_dict.get('outputs')
-        elif config.task.load_weights_only:
-            from collections import OrderedDict
-            state_dict = torch.load(config.model_path)
-            new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in state_dict['state_dict'].items())
-            model.load_state_dict(new_state_dict, strict=False)
+            if isinstance(state_dict, torch.nn.Module):
+                model = state_dict
+                checkpoint_outputs = getattr(state_dict, "outputs", None)
+            else:
+                model = state_dict['model']
+                checkpoint_outputs = state_dict.get('outputs')
+            if not isinstance(model, NeuralNetworkPotential):
+                raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
         else:
-            resume_ckpt = config.model_path
-            log.debug(
-                "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
-                resume_ckpt,
-            )
+            model = instantiate(config.model)
+            if config.task.load_weights_only:
+                from collections import OrderedDict
+                state_dict = torch.load(config.model_path)
+                if isinstance(state_dict, torch.nn.Module):
+                    state_dict = {"state_dict": state_dict.state_dict()}
+                new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in state_dict['state_dict'].items())
+                model.load_state_dict(new_state_dict, strict=False)
+            else:
+                resume_ckpt = config.model_path
+                log.debug(
+                    "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
+                    resume_ckpt,
+                )
+    else:
+        model = instantiate(config.model)
 
     init_from = getattr(config.task, "init_new_domains_from", None)
-    if init_from is not None:
-        if not getattr(config.task, "load_weights_only", False):
-            log.warning("init_new_domains_from is set but load_weights_only is false; skipping domain copy.")
-        else:
-            target_domains = getattr(config.task, "init_domains", None)
-            copied = copy_domain_modules(model, init_from, target_domains=target_domains, logger=log)
-            if copied == 0:
-                log.warning("No domain modules were copied; check domain ids and model readout config.")
-
-    domain_mode = getattr(config.task, "domain_mode", None)
-    new_domains = getattr(config.task, "new_domains", None)
     if domain_mode in ("extend", "replace") and new_domains is not None:
         init_strategy = "copy" if init_from is not None else "random"
         updated = update_model_domains(
@@ -190,6 +199,17 @@ def train(config: DictConfig) -> None:
             logger=log,
         )
         log.debug("Updated model domains: mode=%s new_domains=%s updated=%s", domain_mode, new_domains, updated)
+
+    # Casting model dtype to data dtype
+    target_dtype = None
+    if hasattr(datamodule, "default_dtype"):
+        target_dtype = datamodule.default_dtype
+    elif hasattr(datamodule, "domain_modules") and datamodule.domain_modules:
+        first_dm = next(iter(datamodule.domain_modules.values()))
+        target_dtype = getattr(first_dm, "default_dtype", None)
+    if target_dtype is not None:
+        model = model.to(dtype=target_dtype)
+        log.debug("Casting model dtype to data dtype %s", target_dtype)
 
     if config.compile:
         log.debug("Compiling model with torch.compile")
@@ -209,11 +229,11 @@ def train(config: DictConfig) -> None:
     
     # Initiate the training
     log.debug(f"Instantiating trainer <{config.trainer._target_}>")
-    trainer: Trainer = hydra.utils.instantiate(config.trainer)
+    trainer = instantiate(config.trainer)
     # log.debug(f"Trainer callbacks: {str(callback for callback in trainer.callbacks)}")
     
     # wandb bug!!
-    if isinstance(trainer.logger, pytorch_lightning.loggers.WandbLogger):
+    if isinstance(trainer.logger, WandbLogger):
         os.makedirs(trainer.logger.save_dir + '/wandb', exist_ok=True)
 
     # Train the model
@@ -744,7 +764,13 @@ def select(config: DictConfig):
         if "url" not in data_url:
             raise RuntimeError("data_url must include a 'url' field.")
         log.info("Preparing pool data from URL: %s", data_url["url"])
-        pool_atoms = _prepare_data_source(**data_url)
+        pool_atoms = _prepare_data_source(
+            url=data_url["url"],
+            cache_dir=data_url.get("cache_dir"),
+            extract=data_url.get("extract", True),
+            filename=data_url.get("filename"),
+            ase_read_kwargs=data_url.get("ase_read_kwargs"),
+        )
         pool_source = data_url.get("url")
         data_dict = {
             "pool": AseDataset(pool_atoms, cutoff=cutoff, transforms=instantiate(config.transforms))
@@ -774,6 +800,13 @@ def select(config: DictConfig):
     elif len(data_dict['pool']) < select_batch_size:
         raise RuntimeError(f"""The pool data set ({len(data_dict['pool'])}) is not large enough for selection! Add more data or change batch size {select_batch_size}.""")
 
+    filters_cfg = OmegaConf.select(config, "filters")
+    structure_filter = None
+    if filters_cfg is not None:
+        structure_filter = instantiate(filters_cfg)
+        if isinstance(structure_filter, (list, tuple)) and not structure_filter:
+            structure_filter = None
+
     # Select structures based on the active learning method
     al = GeneralActiveLearning(
         kernel=config.kernel, 
@@ -788,6 +821,10 @@ def select(config: DictConfig):
         debug=config.debug,
         load_features=config.load_features,
         save_features=config.save_features,
+        structure_filter=structure_filter,
+        export_kernels=OmegaConf.select(config, "export_kernels"),
+        export_raw_features=OmegaConf.select(config, "export_raw_features", default=True),
+        export_normalized_features=OmegaConf.select(config, "export_normalized_features", default=True),
     )
 
     # Save the selected indices

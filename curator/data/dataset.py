@@ -31,7 +31,12 @@ class AseDataset(torch.utils.data.Dataset):
 
         self.cutoff = cutoff
         self.default_dtype = default_dtype
-        self.atoms_reader = AseDataReader(cutoff, compute_neighbor_list, transforms)
+        self.atoms_reader = AseDataReader(
+            cutoff,
+            compute_neighbor_list,
+            transforms,
+            default_dtype=self.default_dtype,
+        )
         self.task = task
         self.weight = weight
         self.meta = meta

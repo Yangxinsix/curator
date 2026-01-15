@@ -1,0 +1,3 @@
+_target_: curator.select.filter.ElementFilter
+required_elements: null
+filtering_type: superset

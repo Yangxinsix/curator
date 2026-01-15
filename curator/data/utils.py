@@ -1,12 +1,11 @@
 from . import properties
 from .atoms_data import get_sample_atoms, get_sample_target
 from typing import List, Dict, Tuple, Union, Optional, Sequence
-from ase.data import atomic_names, atomic_numbers
 import torch
 from torch.utils.data import DataLoader, Dataset
 import math
 import numpy as np
-from ase.io import read, write
+from ase.io import read
 from ._data_reader import Trajectory
 from ase import Atoms
 from pathlib import PosixPath, Path
@@ -57,13 +56,8 @@ def read_trajectory(ase_db, *args, **kwargs):
 def _prepare_data_source(
     url: str,
     cache_dir: Optional[Union[str, PosixPath]] = None,
-    required_elements: Optional[Sequence[Union[str, int]]] = None,
-    # filtering_type supports: none, subset, superset, exact, overlap
-    filtering_type: str = "superset",
     extract: bool = True,
     filename: Optional[str] = None,
-    save_filtered: bool = True,
-    filtered_filename: Optional[str] = None,
     ase_read_kwargs: Optional[Dict] = None,
 ) -> List[Atoms]:
     if cache_dir is None:
@@ -182,83 +176,8 @@ def _prepare_data_source(
             )
         raise ValueError(f"No readable structures found for '{download_path}'.")
 
-    if not required_elements:
-        logger.info(
-            "No element filter applied (required_elements=%s, filtering_type=%s); returning %d structures",
-            required_elements,
-            filtering_type,
-            len(atoms_list),
-        )
-        return atoms_list
-    if isinstance(required_elements, str) and required_elements.lower() == "all":
-        logger.info(
-            "No element filter applied (required_elements=%s, filtering_type=%s); returning %d structures",
-            required_elements,
-            filtering_type,
-            len(atoms_list),
-        )
-        return atoms_list
-    if isinstance(required_elements, (list, tuple, ListConfig)) and len(required_elements) == 1:
-        if isinstance(required_elements[0], str) and required_elements[0].lower() == "all":
-            logger.info(
-                "No element filter applied (required_elements=%s, filtering_type=%s); returning %d structures",
-                required_elements,
-                filtering_type,
-                len(atoms_list),
-            )
-            return atoms_list
-
-    filtering = str(filtering_type).lower() if filtering_type is not None else "superset"
-    if filtering == "none":
-        logger.info("Filtering type set to none; returning %d structures", len(atoms_list))
-        return atoms_list
-
-    required_numbers = set()
-    for elem in required_elements:
-        if isinstance(elem, str):
-            if elem.isdigit():
-                required_numbers.add(int(elem))
-            else:
-                required_numbers.add(atomic_numbers[elem])
-        else:
-            required_numbers.add(int(elem))
-
-    logger.info(
-        "Filtering structures with elements=%s (filtering_type=%s)",
-        list(required_elements),
-        filtering,
-    )
-    filtered = []
-    for atoms in atoms_list:
-        present = set(atoms.get_atomic_numbers().tolist())
-        if filtering == "subset":
-            keep = present.issubset(required_numbers)
-        elif filtering == "exact":
-            keep = present == required_numbers
-        elif filtering == "superset":
-            keep = required_numbers.issubset(present)
-        elif filtering == "overlap":
-            keep = bool(present.intersection(required_numbers))
-        else:
-            raise ValueError(
-                "Filtering type is not recognised. Must be one of: "
-                "none, subset, superset, exact, overlap."
-            )
-        if keep:
-            filtered.append(atoms)
-    logger.info("Filtered structures: %d / %d", len(filtered), len(atoms_list))
-    if save_filtered:
-        if filtered_filename:
-            filtered_path = cache_path / filtered_filename
-        else:
-            filtered_path = cache_path / f"{download_path.stem}_filtered.xyz"
-        if filtered:
-            write(str(filtered_path), filtered, format="extxyz")
-            logger.info("Saved filtered structures to %s", filtered_path)
-            print(f"Filtered data saved to: {filtered_path}")
-        else:
-            logger.info("No filtered structures to save")
-    return filtered
+    logger.info("Loaded %d structures from %s", len(atoms_list), download_path)
+    return atoms_list
 
 def compute_average_E0(
     dataset,

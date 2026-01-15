@@ -158,8 +158,13 @@ class HeadConfig:
     reduction: Optional[str] = "sum"  # "sum", "mean", or None
     atomwise_key: Optional[str] = None  # optional key for per-atom output, e.g. atomic_energy
     write_atomwise: bool = False  # whether to write per-atom output to data
-    scale_by: Union[float, Dict[str, float], None] = None
-    shift_by: Union[float, Dict[str, float], None] = None
+    # scale_by / shift_by accept:
+    # - False/None: disable scaling/shifting (use 1.0/0.0)
+    # - True/"default": compute from dataset stats
+    # - "rms" (scale_by only): compute RMS for scale
+    # - float: use the provided value
+    scale_by: Union[float, Dict[str, float], str, bool, None] = None
+    shift_by: Union[float, Dict[str, float], str, bool, None] = None
     atomwise_shift: bool = False  # whether the shift applies on per-atom values
     atomwise_normalization: bool = True  # if shifting structure-level value, multiply by n_atoms
     domains: Optional[List[Union[str, int]]] = None  # optional domain whitelist for this head
@@ -174,6 +179,8 @@ HEAD_PRESETS: Dict[str, HeadConfig] = {
         atomwise_key=atomic_energy,
         write_atomwise=False,
         dim=1,
+        scale_by=True,
+        shift_by=True,
     ),
     "forces": HeadConfig(
         key=forces,
@@ -181,6 +188,8 @@ HEAD_PRESETS: Dict[str, HeadConfig] = {
         reduction=None,
         dim=3,
         write_atomwise=True,
+        scale_by="rms",
+        shift_by=False,
     ),
     "atomic_energy": HeadConfig(
         key=atomic_energy,
@@ -205,6 +214,22 @@ HEAD_PRESETS: Dict[str, HeadConfig] = {
 }
 
 
+def normalize_head_flag(value: Union[float, Dict[str, float], str, bool, None]):
+    if value is None or value is False:
+        return None
+    if value is True:
+        return "default"
+    if isinstance(value, str):
+        lowered = value.lower()
+        if lowered in ("default", "true"):
+            return "default"
+        if lowered in ("none", "false"):
+            return None
+        if lowered == "rms":
+            return "rms"
+    return value
+
+
 def resolve_heads(heads: List[Union[str, HeadConfig, Dict]]) -> List[HeadConfig]:
     """
     Convert a list of string/dict/HeadConfig into a list of HeadConfig.
@@ -220,7 +245,13 @@ def resolve_heads(heads: List[Union[str, HeadConfig, Dict]]) -> List[HeadConfig]
                 raise KeyError(f"Unknown head preset '{h}'. Available: {list(HEAD_PRESETS.keys())}")
             resolved.append(HEAD_PRESETS[h])
         elif isinstance(h, dict):
-            resolved.append(HeadConfig(**h))
+            key = h.get("key")
+            if key in HEAD_PRESETS:
+                base = HEAD_PRESETS[key].__dict__.copy()
+                base.update(h)
+                resolved.append(HeadConfig(**base))
+            else:
+                resolved.append(HeadConfig(**h))
         else:
             raise TypeError(f"Unsupported head spec type: {type(h)}")
     return resolved

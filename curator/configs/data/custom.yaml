@@ -14,12 +14,14 @@ train_val_split: random
 shuffle: true
 num_workers: 0
 pin_memory: True
+default_dtype: float32
 species: null
 avg_num_neighbors: auto
 atomic_energies: null
 normalization: True
 atomwise_normalization: True
-scale_forces: True
+heads: [energy]
+rescale_shift_heads: []
 transforms: []
   # - _target_: curator.data.TypeMapper
   #   species: ${data.species}

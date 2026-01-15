@@ -1,11 +1,12 @@
 import torch
 from torch import nn
 from collections import defaultdict
-from typing import List, Dict, Tuple, Optional, Union, Iterable
+from typing import List, Dict, Tuple, Optional, Union, Iterable, Sequence
 from curator.data import collate_atomsdata
 from .select import *
 from .kernel import *
 from curator.data import properties
+from .filter import Filter
 from curator.layer.utils import find_layer_by_name_recursive
 try:
     from torch_scatter import scatter_add, scatter_mean, scatter_max
@@ -20,6 +21,7 @@ import hashlib
 from pathlib import Path
 from curator.layer._feature import FeatureExtractor, RandomProjections
 from torch.utils.data import DataLoader
+from omegaconf import ListConfig
 try:
     from tqdm import tqdm
     from tqdm.contrib.logging import logging_redirect_tqdm
@@ -261,7 +263,8 @@ class FeatureStatistics:
         else:
             self.random_projections = random_projections
         self.device = device or next(models[0].parameters()).device
-        self._features_cache: Dict[str, torch.Tensor] = {}
+        self._features_cache_raw: Dict[str, torch.Tensor] = {}
+        self._features_cache_norm: Dict[str, torch.Tensor] = {}
         self.ens_stats = None
         self.Fisher = None
         self.F_reg_inv = None
@@ -293,10 +296,19 @@ class FeatureStatistics:
         
         return ens_stats
                 
-    def _compute_features(
+    def _compute_feat_grad(
         self,
         feature_extractor: FeatureExtractor,
         model_inputs: Dict[str, torch.Tensor],
+    ) -> Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
+        image_idx = model_inputs[properties.image_idx]
+        feature_data = feature_extractor(model_inputs, predict=True)
+        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
+        return image_idx, feats, grads
+
+    def _compute_feature(
+        self,
+        feat_grad: Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]],
         random_projection: RandomProjections,
         kernel: str='ll-gradient',
     ) -> torch.Tensor:
@@ -305,8 +317,7 @@ class FeatureStatistics:
         if kernel not in self._kernel_handlers:
             raise RuntimeError(f"Unknown kernel '{kernel}'")
         return self._kernel_handlers[kernel](
-            feature_extractor=feature_extractor,
-            model_inputs=model_inputs,
+            feat_grad=feat_grad,
             random_projection=random_projection,
         )
 
@@ -355,73 +366,55 @@ class FeatureStatistics:
 
     def _full_gradient_features(
         self,
-        feature_extractor: FeatureExtractor,
-        model_inputs: Dict[str, torch.Tensor],
+        feat_grad: Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]],
         random_projection: RandomProjections,
     ) -> torch.Tensor:
-        image_idx = model_inputs[properties.image_idx]
-        feature_data = feature_extractor(model_inputs, predict=True)
-        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
+        image_idx, feats, grads = feat_grad
         atomic_g = self._project_all_layers(feats, grads, random_projection, image_idx)
         return self._aggregate_atomic_features(atomic_g, image_idx, reduce_to_structure=True)
 
     def _local_full_gradient_features(
         self,
-        feature_extractor: FeatureExtractor,
-        model_inputs: Dict[str, torch.Tensor],
+        feat_grad: Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]],
         random_projection: RandomProjections,
     ) -> torch.Tensor:
-        image_idx = model_inputs[properties.image_idx]
-        feature_data = feature_extractor(model_inputs, predict=True)
-        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
+        image_idx, feats, grads = feat_grad
         atomic_g = self._project_all_layers(feats, grads, random_projection, image_idx)
         return self._aggregate_atomic_features(atomic_g, image_idx, reduce_to_structure=False)
 
     def _ll_gradient_features(
         self,
-        feature_extractor: FeatureExtractor,
-        model_inputs: Dict[str, torch.Tensor],
+        feat_grad: Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]],
         random_projection: RandomProjections,
     ) -> torch.Tensor:
-        image_idx = model_inputs[properties.image_idx]
-        feature_data = feature_extractor(model_inputs, predict=True)
-        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
+        image_idx, feats, grads = feat_grad
         atomic_g = self._layer_features(feats[-1], grads[-1], random_projection, -1)
         return self._aggregate_atomic_features(atomic_g, image_idx, reduce_to_structure=True)
 
     def _local_ll_gradient_features(
         self,
-        feature_extractor: FeatureExtractor,
-        model_inputs: Dict[str, torch.Tensor],
+        feat_grad: Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]],
         random_projection: RandomProjections,
     ) -> torch.Tensor:
-        image_idx = model_inputs[properties.image_idx]
-        feature_data = feature_extractor(model_inputs, predict=True)
-        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
+        image_idx, feats, grads = feat_grad
         atomic_g = self._layer_features(feats[-1], grads[-1], random_projection, -1)
         return self._aggregate_atomic_features(atomic_g, image_idx, reduce_to_structure=False)
 
     def _gnn_features(
         self,
-        feature_extractor: FeatureExtractor,
-        model_inputs: Dict[str, torch.Tensor],
+        feat_grad: Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]],
         random_projection: RandomProjections,
     ) -> torch.Tensor:
-        image_idx = model_inputs[properties.image_idx]
-        feature_data = feature_extractor(model_inputs, predict=True)
-        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
+        image_idx, feats, grads = feat_grad
         atomic_g = self._layer_features(feats[0], grads[0], random_projection, 0)
         return self._aggregate_atomic_features(atomic_g, image_idx, reduce_to_structure=True)
 
     def _local_gnn_features(
         self,
-        feature_extractor: FeatureExtractor,
-        model_inputs: Dict[str, torch.Tensor],
+        feat_grad: Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]],
         random_projection: RandomProjections,
     ) -> torch.Tensor:
-        image_idx = model_inputs[properties.image_idx]
-        feature_data = feature_extractor(model_inputs, predict=True)
-        feats, grads = feature_data[properties.feature], feature_data[properties.gradient]
+        image_idx, feats, grads = feat_grad
         atomic_g = self._layer_features(feats[0], grads[0], random_projection, 0)
         return self._aggregate_atomic_features(atomic_g, image_idx, reduce_to_structure=False)
 
@@ -459,10 +452,22 @@ class FeatureStatistics:
             yield moved
 
     def _normalize_features(self, features: torch.Tensor) -> torch.Tensor:
-        mean = torch.mean(features, dim=0)
-        var = torch.var(features, dim=0)
+        if features.numel() == 0:
+            return features
+        if features.dim() == 2:
+            mean = torch.mean(features, dim=0)
+            var = torch.var(features, dim=0)
+        elif features.dim() == 3:
+            mean = torch.mean(features, dim=1, keepdim=True)
+            var = torch.var(features, dim=1, keepdim=True)
+        else:
+            raise ValueError("Features must be 2D or 3D for normalization.")
         var = torch.where(var == 0, torch.ones_like(var), var)
         return (features - mean) / var
+
+    def _reset_feature_cache(self) -> None:
+        self._features_cache_raw.clear()
+        self._features_cache_norm.clear()
     
     def _compute_fisher(self, g: torch.Tensor) -> torch.Tensor:
         return torch.einsum('mci, mcj -> mij', g, g)
@@ -500,110 +505,182 @@ class FeatureStatistics:
         self,
         dataset: Optional[torch.utils.data.Dataset]=None,
         kernel: str='full-gradient',
+        normalize: bool = True,
     ) -> torch.Tensor:
         """
         :return: Feature vector of ``shape=(n_models, n_structures, n_features)``.
+        When normalize is True, features are normalized per model.
         """
-        if dataset == None:
+        if dataset is not None:
+            self.dataset = dataset
+            self._reset_feature_cache()
+        include_raw = not normalize
+        include_normalized = normalize
+        results = self.get_features_multi(
+            [kernel],
+            dataset=None,
+            include_raw=include_raw,
+            include_normalized=include_normalized,
+        )
+        return results[kernel]["normalized" if normalize else "raw"]
+
+    def get_features_multi(
+        self,
+        kernels: Sequence[str],
+        dataset: Optional[torch.utils.data.Dataset]=None,
+        include_raw: bool = True,
+        include_normalized: bool = True,
+    ) -> Dict[str, Dict[str, torch.Tensor]]:
+        if not include_raw and not include_normalized:
+            raise ValueError("At least one of include_raw/include_normalized must be True.")
+        if dataset is None:
             dataset = self.dataset
         else:
             self.dataset = dataset
-            self._features_cache.clear()
+            self._reset_feature_cache()
 
-        cache_key = kernel
-        if cache_key not in self._features_cache:
-            dataset_size = self._get_dataset_size(dataset)
-            total_batches = self._get_num_batches(dataset, self.data_batch_size)
-            cached_batches: Optional[List[List[torch.Tensor]]] = None
+        unique_kernels: List[str] = list(dict.fromkeys(kernels))
+        kernels_to_compute = [
+            kernel for kernel in unique_kernels
+            if kernel not in self._features_cache_raw
+        ]
+        if kernels_to_compute:
+            computed = self._compute_raw_features_multi(dataset, kernels_to_compute)
+            for kernel, raw in computed.items():
+                self._features_cache_raw[kernel] = raw
 
-            if self.cache.load_enabled:
+        results: Dict[str, Dict[str, torch.Tensor]] = {}
+        for kernel in unique_kernels:
+            entry: Dict[str, torch.Tensor] = {}
+            raw = self._features_cache_raw[kernel]
+            if include_raw:
+                entry["raw"] = raw
+            if include_normalized:
+                if kernel not in self._features_cache_norm:
+                    # Normalize per model once and cache the result.
+                    self._features_cache_norm[kernel] = self._normalize_features(raw)
+                entry["normalized"] = self._features_cache_norm[kernel]
+            results[kernel] = entry
+        return results
+
+    def _compute_raw_features_multi(
+        self,
+        dataset: torch.utils.data.Dataset,
+        kernels: Sequence[str],
+    ) -> Dict[str, torch.Tensor]:
+        unique_kernels: List[str] = list(dict.fromkeys(kernels))
+        if not unique_kernels:
+            return {}
+        dataset_size = self._get_dataset_size(dataset)
+        total_batches = self._get_num_batches(dataset, self.data_batch_size)
+        cached_batches_by_kernel: Dict[str, Optional[List[List[torch.Tensor]]]] = {}
+
+        if self.cache.load_enabled:
+            for kernel in unique_kernels:
                 cached_batches = self.cache.load(kernel, self.models, dataset, self.random_projections)
+                if cached_batches is not None and total_batches is not None:
+                    counts = [len(b) for b in cached_batches]
+                    if any(c > total_batches for c in counts):
+                        msg = "Cached features exceed expected batch count."
+                        logger.info("%s Recomputing features for kernel %s.", msg, kernel)
+                        cached_batches = None
+                if cached_batches is None:
+                    cached_batches = [list() for _ in self.models]
+                cached_batches_by_kernel[kernel] = cached_batches
+        else:
+            cached_batches_by_kernel = {kernel: None for kernel in unique_kernels}
 
-            if cached_batches is not None and total_batches is not None:
-                counts = [len(b) for b in cached_batches]
-                if any(c > total_batches for c in counts):
-                    msg = "Cached features exceed expected batch count."
-                    logger.info("%s Recomputing features.", msg)
-                    cached_batches = None
+        global_g: Dict[str, List[torch.Tensor]] = {kernel: [] for kernel in unique_kernels}
+        for model_idx, (model, random_proj) in enumerate(zip(self.models, self.random_projections)):
+            feature_extractor = FeatureExtractor(model)
+            model_dtype = next(model.parameters()).dtype
+            size_value = dataset_size if dataset_size is not None else "?"
+            desc = (
+                f"model={self._get_model_name(model)} kernels={len(unique_kernels)} "
+                f"size={size_value} bs={self.data_batch_size} device={self.device}"
+            )
+            model_batches: Dict[str, List[torch.Tensor]] = {kernel: [] for kernel in unique_kernels}
+            cached_model_batches_by_kernel: Dict[str, Optional[List[torch.Tensor]]] = {}
+            completed_by_kernel: Dict[str, int] = {}
+            for kernel in unique_kernels:
+                cached_batches = cached_batches_by_kernel[kernel]
+                cached_model = cached_batches[model_idx] if cached_batches is not None else None
+                cached_model_batches_by_kernel[kernel] = cached_model
+                completed_by_kernel[kernel] = len(cached_model) if cached_model is not None else 0
 
-            if cached_batches is not None and total_batches is not None:
-                if all(len(b) == total_batches for b in cached_batches):
-                    features = torch.stack(
-                        [
-                            torch.cat(batches) if batches else torch.empty((0, 0))
-                            for batches in cached_batches
-                        ]
-                    )
-                    self._features_cache[cache_key] = features
-                    return features
-            if self.cache.load_enabled and cached_batches is None:
-                cached_batches = [list() for _ in self.models]
-
-            global_g = []
-            for model_idx, (model, random_proj) in enumerate(zip(self.models, self.random_projections)):
-                feature_extractor = FeatureExtractor(model)
-                model_batches: List[torch.Tensor] = []
-                size_value = dataset_size if dataset_size is not None else "?"
-                model_dtype = next(model.parameters()).dtype
-                desc = (
-                    f"model={self._get_model_name(model)} kernel={kernel} "
-                    f"size={size_value} bs={self.data_batch_size} device={self.device}"
+            if total_batches is not None:
+                all_complete = all(
+                    cached_model_batches_by_kernel[kernel] is not None
+                    and completed_by_kernel[kernel] == total_batches
+                    for kernel in unique_kernels
                 )
-                cached_model_batches = cached_batches[model_idx] if cached_batches is not None else None
-                completed = len(cached_model_batches) if cached_model_batches else 0
-                if total_batches is not None and completed == total_batches:
-                    model_g = torch.cat(cached_model_batches) if cached_model_batches else torch.empty((0, 0))
-                    global_g.append(self._normalize_features(model_g))
+                if all_complete:
+                    for kernel in unique_kernels:
+                        cached_model = cached_model_batches_by_kernel[kernel]
+                        model_g = torch.cat(cached_model) if cached_model else torch.empty((0, 0))
+                        global_g[kernel].append(model_g)
                     feature_extractor.unhook()
                     continue
-                if total_batches is not None and completed:
-                    logger.info(
-                        "Found %d/%d cached batches for model %d",
-                        completed,
-                        total_batches,
-                        model_idx,
+                for kernel, completed in completed_by_kernel.items():
+                    if completed:
+                        logger.info(
+                            "Found %d/%d cached batches for model %d kernel %s",
+                            completed,
+                            total_batches,
+                            model_idx,
+                            kernel,
+                        )
+
+            log_ctx = logging_redirect_tqdm() if logging_redirect_tqdm is not None else contextlib.nullcontext()
+            with log_ctx:
+                for b, batch in enumerate(self._iter_batches(dataset, desc=desc, dtype=model_dtype)):
+                    needs_compute = any(
+                        cached_model_batches_by_kernel[kernel] is None
+                        or b >= len(cached_model_batches_by_kernel[kernel])
+                        for kernel in unique_kernels
                     )
-                log_ctx = logging_redirect_tqdm() if logging_redirect_tqdm is not None else contextlib.nullcontext()
-                with log_ctx:
-                    for b, batch in enumerate(self._iter_batches(dataset, desc=desc, dtype=model_dtype)):
-                        if b < completed:
+                    if not needs_compute:
+                        continue
+                    if self.debug:
+                        logger.info(
+                            f"Calculating features for batch {b}.",
+                            extra={"progress": True},
+                        )
+                    feat_grad = self._compute_feat_grad(feature_extractor, batch)
+                    for kernel in unique_kernels:
+                        cached_model = cached_model_batches_by_kernel[kernel]
+                        if cached_model is not None and b < len(cached_model):
                             continue
-                        if self.debug:
-                            logger.info(
-                                f"Calculating features for batch {b}/{total_batches}.",
-                                extra={"progress": True},
-                            )
-                        feats = self._compute_features(
-                            feature_extractor=feature_extractor,
-                            model_inputs=batch,
+                        feats = self._compute_feature(
+                            feat_grad=feat_grad,
                             random_projection=random_proj,
                             kernel=kernel,
                         )
-                        if cached_model_batches is not None:
-                            cached_model_batches.append(feats.cpu())
+                        if cached_model is not None:
+                            cached_model.append(feats.cpu())
                             if self.cache.load_enabled:
                                 # Incremental cache write for resume.
-                                self.cache.save(kernel, self.models, dataset, self.random_projections, cached_batches)
+                                self.cache.save(
+                                    kernel,
+                                    self.models,
+                                    dataset,
+                                    self.random_projections,
+                                    cached_batches_by_kernel[kernel],
+                                )
                         else:
-                            model_batches.append(feats)
-                feature_extractor.unhook()
-                if cached_model_batches is not None:
-                    model_g = torch.cat(cached_model_batches) if cached_model_batches else torch.empty((0, 0))
-                elif model_batches:
-                    model_g = torch.cat(model_batches)
+                            model_batches[kernel].append(feats)
+            feature_extractor.unhook()
+            for kernel in unique_kernels:
+                cached_model = cached_model_batches_by_kernel[kernel]
+                if cached_model is not None:
+                    model_g = torch.cat(cached_model) if cached_model else torch.empty((0, 0))
+                elif model_batches[kernel]:
+                    model_g = torch.cat(model_batches[kernel])
                 else:
                     model_g = torch.empty((0, 0))
-                global_g.append(self._normalize_features(model_g))
+                global_g[kernel].append(model_g)
 
-            features = torch.stack(global_g)
-            self._features_cache[cache_key] = features
-
-        return self._features_cache[cache_key]
-
-    def get_g(self, kernel: str='full-gradient') -> torch.Tensor:
-        """Compatibility helper that returns cached features for a kernel."""
-
-        return self.get_features(kernel=kernel)
+        return {kernel: torch.stack(global_g[kernel]) for kernel in unique_kernels}
 
     def get_num_atoms(
         self,
@@ -613,7 +690,7 @@ class FeatureStatistics:
             dataset = self.dataset
         else:
             self.dataset = dataset
-            self._features_cache.clear()
+            self._reset_feature_cache()
         num_atoms = []
         # dataloader = torch.utils.data.DataLoader(
         #     dataset=dataset,
@@ -634,7 +711,7 @@ class FeatureStatistics:
         else:
             self.dataset = dataset
             self.ens_stats = None
-            self._features_cache.clear()
+            self._reset_feature_cache()
             
         if self.ens_stats is None:
             if method == "ensemble":
@@ -834,10 +911,86 @@ class GeneralActiveLearning:
         kernel = 'full-g',
         selection = 'max_diag',
         n_random_features = 0,
+        feature_kernels: Optional[Sequence[Union[str, Tuple[str, int], Dict[str, Union[str, int]]]]] = None,
     ):
         self.kernel = kernel
         self.selection = selection
         self.n_random_features = n_random_features
+        self.feature_kernels = feature_kernels
+
+    def _get_features(
+        self,
+        models: List[nn.Module],
+        datasets: Dict[str, torch.utils.data.Dataset],
+        data_batch_size: int,
+        debug: bool,
+        load_features: Optional[Union[bool, str, Path, Dict[str, Union[str, Path, bool]]]],
+    ) -> Tuple[
+        Dict[str, Dict[str, FeatureStatistics]],
+        Dict[str, torch.utils.data.Dataset],
+        Dict[str, FeatureStatistics],
+    ]:
+        feature_specs = self._resolve_feature_specs()
+        num_sets = len(datasets)
+        stats_by_kernel: Dict[str, Dict[str, FeatureStatistics]] = {
+            key: {} for key in datasets.keys()
+        }
+        stats_by_nrf: Dict[str, Dict[int, FeatureStatistics]] = {
+            key: {} for key in datasets.keys()
+        }
+        for kernel, n_random_features in feature_specs:
+            for key, ds in datasets.items():
+                stats = stats_by_nrf[key].get(n_random_features)
+                if stats is None:
+                    stats = FeatureStatistics(
+                        models,
+                        ds,
+                        n_random_features,
+                        data_batch_size=data_batch_size,
+                        debug=debug,
+                        cache=FeatureCache.from_config(
+                            load_features,
+                            None,
+                            dataset_key=key,
+                            num_sets=num_sets,
+                        ),
+                    )
+                    stats_by_nrf[key][n_random_features] = stats
+                stats_by_kernel[key][kernel] = stats
+        selection_kernel = self._selection_feature_kernel()
+        selection_stats: Dict[str, FeatureStatistics] = {}
+        for key, kernel_stats in stats_by_kernel.items():
+            if selection_kernel is None:
+                first_kernel = sorted(kernel_stats.keys())[0]
+                selection_stats[key] = kernel_stats[first_kernel]
+                continue
+            resolved_kernel = self._resolve_feature_kernel_alias(selection_kernel)
+            if resolved_kernel in kernel_stats:
+                selection_stats[key] = kernel_stats[resolved_kernel]
+                continue
+            if len(kernel_stats) == 1:
+                selection_stats[key] = next(iter(kernel_stats.values()))
+                continue
+            raise ValueError(f"No feature statistics available for kernel '{resolved_kernel}'.")
+        return stats_by_kernel, datasets, selection_stats
+
+    def _filter_datasets(
+        self,
+        datasets: Dict[str, torch.utils.data.Dataset],
+        structure_filter: Optional[Union[Filter, Sequence[Filter]]],
+    ) -> Dict[str, torch.utils.data.Dataset]:
+        if structure_filter is None:
+            return datasets
+        if isinstance(structure_filter, (list, tuple, ListConfig)):
+            filters = list(structure_filter)
+        else:
+            filters = [structure_filter]
+        for filt in filters:
+            datasets = {
+                key: filt.filter_dataset(ds, label=key)
+                for key, ds in datasets.items()
+            }
+        return datasets
 
     def select(
         self, 
@@ -848,6 +1001,10 @@ class GeneralActiveLearning:
         debug: bool = False,
         load_features: Optional[Union[bool, str, Path, Dict[str, Union[str, Path, bool]]]] = None,
         save_features: Optional[Union[bool, str, Path, Dict[str, Union[str, Path, bool]]]] = None,
+        structure_filter: Optional[Union[Filter, Sequence[Filter]]] = None,
+        export_kernels: Optional[Union[str, Sequence[str]]] = None,
+        export_raw_features: bool = True,
+        export_normalized_features: bool = True,
     ):
         """
         models: pytorch models,
@@ -860,30 +1017,23 @@ class GeneralActiveLearning:
             raise RuntimeError(f'{self.kernel} kernel can only be used with max_diag selection method,'
                                f' not with {self.selection}!')
 
-        num_sets = len(datasets)
-        stats = {
-            key: FeatureStatistics(
-                models,
-                ds,
-                self.n_random_features,
-                data_batch_size=data_batch_size,
-                debug=debug,
-                cache=FeatureCache.from_config(
-                    load_features,
-                    None,
-                    dataset_key=key,
-                    num_sets=num_sets,
-                ),
-            )
-            for key, ds in datasets.items()
-        }
+        datasets = self._filter_datasets(datasets, structure_filter)
+        stats_by_kernel, datasets, selection_stats = self._get_features(
+            models=models,
+            datasets=datasets,
+            data_batch_size=data_batch_size,
+            debug=debug,
+            load_features=load_features,
+        )
         
         # pool-based selection or pool + train based selection
+        pool_stats = selection_stats["pool"]
         if datasets.get('train'):
-            matrix, num_atoms = self._get_kernel_matrix(stats['pool'], stats['train'])
+            train_stats = selection_stats["train"]
+            matrix, num_atoms = self._get_kernel_matrix(pool_stats, train_stats)
             n_train = len(datasets['train'])
         else:
-            matrix, num_atoms = self._get_kernel_matrix(stats['pool'])
+            matrix, num_atoms = self._get_kernel_matrix(pool_stats)
             n_train = 0
         
         if self.selection == 'max_dist_greedy':
@@ -903,12 +1053,38 @@ class GeneralActiveLearning:
         else:
             raise NotImplementedError(f"Unknown selection method '{self.selection}' for active learning!")
         
+        num_sets = len(datasets)
         final_cache = FeatureCache.from_config(None, save_features, dataset_key=None, num_sets=num_sets)
         if final_cache.save_enabled:
-            features = {key: s.get_features() for key, s in stats.items()}
+            if not export_raw_features and not export_normalized_features:
+                raise ValueError("At least one of export_raw_features/export_normalized_features must be True.")
+            if export_kernels is None:
+                kernels = [kernel for kernel, _ in self._resolve_feature_specs()]
+            else:
+                kernels = self._resolve_export_kernels(export_kernels)
+            features = {
+                key: {} for key in datasets.keys()
+            }
+            for kernel in kernels:
+                resolved_kernel = self._resolve_feature_kernel_alias(kernel)
+                for key in datasets.keys():
+                    kernel_stats = stats_by_kernel[key]
+                    if resolved_kernel in kernel_stats:
+                        stats = kernel_stats[resolved_kernel]
+                    elif len(kernel_stats) == 1:
+                        stats = next(iter(kernel_stats.values()))
+                    else:
+                        raise ValueError(f"No feature statistics available for kernel '{resolved_kernel}'.")
+                    entry: Dict[str, torch.Tensor] = {}
+                    if export_raw_features:
+                        entry["raw"] = stats.get_features(kernel=resolved_kernel, normalize=False)
+                    if export_normalized_features:
+                        entry["normalized"] = stats.get_features(kernel=resolved_kernel, normalize=True)
+                    features[key][kernel] = entry
             # Final export of concatenated features for user inspection.
             final_cache.save_final(features)
 
+        # NOTE: selection indices are relative to the (potentially) filtered subsets.
         return idxs.cpu().tolist()
 
     def _get_kernel_matrix(
@@ -958,3 +1134,104 @@ class GeneralActiveLearning:
             return DiagonalKernelMatrix(torch.rand([sum([len(s.dataset) for s in stats_list])])), None
         else:
             raise RuntimeError(f"Unknown active learning kernel {self.kernel}!")
+
+    def _selection_feature_kernel(self) -> Optional[str]:
+        selection_map = {
+            "full-F_inv": "full-gradient",
+            "ll-F_inv": "ll-gradient",
+        }
+        if self.kernel in selection_map:
+            return selection_map[self.kernel]
+        resolved = self._resolve_feature_kernel_alias(self.kernel)
+        if resolved in {
+            "full-gradient",
+            "ll-gradient",
+            "gnn",
+            "local_full-g",
+            "local_ll-g",
+            "local_gnn",
+        }:
+            return resolved
+        if self.kernel in {"qbc-energy", "qbc-force", "ae-energy", "ae-force", "random"}:
+            fallback = self._default_stats_kernel()
+            logger.info(
+                "Kernel %s does not use features; using %s as stats placeholder.",
+                self.kernel,
+                fallback,
+            )
+            return fallback
+        return None
+
+    @staticmethod
+    def _resolve_export_kernels(
+        export_kernels: Optional[Union[str, Sequence[str]]],
+    ) -> List[str]:
+        if export_kernels is None:
+            return ['full-gradient']
+        if isinstance(export_kernels, str):
+            kernels = [export_kernels]
+        else:
+            kernels = list(export_kernels)
+        return [GeneralActiveLearning._resolve_feature_kernel_alias(k) for k in kernels]
+
+    @staticmethod
+    def _resolve_feature_kernel_alias(kernel: str) -> str:
+        aliases = {
+            "full-g": "full-gradient",
+            "ll-g": "ll-gradient",
+            "gnn": "gnn",
+            "local_full-g": "local_full-g",
+            "local_ll-g": "local_ll-g",
+            "local_gnn": "local_gnn",
+            "local-gnn": "local_gnn",
+        }
+        return aliases.get(kernel, kernel)
+
+    def _resolve_feature_specs(self) -> List[Tuple[str, int]]:
+        if self.feature_kernels is None:
+            specs: List[Tuple[str, int]] = []
+        else:
+            entries: List[Union[str, Tuple[str, int], Dict[str, Union[str, int]]]]
+            if isinstance(self.feature_kernels, str):
+                entries = [self.feature_kernels]
+            else:
+                entries = list(self.feature_kernels)
+            specs = []
+            for entry in entries:
+                if isinstance(entry, str):
+                    kernel = self._resolve_feature_kernel_alias(entry)
+                    specs.append((kernel, self.n_random_features))
+                    continue
+                if isinstance(entry, (list, tuple)) and len(entry) == 2:
+                    kernel = self._resolve_feature_kernel_alias(str(entry[0]))
+                    specs.append((kernel, int(entry[1])))
+                    continue
+                if isinstance(entry, dict):
+                    if "kernel" not in entry:
+                        raise ValueError("feature_kernels entries must include 'kernel'.")
+                    kernel = self._resolve_feature_kernel_alias(str(entry["kernel"]))
+                    n_random_features = int(entry.get("n_random_features", self.n_random_features))
+                    specs.append((kernel, n_random_features))
+                    continue
+                raise ValueError("Unsupported feature_kernels entry.")
+
+        selection_kernel = self._selection_feature_kernel()
+        if selection_kernel is None:
+            if not specs:
+                specs.append((self._default_stats_kernel(), self.n_random_features))
+        else:
+            selection_spec = (selection_kernel, self.n_random_features)
+            if selection_spec not in specs:
+                specs.append(selection_spec)
+
+        kernel_to_nrf: Dict[str, int] = {}
+        for kernel, n_random_features in specs:
+            if kernel in kernel_to_nrf and kernel_to_nrf[kernel] != n_random_features:
+                raise ValueError(
+                    f"Kernel '{kernel}' appears with multiple n_random_features values."
+                )
+            kernel_to_nrf[kernel] = n_random_features
+        return specs
+
+    def _default_stats_kernel(self) -> str:
+        return "full-gradient"

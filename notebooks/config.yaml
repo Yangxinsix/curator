@@ -152,7 +152,6 @@ data:
   atomic_energies: null
   normalization: true
   atomwise_normalization: true
-  scale_forces: true
   transforms: []
 seed: 3407
 cfg: config.yaml

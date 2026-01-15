@@ -5,10 +5,10 @@ from dataclasses import dataclass, field
 from ._transform import Transform
 from ._neighborlist import NeighborListTransform, TorchNeighborList
 from .dataset import collate_atomsdata, AseDataset
-from .atoms_data import AtomsData, get_sample_atoms, get_sample_target, split_atoms_targets, normalize_target_key
+from .atoms_data import get_sample_atoms, get_sample_target
 import math
 from . import properties
-from .properties import resolve_heads
+from .properties import resolve_heads, normalize_head_flag
 from ase.data import chemical_symbols, atomic_numbers
 import json
 import logging
@@ -17,6 +17,9 @@ from pytorch_lightning.utilities.combined_loader import CombinedLoader
 
 
 logger = logging.getLogger(__name__)
+
+def _is_replay_name(name: str) -> bool:
+    return str(name).lower().startswith("replay")
 
 
 @dataclass
@@ -79,12 +82,19 @@ class AtomsDataModule(pl.LightningDataModule):
         atomwise_normalization: bool = True,
         scale_by: Union[float, List[float], None] = None,
         shift_by: Union[float, List[float], None] = None,
-        scale_forces: bool = False,             # scale forces by forces_rms
         default_dtype: torch.dtype = torch.get_default_dtype(),
         head_reference_by_species: Optional[Dict[str, Dict[Union[int, str], float]]] = None,
+        heads: Optional[List] = None,
+        rescale_shift_heads: Optional[List] = None,
     ) -> None:
         super().__init__()
-        
+
+        if isinstance(default_dtype, str):
+            try:
+                default_dtype = getattr(torch, default_dtype)
+            except AttributeError as exc:
+                raise ValueError(f"Unknown default_dtype '{default_dtype}'.") from exc
+
         self.datapath = datapath
         self.data_type = data_type
         self.train_path = train_path
@@ -98,6 +108,10 @@ class AtomsDataModule(pl.LightningDataModule):
         self.val_batch_size = val_batch_size or test_batch_size or batch_size // 2
         self.test_batch_size = test_batch_size or val_batch_size or batch_size // 2
         self.default_dtype = default_dtype
+        if heads is None or (isinstance(heads, str) and heads.lower() == "auto"):
+            heads = ["energy"]
+        self.heads = heads
+        self.rescale_shift_heads = rescale_shift_heads or []
         
         # splitting parameters
         self.split_file = split_file
@@ -133,7 +147,6 @@ class AtomsDataModule(pl.LightningDataModule):
         # data used for constructing model
         self.normalization = normalization
         self.atomwise_normalization = atomwise_normalization
-        self.scale_forces = scale_forces
         self.species = species
         self.avg_num_neighbors = avg_num_neighbors
         self.atomic_energies = atomic_energies
@@ -195,6 +208,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 cutoff=self.cutoff,
                 compute_neighbor_list=self.compute_neighbor_list,
                 transforms=self.transforms,
+                default_dtype=self.default_dtype,
                 task=task,
             )
         elif data_type == 'Numpy':
@@ -204,6 +218,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 cutoff=self.cutoff,
                 compute_neighbor_list=self.compute_neighbor_list,
                 transforms=self.transforms,
+                default_dtype=self.default_dtype,
                 task=task,
             )
         elif data_type == 'Bamboo':
@@ -216,6 +231,7 @@ class AtomsDataModule(pl.LightningDataModule):
                 cutoff=self.cutoff,
                 compute_neighbor_list=self.compute_neighbor_list,
                 transforms=self.transforms,
+                default_dtype=self.default_dtype,
                 task=task,
             )
         return dataset
@@ -486,58 +502,41 @@ class AtomsDataModule(pl.LightningDataModule):
         logger.debug(msg)
         return self._scale_shift_cache[property_key]
 
-    def _get_force_rms(self) -> float:
+    def _get_rms(self, property_key: str = properties.forces) -> float:
         """
-        Compute RMS for forces if needed separately.
+        Compute RMS for a given property key.
         """
-        forces = []
+        values = []
         for sample in self.train_dataset:
-            v = get_sample_target(sample, properties.forces)
+            v = get_sample_target(sample, property_key)
             if v is not None:
-                forces.append(v)
-        if not forces:
-            raise KeyError("Property 'forces' not found in training dataset samples.")
-        forces = torch.cat(forces)
-        rms = torch.sqrt(torch.mean(forces * forces)).item()
-        logger.debug(f"Forces will be scaled by forces_rms: {rms:.3f}.")
+                values.append(v)
+        if not values:
+            raise KeyError(f"Property '{property_key}' not found in training dataset samples.")
+        values = torch.cat(values)
+        rms = torch.sqrt(torch.mean(values * values)).item()
+        logger.debug(f"RMS for '{property_key}': {rms:.3f}.")
         return rms
-
-    def infer_head_keys(self, max_samples: int = 1, default_heads: Optional[List[str]] = None) -> List[str]:
-        dataset = self.train_dataset or getattr(self, "_train_dataset", None) or self.dataset
-        if dataset is None:
-            return list(default_heads or [])
-        keys: set = set()
-        limit = min(len(dataset), max_samples)
-        for i in range(limit):
-            sample = dataset[i]
-            if isinstance(sample, AtomsData):
-                keys.update(normalize_target_key(k) for k in sample.normalized_targets().keys())
-            elif isinstance(sample, dict):
-                _, targets = split_atoms_targets(sample)
-                keys.update(normalize_target_key(k) for k in targets.keys())
-        if not keys:
-            return list(default_heads or [])
-        return sorted(keys)
 
     def build_context(self, heads: List) -> "DataContext":
         # heads may be HeadConfig or dict-like with key field
         ctx = DataContext()
         ctx.species = self._get_species() or []
         ctx.avg_num_neighbors = self._get_avg_num_neighbors()
-        for h in heads:
-            key = getattr(h, "key", None) or getattr(h, "name", None) or (h.get("key") if isinstance(h, dict) else None)
-            if key is None:
-                continue
-            domains = getattr(h, "domains", None) if not isinstance(h, dict) else h.get("domains")
+
+        resolved = resolve_heads(heads)
+        for h in resolved:
+            key = h.key
+            domains = getattr(h, "domains", None)
             if domains is not None and "default" not in domains and len(domains) > 0:
                 # if head is restricted to specific domains and this datamodule is not named, still compute stats;
                 # filtering per-domain happens when contexts are consumed.
                 pass
-            atomwise_norm = getattr(h, "atomwise_normalization", None) if not isinstance(h, dict) else h.get("atomwise_normalization", None)
+            atomwise_norm = h.atomwise_normalization
 
             # determine per-species shift request
-            per_species_cfg = getattr(h, "per_species_shift", None) if not isinstance(h, dict) else h.get("per_species_shift", None)
-            is_atomwise = getattr(h, "is_atomwise", None) if not isinstance(h, dict) else h.get("is_atomwise", None)
+            per_species_cfg = h.per_species_shift
+            is_atomwise = h.is_atomwise
             per_species_vals = None
             if isinstance(per_species_cfg, dict):
                 per_species_vals = {atomic_numbers[k] if isinstance(k, str) else k: v for k, v in per_species_cfg.items()}
@@ -555,15 +554,37 @@ class AtomsDataModule(pl.LightningDataModule):
                 except Exception:
                     per_species_vals = None
 
-            try:
-                mean, std = self._get_scale_shift(
-                    property_key=key,
-                    atomwise_normalization=atomwise_norm,
-                    per_species_shift=per_species_vals,
-                )
-                ctx.head_scale_shift[key] = {"mean": mean, "std": std}
-            except Exception:
-                pass
+            scale_mode = normalize_head_flag(h.scale_by)
+            shift_mode = normalize_head_flag(h.shift_by)
+            mean = None
+            std = None
+            if scale_mode == "default" or shift_mode == "default":
+                try:
+                    mean, std = self._get_scale_shift(
+                        property_key=key,
+                        atomwise_normalization=atomwise_norm,
+                        per_species_shift=per_species_vals,
+                    )
+                except Exception:
+                    mean, std = None, None
+
+            if scale_mode == "rms":
+                try:
+                    std = self._get_rms(property_key=key)
+                except Exception:
+                    pass
+            elif isinstance(scale_mode, (int, float)) and not isinstance(scale_mode, bool):
+                std = float(scale_mode)
+
+            if isinstance(shift_mode, (int, float)) and not isinstance(shift_mode, bool):
+                mean = float(shift_mode)
+
+            if scale_mode is None or std is None:
+                std = 1.0
+            if shift_mode is None or mean is None:
+                mean = 0.0
+
+            ctx.head_scale_shift[key] = {"mean": float(mean), "std": float(std)}
 
             if per_species_vals is not None:
                 ctx.head_species_shift[key] = per_species_vals
@@ -581,10 +602,13 @@ class AtomsDataModule(pl.LightningDataModule):
         return self._format_table(heads=heads)
 
     def _heads_summary(self) -> str:
-        try:
-            heads = self.infer_head_keys(default_heads=["energy"])
-        except Exception:
-            heads = ["energy"]
+        heads = list(self.heads) if self.heads is not None else ["energy"]
+        if isinstance(heads, str):
+            heads = [heads]
+        if self.rescale_shift_heads:
+            for h in self.rescale_shift_heads:
+                if h not in heads:
+                    heads.append(h)
 
         ctx = None
         try:
@@ -594,13 +618,13 @@ class AtomsDataModule(pl.LightningDataModule):
             ctx = None
 
         head_parts = []
-        for h in heads:
-            stats = ctx.head_scale_shift.get(h, {}) if ctx is not None else {}
+        for h in resolve_heads(heads):
+            stats = ctx.head_scale_shift.get(h.key, {}) if ctx is not None else {}
             shift = stats.get("mean")
             scale = stats.get("std")
             shift_str = f"{shift:.3f}" if shift is not None else "None"
             scale_str = f"{scale:.3f}" if scale is not None else "None"
-            head_parts.append(f"{h}(shift={shift_str},scale={scale_str})")
+            head_parts.append(f"{h.key}(shift={shift_str},scale={scale_str})")
         return ", ".join(head_parts)
 
     def _format_table(self, heads: Optional[str] = None) -> str:
@@ -652,12 +676,15 @@ def build_datamodule(datapath=None, domain_weights: Optional[Dict[str, float]] =
         domain_modules = {}
         collected_weights = {}
         shared_kwargs = {k: v for k, v in kwargs.items() if k != "datapath"}
-        for domain, domain_cfg in datapath.items():
+        items = list(datapath.items())
+        replay_items = [(name, cfg) for name, cfg in items if _is_replay_name(name)]
+        other_items = [(name, cfg) for name, cfg in items if not _is_replay_name(name)]
+        for domain, domain_cfg in replay_items + other_items:
             domain_kwargs = dict(shared_kwargs)
             if isinstance(domain_cfg, dict):
                 if "weight" in domain_cfg:
                     collected_weights[domain] = float(domain_cfg["weight"])
-                domain_kwargs.update({k: v for k, v in domain_cfg.items() if k not in ("datapath", "heads")})
+                domain_kwargs.update({k: v for k, v in domain_cfg.items() if k not in ("datapath",)})
                 domain_kwargs["datapath"] = domain_cfg.get("datapath", None)
             else:
                 domain_kwargs["datapath"] = domain_cfg
@@ -785,13 +812,3 @@ class MultiDomainDataModule(pl.LightningDataModule):
             global_ctx.avg_num_neighbors = max(avg_neighbors)
         contexts["global"] = global_ctx
         return contexts
-
-    def infer_domain_head_keys(
-        self,
-        max_samples: int = 1,
-        default_heads: Optional[List[str]] = None,
-    ) -> Dict[str, List[str]]:
-        return {
-            name: dm.infer_head_keys(max_samples=max_samples, default_heads=default_heads)
-            for name, dm in self.domain_modules.items()
-        }

@@ -3,7 +3,7 @@ import torch
 from torch import nn
 from curator.data import properties
 from curator.data.datamodule import DataContext
-from curator.data.properties import HeadConfig, HEAD_PRESETS, resolve_heads, HeadConfigFactory
+from curator.data.properties import HeadConfig, HEAD_PRESETS, resolve_heads, normalize_head_flag
 
 try:
     from torch_scatter import scatter_add
@@ -174,13 +174,17 @@ class GlobalRescaleShift(nn.Module):
         shifts = []
         per_species_shifts = []
         self._atomwise_output_keys: Dict[str, bool] = {}
-        for h in heads:
+        for h in self.heads:
             self._atomwise_output_keys[h.key] = bool(h.reduction is None)
             # scale
-            s_val = 1.0 if h.scale_by is None or isinstance(h.scale_by, dict) else h.scale_by
+            s_val = 1.0
+            if isinstance(h.scale_by, (int, float)) and not isinstance(h.scale_by, bool):
+                s_val = h.scale_by
             scales.append(ScaleTransform(h.key, s_val, trainable=scale_trainable))
             # shift
-            sh_val = 0.0 if h.shift_by is None or isinstance(h.shift_by, dict) else h.shift_by
+            sh_val = 0.0
+            if isinstance(h.shift_by, (int, float)) and not isinstance(h.shift_by, bool):
+                sh_val = h.shift_by
             if h.atomwise_shift or h.atomwise_normalization:
                 shifts.append(AtomwiseShift(h.key, sh_val, atomwise_shift=h.atomwise_shift, atomwise_normalization=h.atomwise_normalization, trainable=shift_trainable))
             else:
@@ -196,7 +200,11 @@ class GlobalRescaleShift(nn.Module):
         self.scales = nn.ModuleList(scales)
         self.shifts = nn.ModuleList(shifts)
         self.atomic_shifts = nn.ModuleList(per_species_shifts)
-        self._initialized = all(h.scale_by is not None or h.shift_by is not None for h in heads)
+        self._initialized = not any(
+            normalize_head_flag(h.scale_by) in ("default", "rms")
+            or normalize_head_flag(h.shift_by) == "default"
+            for h in self.heads
+        )
 
     def forward(self, data: properties.Type) -> properties.Type:
         return self.scale(data, force_process=False)
@@ -258,8 +266,22 @@ class GlobalRescaleShift(nn.Module):
             return
         for i, head in enumerate(self.heads):
             stats = ctx.head_scale_shift.get(head.key, {"mean": 0.0, "std": 1.0})
-            shift_by = stats.get("mean", 0.0) if head.shift_by is None else head.shift_by
-            scale_by = stats.get("std", 1.0) if head.scale_by is None else head.scale_by
+            scale_mode = normalize_head_flag(head.scale_by)
+            shift_mode = normalize_head_flag(head.shift_by)
+
+            if scale_mode in ("default", "rms"):
+                scale_by = stats.get("std", 1.0)
+            elif isinstance(scale_mode, (int, float)) and not isinstance(scale_mode, bool):
+                scale_by = float(scale_mode)
+            else:
+                scale_by = 1.0
+
+            if shift_mode == "default":
+                shift_by = stats.get("mean", 0.0)
+            elif isinstance(shift_mode, (int, float)) and not isinstance(shift_mode, bool):
+                shift_by = float(shift_mode)
+            else:
+                shift_by = 0.0
 
             self.scales[i].scale.copy_(torch.tensor([scale_by], dtype=self.scales[i].scale.dtype))
 

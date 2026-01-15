@@ -53,14 +53,15 @@ CURATOR contains four procedures for constructing a machine learning potential, 
 
 A minimal working example is provided in the `/example` directory. This demonstrates the molecular dynamics of LiFePO₄.
 
-Selection can also download and prefilter pool data directly from a URL by providing a `data_url` dictionary in the select config. For example:
+Selection can also download pool data directly from a URL by providing a `data_url` dictionary in the select config. Filtering is handled separately via the `filters` list. For example:
 ```yaml
 data_url:
   url: "https://github.com/ACEsuit/mace-foundations/releases/download/mace_matpes_0/matpes-pbe-replay-data.xyz"
-  required_elements: ["Li", "Fe", "P", "O"]
-  filtering_type: superset
   extract: true
-  save_filtered: true
+filters:
+  - _target_: curator.select.filter.ElementFilter
+    required_elements: ["Li", "Fe", "P", "O"]
+    filtering_type: superset
 ```
 
 

@@ -691,43 +691,6 @@ def load_models(
     
     return models
 
-def copy_domain_modules(model: torch.nn.Module, source_domain, target_domains=None, logger=None) -> int:
-    """Copy parameters from source domain module into other domain modules."""
-    if source_domain is None:
-        return 0
-    src = str(source_domain)
-    targets = None
-    if target_domains is not None:
-        targets = [str(d) for d in target_domains]
-    copied = 0
-    for module in model.modules():
-        domain_modules = getattr(module, "domain_modules", None)
-        if domain_modules is None or not hasattr(domain_modules, "items"):
-            continue
-        if src not in domain_modules:
-            continue
-        src_mod = domain_modules[src]
-        if targets is None:
-            domain_targets = [k for k in domain_modules.keys() if k != src]
-        else:
-            domain_targets = [k for k in targets if k != src and k in domain_modules]
-        for dom in domain_targets:
-            try:
-                domain_modules[dom].load_state_dict(src_mod.state_dict(), strict=False)
-                copied += 1
-                if logger:
-                    logger.debug("Copied domain module %s -> %s in %s", src, dom, module.__class__.__name__)
-            except Exception as exc:
-                if logger:
-                    logger.warning(
-                        "Failed to copy domain module %s -> %s in %s: %s",
-                        src,
-                        dom,
-                        module.__class__.__name__,
-                        exc,
-                    )
-    return copied
-
 def update_model_domain_config(
     model_cfg: DictConfig,
     domain_mode: str,
@@ -1096,10 +1059,15 @@ def update_config_from_datamodule(
     Update config based on datamodule contents (species and per-domain heads).
     Keeps logic centralized and minimal.
     """
-    log = logger or logging.getLogger("curator")
-
     def _is_auto(value) -> bool:
         return value is None or (isinstance(value, str) and value.lower() == "auto")
+
+    def _ensure_list(value, default=None) -> List:
+        if value is None:
+            return list(default or [])
+        if isinstance(value, str):
+            return [value]
+        return list(value)
 
     def _update_heads_cfg(cfg: DictConfig, keypath: str, heads: List) -> None:
         heads_cfg = OmegaConf.select(cfg, keypath)
@@ -1109,12 +1077,10 @@ def update_config_from_datamodule(
             OmegaConf.update(cfg, keypath, heads, force_add=True)
 
     def _update_rescale_heads(cfg: DictConfig, heads: List) -> None:
-        try:
+        output_modules = OmegaConf.select(cfg, "model.output_modules")
+        if isinstance(output_modules, (DictConfig, dict)) and "global_rescale_shift" in output_modules:
             _update_heads_cfg(cfg, "model.output_modules.global_rescale_shift.heads", heads)
             return
-        except Exception:
-            pass
-        output_modules = OmegaConf.select(cfg, "model.output_modules")
         if isinstance(output_modules, (ListConfig, list)):
             for idx, item in enumerate(output_modules):
                 if not isinstance(item, (DictConfig, dict)):
@@ -1123,26 +1089,6 @@ def update_config_from_datamodule(
                 if target and "RescaleShift" in str(target):
                     _update_heads_cfg(cfg, f"model.output_modules.{idx}.heads", heads)
                     return
-
-    def _get_rescale_heads(cfg: DictConfig) -> List:
-        try:
-            value = OmegaConf.select(cfg, "model.output_modules.global_rescale_shift.heads")
-            if value is not None:
-                return value
-        except Exception:
-            pass
-        output_modules = OmegaConf.select(cfg, "model.output_modules")
-        if isinstance(output_modules, (ListConfig, list)):
-            for item in output_modules:
-                if not isinstance(item, (DictConfig, dict)):
-                    continue
-                target = item.get("_target_")
-                if target and "RescaleShift" in str(target):
-                    value = item.get("heads", [])
-                    if isinstance(value, (DictConfig, dict)) and "heads" in value:
-                        return value.get("heads", [])
-                    return value
-        return []
 
     # Update config.data.species from datamodule or contexts.
     if hasattr(datamodule, "species") and _is_auto(getattr(datamodule, "species", None)):
@@ -1157,47 +1103,56 @@ def update_config_from_datamodule(
         except Exception:
             pass
 
-    # Update heads for readout/rescale from datapath or datamodule inference.
+    # Update heads for readout/rescale from explicit config (no inference).
     datapath = getattr(config.data, "datapath", None)
-    if isinstance(datapath, DictConfig) or isinstance(datapath, dict):
-        if hasattr(datamodule, "infer_domain_head_keys"):
-            readout_heads = OmegaConf.select(config, "model.representation.readout.heads")
-            if _is_auto(readout_heads):
-                domain_heads_cfg: Dict[str, List[str]] = {}
-                for name, cfg in datapath.items():
-                    if isinstance(cfg, (DictConfig, dict)) and "heads" in cfg:
-                        domain_heads_cfg[str(name)] = list(cfg["heads"])
+    data_heads = OmegaConf.select(config, "data.heads")
+    if _is_auto(data_heads) or data_heads is None:
+        data_heads = ["energy"]
+    data_heads = _ensure_list(data_heads, default=["energy"])
+    rescale_shift_heads = OmegaConf.select(config, "data.rescale_shift_heads")
+    rescale_shift_heads = _ensure_list(rescale_shift_heads, default=[])
 
-                if not domain_heads_cfg:
-                    domain_heads_cfg = datamodule.infer_domain_head_keys(default_heads=["energy"])
-                    domain_heads_cfg = {str(k): v for k, v in domain_heads_cfg.items()}
-                else:
-                    inferred = datamodule.infer_domain_head_keys(default_heads=["energy"])
-                    inferred = {str(k): v for k, v in inferred.items()}
-                    for name in datamodule.domain_modules.keys():
-                        name = str(name)
-                        if name not in domain_heads_cfg:
-                            domain_heads_cfg[name] = inferred.get(name, ["energy"])
+    readout_heads = OmegaConf.select(config, "model.representation.readout.heads")
+    should_update_heads = _is_auto(readout_heads) or (
+        isinstance(readout_heads, (ListConfig, list)) and list(readout_heads) == ["energy"]
+    )
+    if should_update_heads:
+        if isinstance(datapath, (DictConfig, dict)):
+            domain_heads = {
+                str(name): _ensure_list(cfg["heads"], default=data_heads)
+                for name, cfg in datapath.items()
+                if isinstance(cfg, (DictConfig, dict)) and "heads" in cfg
+            }
+            if hasattr(datamodule, "domain_modules"):
+                for name in datamodule.domain_modules.keys():
+                    domain_heads.setdefault(str(name), list(data_heads))
+            if not domain_heads:
+                domain_heads = {"0": list(data_heads)}
 
-                domain_heads_cfg = {
-                    name: [k for k in heads if k != properties.forces]
-                    for name, heads in domain_heads_cfg.items()
-                }
-                # Write per-domain heads into readout and aligned heads into rescale.
+            if hasattr(datamodule, "domain_to_id"):
                 heads_by_domain = {
-                    str(datamodule.domain_to_id[name]): heads
-                    for name, heads in domain_heads_cfg.items()
+                    str(datamodule.domain_to_id.get(name, name)): heads
+                    for name, heads in domain_heads.items()
                 }
-                domains = list(heads_by_domain.keys())
-                OmegaConf.update(config, "model.representation.readout.heads_by_domain", heads_by_domain, force_add=True)
-                OmegaConf.update(config, "model.representation.readout.domains", domains, force_add=True)
-                rescale_heads = []
-                for dom_id, heads in heads_by_domain.items():
-                    for key in heads:
-                        rescale_heads.append({"key": key, "domains": [dom_id]})
-                if not rescale_heads:
-                    rescale_heads = [{"key": "energy", "domains": domains}]
-                _update_rescale_heads(config, rescale_heads)
+            else:
+                heads_by_domain = {str(name): heads for name, heads in domain_heads.items()}
+
+            domains = list(heads_by_domain.keys())
+            OmegaConf.update(config, "model.representation.readout.heads_by_domain", heads_by_domain, force_add=True)
+            OmegaConf.update(config, "model.representation.readout.domains", domains, force_add=True)
+
+            rescale_heads = [
+                {"key": key, "domains": [dom_id]}
+                for dom_id, heads in heads_by_domain.items()
+                for key in dict.fromkeys(list(heads) + list(rescale_shift_heads))
+            ] or [{"key": "energy", "domains": domains}]
+            _update_rescale_heads(config, rescale_heads)
+        else:
+            _update_heads_cfg(config, "model.heads", data_heads)
+            _update_heads_cfg(config, "model.representation.readout.heads", data_heads)
+            merged = list(dict.fromkeys(list(data_heads) + list(rescale_shift_heads)))
+            rescale_heads = [{"key": key, "domains": ["0"]} for key in merged] or [{"key": "energy", "domains": ["0"]}]
+            _update_rescale_heads(config, rescale_heads)
 
     # If we are not using multi-domain loaders, strip dataloader_idx suffixes.
     if not hasattr(datamodule, "domain_modules"):
@@ -1224,7 +1179,7 @@ def update_config_from_datamodule(
     if hasattr(datamodule, "log_summary"):
         summary = datamodule.log_summary()
         if summary:
-            logging.getLogger(__name__).info("%s", summary)
+            (logger or logging.getLogger(__name__)).info("%s", summary)
 
 # Ugly workaround for specifying config files outside of the package
 def read_user_config(
@@ -1591,10 +1546,43 @@ def get_representation_config(model):
         if correlation is None:
             raise AttributeError("Unable to infer correlation from symmetric_contractions.")
 
-        try:
-            gate = rep.readout.readout_mlp[0].activation.acts[0].f
-        except:
-            gate = rep.readout_mlp[-1].non_linearity.acts[0].f
+        def _gate_from_activation(activation):
+            if activation is None:
+                return None
+            acts = getattr(activation, "acts", None)
+            if acts:
+                activation = acts[0]
+            return getattr(activation, "f", activation)
+
+        def _gate_from_module(module):
+            if module is None:
+                return None
+            if isinstance(module, (list, tuple, torch.nn.ModuleList, torch.nn.Sequential)):
+                for item in module:
+                    gate = _gate_from_module(item)
+                    if gate is not None:
+                        return gate
+                return None
+            domain_modules = getattr(module, "domain_modules", None)
+            if domain_modules:
+                gate = _gate_from_module(list(domain_modules.values()))
+                if gate is not None:
+                    return gate
+            for attr in ("readout_mlp", "readouts"):
+                gate = _gate_from_module(getattr(module, attr, None))
+                if gate is not None:
+                    return gate
+            for attr in ("activation", "non_linearity"):
+                gate = _gate_from_activation(getattr(module, attr, None))
+                if gate is not None:
+                    return gate
+            return None
+
+        gate = _gate_from_module(getattr(rep, "readout", None))
+        if gate is None:
+            gate = _gate_from_module(getattr(rep, "readout_mlp", None))
+        if gate is None:
+            gate = torch.nn.functional.silu
         rep_config = {
             "cutoff": rep.cutoff,
             "num_interactions": len(rep.interactions),
@@ -1602,7 +1590,7 @@ def get_representation_config(model):
             "interaction_cls": rep.interactions[-1].__class__,
             "interaction_cls_first": rep.interactions[0].__class__,
             "radial_MLP": rep.interactions[0].conv_tp_weights.hs[1:-1],
-            "species": list(rep.embeddings.onehot_embedding.type_mapper.symbol_to_type.keys()),
+            "species": species,
             "num_elements": len(species),
             "hidden_irreps": rep.hidden_irreps,
             "edge_sh_irreps": rep.edge_sh_irreps,
@@ -1618,6 +1606,22 @@ def get_representation_config(model):
             ),
             "gate": gate,
         }
+        readout = getattr(rep, "readout", None)
+        domain_modules = getattr(readout, "domain_modules", None)
+        if domain_modules:
+            from functools import partial
+            from curator.layer import MultiDomainMACEAtomwiseNN
+
+            domains = getattr(readout, "domains", None) or list(domain_modules.keys())
+            heads_by_domain = {
+                str(dom): list(module.heads)
+                for dom, module in domain_modules.items()
+                if hasattr(module, "heads")
+            }
+            readout_kwargs = {"domains": [str(d) for d in domains]}
+            if heads_by_domain:
+                readout_kwargs["heads_by_domain"] = heads_by_domain
+            rep_config["readout"] = partial(MultiDomainMACEAtomwiseNN, **readout_kwargs)
     elif model.representation.__class__.__name__ == 'Nequip':
         species = list(rep.embeddings.onehot_embedding.type_mapper.symbol_to_type.keys())
 
@@ -1707,6 +1711,12 @@ def _squeeze_if_compatible(src: torch.Tensor, target_shape: torch.Size) -> torch
         return src.squeeze(0)
     return src
 
+def _expand_if_compatible(src: torch.Tensor, target_shape: torch.Size) -> torch.Tensor:
+    """Helper to expand a leading singleton dim if that matches the target shape."""
+    if src.shape != target_shape and src.dim() + 1 == len(target_shape) and target_shape[0] == 1:
+        return src.unsqueeze(0)
+    return src
+
 
 def transfer_symmetric_contractions_back(
     source_dict: Dict[str, torch.Tensor],
@@ -1737,46 +1747,46 @@ def load_e3nn_weights(source_model, target_model):
     """Load weights from an e3nn model to cuequivariance model"""
     source_dict = source_model.representation.state_dict()
     target_dict = target_model.representation.state_dict()
+    target_shapes = {k: v.shape for k, v in target_dict.items()}
 
     # Transfer main weights
     num_layers = len(source_model.representation.interactions)
     transfer_keys = get_transfer_keys(num_layers)
     for key in transfer_keys:
-        if key in source_dict:  # Check if key exists
-            target_dict[key] = source_dict[key]
+        target_shape = target_shapes.get(key)
+        if target_shape is None:
+            continue
+        if key in source_dict:
+            target_dict[key] = _expand_if_compatible(source_dict[key], target_shape)
         else:
             logging.warning(f"Key {key} not found in source model")
 
-    # unsqueeze linear and skip_tp weights
-    for key in source_dict.keys():
-        if any(x in key for x in ["linear", "skip_tp"]) and "weight" in key:
-            target_dict[key] = target_dict[key].unsqueeze(0)
-    
     # transfer symmetric contractions
-    lmax = source_model.representation.lmax
-    try:
-        correlation = (
-            len(source_model.representation.products[0].symmetric_contractions.contractions[0].weights) + 1
-        )
-    except AttributeError:
-        correlation = source_model.representation.products[0].symmetric_contractions.sc.contraction_degree
-    transfer_symmetric_contractions(source_dict, target_dict, lmax, correlation, num_layers)
+    use_cueq = any(k.endswith("symmetric_contractions.sc.weight") for k in target_shapes)
+    if use_cueq:
+        lmax = source_model.representation.lmax
+        try:
+            correlation = (
+                len(source_model.representation.products[0].symmetric_contractions.contractions[0].weights) + 1
+            )
+        except AttributeError:
+            correlation = source_model.representation.products[0].symmetric_contractions.sc.contraction_degree
+        transfer_symmetric_contractions(source_dict, target_dict, lmax, correlation, num_layers)
 
     transferred_keys = set(transfer_keys)
-    remaining_keys = (
-        set(source_dict.keys()) & set(target_dict.keys()) - transferred_keys
-    )
-    remaining_keys = {k for k in remaining_keys if "symmetric_contraction" not in k}
-    if remaining_keys:
-        for key in remaining_keys:
-            if source_dict[key].shape == target_dict[key].shape:
-                logging.debug(f"Transferring additional key: {key}")
-                target_dict[key] = source_dict[key]
-            else:
-                logging.warning(
-                    f"Shape mismatch for key {key}: "
-                    f"source {source_dict[key].shape} vs target {target_dict[key].shape}"
-                )
+    remaining_keys = set(source_dict.keys()) & set(target_dict.keys()) - transferred_keys
+    if use_cueq:
+        remaining_keys = {k for k in remaining_keys if "symmetric_contraction" not in k}
+    for key in remaining_keys:
+        src_val = _expand_if_compatible(source_dict[key], target_shapes[key])
+        if src_val.shape == target_shapes[key]:
+            logging.debug(f"Transferring additional key: {key}")
+            target_dict[key] = src_val
+        else:
+            logging.warning(
+                f"Shape mismatch for key {key}: "
+                f"source {source_dict[key].shape} vs target {target_shapes[key]}"
+            )
 
     target_model.representation.load_state_dict(target_dict)
 
@@ -1784,21 +1794,24 @@ def load_cueq_weights(source_model, target_model):
     """Load weights from a cueq model to an e3nn model."""
     source_dict = source_model.representation.state_dict()
     target_dict = target_model.representation.state_dict()
+    target_shapes = {k: v.shape for k, v in target_dict.items()}
 
     num_layers = len(target_model.representation.interactions)
     transfer_keys = get_transfer_keys(num_layers)
     for key in transfer_keys:
-        if key in source_dict and key in target_dict:
-            src_val = source_dict[key]
-            src_val = _squeeze_if_compatible(src_val, target_dict[key].shape)
-            target_dict[key] = src_val
-        elif key not in source_dict:
+        target_shape = target_shapes.get(key)
+        if target_shape is None:
+            continue
+        if key in source_dict:
+            target_dict[key] = _squeeze_if_compatible(source_dict[key], target_shape)
+        else:
             logging.warning(f"Key {key} not found in source cueq model")
 
-    # squeeze linear/skip weights if needed
-    for key in list(source_dict.keys()):
-        if any(x in key for x in ["linear", "skip_tp"]) and "weight" in key and key in target_dict:
-            target_dict[key] = _squeeze_if_compatible(source_dict[key], target_dict[key].shape)
+    for key in source_dict.keys():
+        if "weight" in key and any(x in key for x in ["linear", "skip_tp"]):
+            target_shape = target_shapes.get(key)
+            if target_shape is not None:
+                target_dict[key] = _squeeze_if_compatible(source_dict[key], target_shape)
 
     lmax = getattr(source_model.representation, "lmax", None)
     try:
@@ -1811,29 +1824,35 @@ def load_cueq_weights(source_model, target_model):
         transfer_symmetric_contractions_back(source_dict, target_dict, lmax, correlation, num_layers)
 
     transferred_keys = set(transfer_keys)
-    remaining_keys = (
-        set(source_dict.keys()) & set(target_dict.keys()) - transferred_keys
-    )
+    remaining_keys = set(source_dict.keys()) & set(target_dict.keys()) - transferred_keys
     remaining_keys = {k for k in remaining_keys if "symmetric_contraction" not in k}
     for key in remaining_keys:
-        src_val = _squeeze_if_compatible(source_dict[key], target_dict[key].shape)
-        if src_val.shape == target_dict[key].shape:
+        src_val = _squeeze_if_compatible(source_dict[key], target_shapes[key])
+        if src_val.shape == target_shapes[key]:
             target_dict[key] = src_val
 
     target_model.representation.load_state_dict(target_dict)
 
 
 def convert_e3nn_to_cueq(model):
-    rep_config = get_representation_config(model)
-    rep_config["use_cueq"] = True
-    cueq_rep = model.representation.__class__(**rep_config)
+    dtype = next(model.parameters()).dtype
+    prev_dtype = torch.get_default_dtype()
+    if dtype != prev_dtype:
+        torch.set_default_dtype(dtype)
+    try:
+        rep_config = get_representation_config(model)
+        rep_config["use_cueq"] = True
+        cueq_rep = model.representation.__class__(**rep_config)
 
-    cueq_model = model.__class__(
-        input_modules=list(model.input_modules),
-        output_modules=list(model.output_modules),
-        representation=cueq_rep,
-        model_outputs=model.model_outputs,
-    )
+        cueq_model = model.__class__(
+            input_modules=list(model.input_modules),
+            output_modules=list(model.output_modules),
+            representation=cueq_rep,
+            model_outputs=model.model_outputs,
+        )
+    finally:
+        if dtype != prev_dtype:
+            torch.set_default_dtype(prev_dtype)
 
     load_e3nn_weights(model, cueq_model)
 
@@ -1841,16 +1860,24 @@ def convert_e3nn_to_cueq(model):
 
 
 def convert_cueq_to_e3nn(model):
-    rep_config = get_representation_config(model)
-    rep_config["use_cueq"] = False
-    e3nn_rep = model.representation.__class__(**rep_config)
+    dtype = next(model.parameters()).dtype
+    prev_dtype = torch.get_default_dtype()
+    if dtype != prev_dtype:
+        torch.set_default_dtype(dtype)
+    try:
+        rep_config = get_representation_config(model)
+        rep_config["use_cueq"] = False
+        e3nn_rep = model.representation.__class__(**rep_config)
 
-    e3nn_model = model.__class__(
-        input_modules=list(model.input_modules),
-        output_modules=list(model.output_modules),
-        representation=e3nn_rep,
-        model_outputs=model.model_outputs,
-    )
+        e3nn_model = model.__class__(
+            input_modules=list(model.input_modules),
+            output_modules=list(model.output_modules),
+            representation=e3nn_rep,
+            model_outputs=model.model_outputs,
+        )
+    finally:
+        if dtype != prev_dtype:
+            torch.set_default_dtype(prev_dtype)
 
     load_cueq_weights(model, e3nn_model)
 

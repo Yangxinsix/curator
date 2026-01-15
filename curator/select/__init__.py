@@ -19,3 +19,9 @@ from .active_learning import (
     GeneralActiveLearning,
     DistanceMetrics,
 )
+from .filter import (
+    Filter,
+    ElementFilter,
+    ForceFilter,
+    UncertaintyFilter,
+)
