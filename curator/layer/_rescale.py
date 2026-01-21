@@ -415,12 +415,12 @@ class PerSpeciesRescaleShift(nn.Module):
         shifts: Union[Dict[str, float], Dict[int, float], None] = None,
         scales_trainable: bool = False,
         shifts_trainable: bool = False,
-        scales_keys: List[str] = ["atomic_energy"],
-        shifts_keys: List[str] = ["atomic_energy"],
+        scales_keys: Optional[List[str]] = None,
+        shifts_keys: Optional[List[str]] = None,
     ):
         super().__init__()
-        self.scales_keys = scales_keys
-        self.shifts_keys = shifts_keys
+        self.scales_keys = scales_keys if scales_keys is not None else ["atomic_energy"]
+        self.shifts_keys = shifts_keys if shifts_keys is not None else ["atomic_energy"]
         self._initialized = not (scales is None and shifts is None)
 
         scales_dict = torch.ones((119,), dtype=torch.float)

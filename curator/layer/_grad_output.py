@@ -10,7 +10,7 @@ class GradientOutput(torch.nn.Module):
         grad_on_positions: bool = False,
         compute_edge_forces: bool = False,
         compute_edge_forces_only: bool = False,
-        model_outputs: List[str] = ['forces'],       # properties that need to be calculated, can be forces, stress, virial, etc.
+        model_outputs: Optional[List[str]] = None,       # properties that need to be calculated, can be forces, stress, virial, etc.
         update_callback: Optional[Callable] = None,  # Add a callback parameter
     ) -> None:
         # TODO: define a set for allowed model outputs
@@ -20,7 +20,7 @@ class GradientOutput(torch.nn.Module):
         self.compute_edge_forces_only = compute_edge_forces_only
         self.grad_on_positions = grad_on_positions
         self.update_callback = update_callback
-        self.model_outputs = model_outputs
+        self.model_outputs = model_outputs if model_outputs is not None else ["forces"]
         if self.compute_edge_forces and properties.edge_forces not in self.model_outputs:
             self.model_outputs.append(properties.edge_forces)
 
