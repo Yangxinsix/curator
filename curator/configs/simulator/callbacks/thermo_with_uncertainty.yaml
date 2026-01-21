@@ -15,6 +15,7 @@ uncertainty_backend:
     low_threshold: 0.9
     high_threshold: 0.99
     max_structures: 128
+    n_random_features: 500
   ensemble_kwargs:
     uncertainty_keys:
       - force_sd

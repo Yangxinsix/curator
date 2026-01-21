@@ -29,7 +29,7 @@ class ChargeEquilibration(nn.Module):
         ewald: Union[EwaldSummation, Type[EwaldSummation], partial] = EwaldSummation,
         compute_forces: bool = True,
         constant_potential: bool = False,
-        model_outputs: List[str] = ['residual_forces', 'atomic_charge'],
+        model_outputs: Optional[List[str]] = None,
         *args,
         **kwargs,
     ):
@@ -63,7 +63,7 @@ class ChargeEquilibration(nn.Module):
         
         self.compute_forces = compute_forces
         self.constant_potential = constant_potential
-        self.model_outputs = model_outputs
+        self.model_outputs = model_outputs if model_outputs is not None else ["residual_forces", "atomic_charge"]
 
     def forward(self, data: properties.Type, training: bool=True) -> properties.Type:
         chi = self.electronegativity_mlp._compute(data[properties.node_embedding]).squeeze()

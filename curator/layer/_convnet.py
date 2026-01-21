@@ -28,7 +28,7 @@ class ConvNetLayer(Interaction):
         invariant_neurons: int=8,
         avg_num_neighbors: Optional[float]=None,
         use_sc: bool=True,
-        nonlinearity_scalars: Dict[int, Callable] = {"e": "ssp"},
+        nonlinearity_scalars: Optional[Dict[int, Callable]] = None,
     ) -> None:
         """
         Convolution Block.
@@ -43,6 +43,8 @@ class ConvNetLayer(Interaction):
         :param use_sc: bool, use self-connection or not
         """
         super().__init__()
+        if nonlinearity_scalars is None:
+            nonlinearity_scalars = {"e": "ssp"}
 
         if avg_num_neighbors is not None:
             self._initialized = True

@@ -1,3 +1,5 @@
+.. :orphan:
+
 OpenMM interface
 =================
 OpenMM is a highly-optimized GPU MD code. By using OpenMM-Torch plugin, it enables full GPU MD simulation with machine learning potentials.

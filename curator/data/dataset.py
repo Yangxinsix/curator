@@ -1,7 +1,7 @@
 import torch
 from ._data_reader import AseDataReader, Trajectory
 from ._neighborlist import NeighborListTransform, Asap3NeighborList
-from typing import List, Union, Dict
+from typing import List, Union, Dict, Optional
 from ase.io.trajectory import TrajectoryReader
 from ase.io import read
 from ase import Atoms
@@ -18,7 +18,7 @@ class AseDataset(torch.utils.data.Dataset):
         ase_db: Union[List[Atoms], TrajectoryReader, str, List[str]], 
         cutoff: float=5.0, 
         compute_neighbor_list: bool=True, 
-        transforms: List[Transform] = [],
+        transforms: Optional[List[Transform]] = None,
         default_dtype: torch.dtype = torch.get_default_dtype(),
         task: str = "ase",
         weight: float = 1.0,
@@ -28,6 +28,7 @@ class AseDataset(torch.utils.data.Dataset):
         super().__init__()
         
         self.db = read_trajectory(ase_db)
+        transforms = [] if transforms is None else transforms
 
         self.cutoff = cutoff
         self.default_dtype = default_dtype
@@ -121,7 +122,7 @@ class NumpyDataset(torch.utils.data.Dataset):
         datapath, 
         cutoff: float=5.0, 
         compute_neighbor_list: bool=True, 
-        transforms: List[Transform] = [],
+        transforms: Optional[List[Transform]] = None,
         default_dtype: torch.dtype = torch.get_default_dtype(),
         task: str = "numpy",
         weight: float = 1.0,
@@ -131,6 +132,7 @@ class NumpyDataset(torch.utils.data.Dataset):
         super().__init__()
         
         self.npdata = np.load(datapath)
+        transforms = [] if transforms is None else transforms
         self.cutoff = cutoff
         self.default_dtype = default_dtype
         self.compute_neighbor_list = compute_neighbor_list

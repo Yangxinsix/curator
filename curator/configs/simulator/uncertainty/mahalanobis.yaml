@@ -4,3 +4,4 @@ low_threshold: 0.95
 dataset: null
 kernel: local-full-g
 max_structures: 128
+n_random_features: 500

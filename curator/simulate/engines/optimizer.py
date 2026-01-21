@@ -9,9 +9,11 @@ class OptimizerEngine(BaseEngine):
         super().__init__()
         self.optimizer_cls = optimizer_cls
         self.kw = optimizer_kwargs
+        self.atoms = None
         self.opt = None
 
     def setup(self, ctx: SimContext) -> None:
+        self.atoms = ctx.atoms
         self.opt = self.optimizer_cls(ctx.atoms, **self.kw)
 
     def _attach_to_backend(self, fn, interval: int) -> None:

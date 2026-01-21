@@ -42,9 +42,9 @@ class Nequip(Representation):
         # parameters for interaction blocks and convnet
         resnet: bool = False,
         nonlinearity_type: str = "gate",
-        nonlinearity_scalars: Dict[int, Callable] = {"e": "ssp", "o": "tanh"},
-        nonlinearity_gates: Dict[int, Callable] = {"e": "ssp", "o": "abs"},
-        convolution_kwargs: dict = {},
+        nonlinearity_scalars: Optional[Dict[int, Callable]] = None,
+        nonlinearity_gates: Optional[Dict[int, Callable]] = None,
+        convolution_kwargs: Optional[dict] = None,
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
         use_cueq: bool = False,
         heads: Optional[list] = None,
@@ -80,6 +80,12 @@ class Nequip(Representation):
         self.species = species
         
         self._enable_cueq(use_cueq)
+
+        if nonlinearity_scalars is None:
+            nonlinearity_scalars = {"e": "ssp", "o": "tanh"}
+        if nonlinearity_gates is None:
+            nonlinearity_gates = {"e": "ssp", "o": "abs"}
+        convolution_kwargs = {} if convolution_kwargs is None else dict(convolution_kwargs)
         
         if num_elements is None:
             num_elements = len(species) if species is not None else 119

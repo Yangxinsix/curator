@@ -64,7 +64,7 @@ class AtomsDataModule(pl.LightningDataModule):
         compute_neighbor_list: bool = True,
         val_batch_size: Optional[int] = None,
         test_batch_size: Optional[int] = None,
-        transforms: List[Transform] = [],
+        transforms: Optional[List[Transform]] = None,
         collate_fn: Callable = collate_atomsdata,
         split_file: Optional[str] = None,
         num_train: Union[int, float, None] = None,
@@ -100,7 +100,7 @@ class AtomsDataModule(pl.LightningDataModule):
         self.train_path = train_path
         self.val_path = val_path
         self.test_path = test_path
-        self.transforms = transforms
+        self.transforms = transforms if transforms is not None else []
         self.cutoff = cutoff
         self.compute_neighbor_list = compute_neighbor_list
         # batch size parameters

@@ -17,7 +17,7 @@ class MLCalculator(Calculator):
         model: Union[torch.nn.Module, List[str], str, List[torch.nn.Module]],
         cutoff: Optional[float] = None,
         compute_neighbor_list: bool = True,
-        transforms: List[Transform] = [],
+        transforms: Optional[List[Transform]] = None,
         energy_scale: float = 1.0,
         forces_scale: float = 1.0,
         stress_scale: float = 1.0,
@@ -35,6 +35,7 @@ class MLCalculator(Calculator):
             forces_scale (float, optional): forces scale. Defaults to 1.0.
         """
         
+        transforms = [] if transforms is None else transforms
         model_like = load_models(model, device=device)
         self.model = EnsembleModel(model_like) if len(model_like) > 1 else model_like[0]
         self.model.eval()
@@ -73,7 +74,7 @@ class MLCalculator(Calculator):
     def calculate(
             self, 
             atoms: ase.Atoms =None, 
-            properties: list = ["energy", "forces", "stress"], 
+            properties: Optional[list] = None, 
             system_changes: list = all_changes,
             ) -> None:
         """
@@ -83,6 +84,9 @@ class MLCalculator(Calculator):
             properties (list of str): do not use this, no functionality
             system_changes (list of str): List of changes for ASE.
         """
+        if properties is None:
+            properties = ["energy", "forces", "stress"]
+
         # First call original calculator to set atoms attribute
         # (see https://wiki.fysik.dtu.dk/ase/_modules/ase/calculators/calculator.html#Calculator)
         if atoms is not None:
@@ -165,7 +169,7 @@ class EnsembleCalculator(Calculator):
     def calculate(
             self, 
             atoms=None, 
-            properties: list =["energy"], 
+            properties: Optional[list] = None, 
             system_changes: list =all_changes):
         """
         Args:
@@ -173,6 +177,9 @@ class EnsembleCalculator(Calculator):
             properties (list of str): do not use this, no functionality
             system_changes (list of str): List of changes for ASE.
         """
+        if properties is None:
+            properties = ["energy"]
+
         # First call original calculator to set atoms attribute
         # (see https://wiki.fysik.dtu.dk/ase/_modules/ase/calculators/calculator.html#Calculator)
         if atoms is not None:

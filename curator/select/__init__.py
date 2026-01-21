@@ -12,13 +12,13 @@ from .select import (
     lcmd_greedy,
     deterministic_CUR,
 )
-from .active_learning import (
+from curator.layer._feature import (
     FeatureExtractor,
     FeatureStatistics,
     RandomProjections,
-    GeneralActiveLearning,
     DistanceMetrics,
 )
+from .active_learning import GeneralActiveLearning
 from .filter import (
     Filter,
     ElementFilter,

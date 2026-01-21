@@ -105,9 +105,9 @@ class NeuralNetworkPotential(nn.Module):
     def __init__(
         self,
         representation: nn.Module,
-        input_modules: List[nn.Module] = None,
-        output_modules: List[nn.Module] = None,
-        model_outputs: List[str] = [],
+        input_modules: Optional[List[nn.Module]] = None,
+        output_modules: Optional[List[nn.Module]] = None,
+        model_outputs: Optional[List[str]] = None,
         heads: Optional[list] = None,
     ) -> None:
         """ Base class for neural network potentials.
@@ -120,7 +120,7 @@ class NeuralNetworkPotential(nn.Module):
         super().__init__()
 
         self.representation = representation
-        self.model_outputs = model_outputs
+        self.model_outputs = model_outputs or []
         self.input_modules = CallbackModuleList(input_modules, on_register_callback=None)
         self.output_modules = CallbackModuleList(output_modules, on_register_callback=self.register_callbacks)
         self.heads = heads

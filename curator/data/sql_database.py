@@ -249,7 +249,7 @@ class Sqlite3Dataset(QMDatabase, torch.utils.data.Dataset):
             cutoff = None, 
             compute_neighbor_list = False,
             return_cell_displacements = False,
-            transforms = [],
+            transforms = None,
             task: str = "sqlite3",
             weight: float = 1.0,
             meta: Dict = None,
@@ -259,7 +259,7 @@ class Sqlite3Dataset(QMDatabase, torch.utils.data.Dataset):
         super().__init__(filename, **kwargs)
         self.cutoff = cutoff
         self.compute_neighbor_list = compute_neighbor_list
-        self.transforms = transforms
+        self.transforms = transforms if transforms is not None else []
         self.task = task
         self.weight = weight
         self.meta = meta

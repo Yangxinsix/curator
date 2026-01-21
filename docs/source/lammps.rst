@@ -1,3 +1,5 @@
+.. :orphan:
+
 .. _LAMMPS: https://github.com/lammps/lammps
 .. _CUDA: https://developer.nvidia.com/cuda-11-7-0-download-archive
 .. _cuDNN: https://docs.nvidia.com/deeplearning/cudnn/install-guide/index.html

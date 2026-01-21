@@ -23,10 +23,12 @@ class MahalanobisUncertainty(BaseUncertainty):
         dataset: Union[str, None] = None,
         max_structures: Optional[int] = 128,
         kernel: str = "local-full-g",
+        n_random_features: int = 500,
     ) -> None:
         self.dataset = dataset
         self.max_structures = max_structures
         self.kernel = kernel
+        self.n_random_features = n_random_features
         self.feature_calculator: Optional[FeatureCalculator] = None
         self._initialized = False
         self._high_spec = high_threshold
@@ -119,12 +121,16 @@ class MahalanobisUncertainty(BaseUncertainty):
                 dataset=self.dataset,
                 compute_maha_dist=True,
                 max_dataset_size=self.max_structures,
-                kernel=self.kernel,
+                kernels=[(self.kernel, self.n_random_features)],
+                distance_kernel=self.kernel,
+                output_features=False,
             )
             model.output_modules.append(self.feature_calculator)
-
-        if not hasattr(self.feature_calculator, "maha_dist"):
-            raise RuntimeError("FeatureCalculator must be initialized with mahalanobis statistics.")
+        elif not hasattr(self.feature_calculator, "maha_dist"):
+            dataset = self.feature_calculator.dataset or self.dataset
+            if dataset is None:
+                raise RuntimeError("MahalanobisUncertainty requires a dataset to compute statistics.")
+            self.feature_calculator.fit_distance(dataset=dataset, kernel=self.kernel)
 
         high_source = self.feature_calculator.maha_dist
         self.high_threshold = (

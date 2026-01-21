@@ -4,7 +4,6 @@ import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional, Union, List, Sequence
 from ase import Atoms
-from curator.data import read_trajectory
 from omegaconf import ListConfig
 
 SequenceLike = (list, tuple, np.ndarray, ListConfig)
@@ -33,6 +32,7 @@ def _load_single_source(
     if not os.path.isfile(source):
         raise FileNotFoundError(f"init_traj not found: {source}")
 
+    from curator.data import read_trajectory
     images = read_trajectory(source, index=":")
     if not images:
         raise RuntimeError(f"No frames in {source}")
