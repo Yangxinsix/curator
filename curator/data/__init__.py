@@ -29,6 +29,7 @@ from .properties import (
     _GRAPH_FIELDS,
     _NODE_FIELDS,
 )
+from .sqlite_trajectory import SqliteTrajectory, CombinedSqliteTrajectory
 
 __all__ = [
     AseDataReader,
@@ -60,4 +61,6 @@ __all__ = [
     _INDEX_FIELDS,
     _GRAPH_FIELDS,
     _NODE_FIELDS,
+    SqliteTrajectory,
+    CombinedSqliteTrajectory,
 ]
