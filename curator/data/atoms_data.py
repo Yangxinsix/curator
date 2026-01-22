@@ -88,7 +88,10 @@ class AtomsData(MutableMapping[str, Any]):
         moved: Dict[str, torch.Tensor] = {}
         for k, v in values.items():
             if isinstance(v, torch.Tensor):
-                moved[k] = v.to(device=device, dtype=dtype, non_blocking=non_blocking)
+                if dtype is not None and torch.is_floating_point(v):
+                    moved[k] = v.to(device=device, dtype=dtype, non_blocking=non_blocking)
+                else:
+                    moved[k] = v.to(device=device, non_blocking=non_blocking)
             else:
                 moved[k] = v
         return moved

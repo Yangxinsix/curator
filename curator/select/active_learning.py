@@ -2,13 +2,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Tuple, Union, Literal
+import logging
 
 import torch
 from torch import nn
 from torch.utils.data import Subset
 
-from curator.data import AseDataset, properties
+from curator.data import AseDataset, properties, read_trajectory
 from curator.layer._feature import (
     FeatureCalculator,
     FeatureExtractor,
@@ -31,8 +32,33 @@ from curator.select.select import (
     max_dist_greedy,
 )
 
+logger = logging.getLogger(__name__)
+
 _DEFAULT_KERNEL = 'full-g'
 _DEFAULT_N_RANDOM_FEATURES = 500
+KernelName = Literal[
+    "full-g",
+    "ll-g",
+    "local-full-g",
+    "local_full-g",
+    "local-ll-g",
+    "local_ll-g",
+    "local-gnn",
+    "full-gradient",
+    "ll-gradient",
+    "gnn",
+    "local_full-gradient",
+    "local_ll-gradient",
+    "local_gnn",
+]
+SelectionName = Literal[
+    "max_diag",
+    "max_dist_greedy",
+    "max_det_greedy",
+    "max_det_greedy_local",
+    "lcmd_greedy",
+    "deterministic_CUR",
+]
 
 
 class GeneralActiveLearning:
@@ -41,14 +67,16 @@ class GeneralActiveLearning:
     def __init__(
         self,
         models: List[nn.Module],
-        kernel: str = _DEFAULT_KERNEL,
+        kernel: KernelName = _DEFAULT_KERNEL,
         n_random_features: int = _DEFAULT_N_RANDOM_FEATURES,
-        selection: str = "max_diag",
-        kernels: Optional[Sequence[Union[str, Tuple[str, int]]]] = None,
+        selection: SelectionName = "max_diag",
+        kernels: Optional[Sequence[Union[KernelName, Tuple[KernelName, int]]]] = None,
         target_layer: str = "readout_mlp",
         batch_size: int = 8,
         device: Optional[str] = None,
-        store_dir: Optional[Union[str, Path]] = None,
+        dataset_cutoff: Optional[float] = None,
+        transforms: Optional[Sequence] = None,
+        save_features: Optional[Union[str, Path]] = None,
         checkpoint_interval: int = 0,
         structure_filter: Optional[Union[Filter, Sequence[Filter]]] = None,
     ) -> None:
@@ -60,7 +88,12 @@ class GeneralActiveLearning:
         self.target_layer = target_layer
         self.batch_size = batch_size
         self.device = device or next(models[0].parameters()).device
-        self.store_dir = Path(store_dir) if store_dir else None
+        if dataset_cutoff is None:
+            representation = getattr(models[0], "representation", None)
+            dataset_cutoff = getattr(representation, "cutoff", None)
+        self.dataset_cutoff = dataset_cutoff
+        self.transforms = list(transforms) if transforms else None
+        self.save_features = Path(save_features) if save_features else None
         self.checkpoint_interval = max(int(checkpoint_interval), 0)
         self.structure_filter = structure_filter
         self._resolved_kernels = self._resolve_kernels()
@@ -72,53 +105,59 @@ class GeneralActiveLearning:
 
     def select(
         self,
-        pool_set: Union[str, Path, torch.utils.data.Dataset],
-        train_set: Optional[Union[str, Path, torch.utils.data.Dataset]] = None,
+        pool_set: Union[str, Path],
+        train_set: Optional[Union[str, Path]] = None,
         select_batch_size: int = 100,
-        save_dir: Optional[Union[str, Path]] = None,
         save_json: Optional[Union[str, Path]] = None,
+        save_images: Optional[Union[bool, str, Path]] = None,
         normalize_features: bool = True,
     ) -> List[int]:
-        kernels = self._resolved_kernels
-        save_root = Path(save_dir) if save_dir else None
-        if save_root is not None:
-            save_root.mkdir(parents=True, exist_ok=True)
+        kernels = self._merge_kernels(self._resolved_kernels, self.kernel)
 
-        pool_dataset = self._load_dataset(pool_set)
-        train_dataset = self._load_dataset(train_set) if train_set is not None else None
+        pool_atoms = self._read_trajectory(pool_set)
+        pool_dataset = self._make_dataset(pool_atoms)
+        train_dataset = None
+        if train_set is not None:
+            train_atoms = self._read_trajectory(train_set)
+            train_dataset = self._make_dataset(train_atoms)
         filtered_pool, pool_map = self._filter_set(pool_dataset, label="pool")
 
-        pool_save = save_root / "pool.pt" if save_root is not None else None
+        pool_store = self.save_features
         pool_stats = self._stats(
             self.models,
             filtered_pool,
             kernels,
-            "pool",
-            pool_save,
+            None,
             self._calculators,
+            enable_store=True,
+            store_path=pool_store,
         )
         pool_features: Dict[str, torch.Tensor] = {}
         if kernels:
             pool_features = pool_stats.get_features(
                 normalize=normalize_features,
-                save=pool_save is not None,
+                save=False,
             )
 
         train_stats = None
         train_features: Optional[Dict[str, torch.Tensor]] = None
         if train_dataset is not None and kernels:
-            train_save = save_root / "train.pt" if save_root is not None else None
+            train_store = None
+            if pool_store is not None:
+                path = Path(pool_store)
+                train_store = path.with_name(f"{path.stem}_train{path.suffix}")
             train_stats = self._stats(
                 self.models,
                 train_dataset,
                 kernels,
-                "train",
-                train_save,
+                None,
                 self._calculators,
+                enable_store=True,
+                store_path=train_store,
             )
             train_features = train_stats.get_features(
                 normalize=normalize_features,
-                save=train_save is not None,
+                save=False,
             )
 
         matrix, num_atoms, n_train = self._kernel_matrix(
@@ -184,6 +223,12 @@ class GeneralActiveLearning:
             }
             with open(save_path, "w", encoding="utf-8") as handle:
                 json.dump(payload, handle, indent=2)
+        if save_images:
+            if isinstance(save_images, (str, Path)):
+                save_path = Path(save_images)
+            else:
+                save_path = Path("selected.traj")
+            self._save_selected_images(pool_atoms, selected, save_path)
         return selected
 
     def _stats(
@@ -191,14 +236,14 @@ class GeneralActiveLearning:
         models: List[nn.Module],
         dataset: torch.utils.data.Dataset,
         kernels: List[Union[str, Tuple[str, int]]],
-        key: str,
         save_path: Optional[Path],
         calculators: Optional[List[FeatureCalculator]] = None,
+        enable_store: bool = True,
+        store_path: Optional[Union[str, Path]] = None,
     ) -> FeatureStatistics:
         store = None
-        if self.store_dir is not None:
-            self.store_dir.mkdir(parents=True, exist_ok=True)
-            store = H5Feature(self.store_dir / f"{key}.h5", num_models=len(models))
+        if enable_store and store_path is not None:
+            store = H5Feature(store_path, num_models=len(models))
         return FeatureStatistics(
             models=models,
             dataset=dataset,
@@ -301,12 +346,28 @@ class GeneralActiveLearning:
         return filtered, self._index_map(dataset, filtered)
 
     @staticmethod
-    def _load_dataset(
-        source: Union[str, Path, torch.utils.data.Dataset],
-    ) -> torch.utils.data.Dataset:
-        if isinstance(source, (str, Path)):
-            return AseDataset(source)
-        return source
+    def _read_trajectory(source: Union[str, Path]):
+        if not isinstance(source, (str, Path)):
+            raise TypeError("pool_set/train_set must be a path string.")
+        return read_trajectory(source)
+
+    def _make_dataset(self, atoms):
+        cutoff = self.dataset_cutoff if self.dataset_cutoff is not None else 5.0
+        return AseDataset(atoms, cutoff=cutoff, transforms=self.transforms)
+
+    def _save_selected_images(
+        self,
+        atoms,
+        indices: List[int],
+        save_path: Path,
+    ) -> None:
+        from ase.io import Trajectory
+
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        with Trajectory(str(save_path), "w") as traj:
+            for idx in indices:
+                traj.write(atoms[idx])
+        logger.info("Saved %d selected images to %s", len(indices), save_path)
 
     @staticmethod
     def _index_map(
@@ -350,6 +411,37 @@ class GeneralActiveLearning:
         }:
             return [kernel]
         return []
+
+    @staticmethod
+    def _merge_kernels(
+        export_kernels: Optional[List[Union[str, Tuple[str, int]]]],
+        selection_kernel: Optional[str],
+    ) -> List[Union[str, Tuple[str, int]]]:
+        feature_kernels = {
+            "full-gradient",
+            "ll-gradient",
+            "gnn",
+            "local_full-gradient",
+            "local_ll-gradient",
+            "local_gnn",
+        }
+        merged: List[Union[str, Tuple[str, int]]] = []
+        if export_kernels:
+            merged.extend(export_kernels)
+        if selection_kernel:
+            normalized = normalize_kernel(selection_kernel)
+            if normalized in feature_kernels:
+                merged.append(normalized)
+        seen = set()
+        deduped: List[Union[str, Tuple[str, int]]] = []
+        for item in merged:
+            raw = item[0] if isinstance(item, tuple) else item
+            key = normalize_kernel(str(raw))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(item)
+        return deduped
 
     @staticmethod
     def _num_atoms(dataset: torch.utils.data.Dataset) -> torch.Tensor:

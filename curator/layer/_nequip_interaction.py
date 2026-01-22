@@ -1,5 +1,5 @@
 import torch
-from typing import Dict, Callable, Optional, Any
+from typing import Dict, Callable, Optional, Any, Literal
 from curator.data import properties
 
 from e3nn.nn import Gate, NormActivation
@@ -33,7 +33,7 @@ class InteractionLayer(torch.nn.Module):
         convolution=ConvNetLayer,
         convolution_kwargs: Optional[dict] = None,
         resnet: bool = False,
-        nonlinearity_type: str = "gate",
+        nonlinearity_type: Literal["gate", "norm"] = "gate",
         nonlinearity_scalars: Optional[Dict[int, Callable]] = None,
         nonlinearity_gates: Optional[Dict[int, Callable]] = None,
     ):

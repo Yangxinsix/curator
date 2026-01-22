@@ -4,7 +4,7 @@ from importlib import util
 import contextlib
 import logging
 import sys
-from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union, Literal
 from pathlib import Path
 
 import h5py
@@ -12,7 +12,7 @@ import torch
 from torch import nn
 from torch.utils.data import DataLoader
 
-from curator.data import AseDataset, collate_atomsdata, properties
+from curator.data import AseDataset, properties
 from .utils import find_layer_by_name_recursive
 try:
     from torch_scatter import scatter_add, scatter_mean
@@ -29,9 +29,25 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_KERNEL = 'full-g'
 _DEFAULT_N_RANDOM_FEATURES = 500
+KernelName = Literal[
+    "full-g",
+    "ll-g",
+    "local-full-g",
+    "local_full-g",
+    "local-ll-g",
+    "local_ll-g",
+    "local-gnn",
+    "full-gradient",
+    "ll-gradient",
+    "gnn",
+    "local_full-gradient",
+    "local_ll-gradient",
+    "local_gnn",
+]
+Reduction = Literal["mean", "sum"]
 
 
-def normalize_kernel(kernel: str) -> str:
+def normalize_kernel(kernel: KernelName) -> str:
     aliases = {
         'full-g': 'full-gradient',
         'll-g': 'll-gradient',
@@ -227,7 +243,7 @@ class RandomProjections(FeatureProjector):
 class FeatureKernel:
     """Compute features from (feat, grad) tuples using a fixed kernel/projector."""
 
-    def __init__(self, kernel: str, projector: FeatureProjector) -> None:
+    def __init__(self, kernel: KernelName, projector: FeatureProjector) -> None:
         self.kernel = self._normalize_kernel(kernel)
         self.projector = projector
 
@@ -278,7 +294,7 @@ class FeatureKernel:
         return scatter_add(atomic, image_idx, dim=0)
 
     @staticmethod
-    def _normalize_kernel(kernel: str) -> str:
+    def _normalize_kernel(kernel: KernelName) -> str:
         return normalize_kernel(kernel)
 
 
@@ -289,13 +305,13 @@ class FeatureCalculator(nn.Module):
         self,
         extractor: Optional[FeatureExtractor] = None,
         kernels: Optional[
-            Sequence[Union[FeatureKernel, Tuple[str, Union[FeatureProjector, int]]]]
+            Sequence[Union[FeatureKernel, Tuple[KernelName, Union[FeatureProjector, int]]]]
         ] = None,
         kernel_calculators: Optional[List[FeatureKernel]] = None,
         output_features: bool = True,
         compute_maha_dist: bool = False,
         dataset: Optional[Union[torch.utils.data.Dataset, str, Path]] = None,
-        distance_kernel: Optional[str] = None,
+        distance_kernel: Optional[KernelName] = None,
         max_dataset_size: Optional[int] = None,
         regularization: float = 1e-6,
     ) -> None:
@@ -314,8 +330,8 @@ class FeatureCalculator(nn.Module):
         self.model_outputs = [properties.feature] if self.output_features else []
         self.compute_maha_dist = compute_maha_dist
         self.dataset = dataset
-        self._resolved_distance_kernel: Optional[str] = None
-        self._distance_kernel: Optional[str] = None
+        self._resolved_distance_kernel: Optional[KernelName] = None
+        self._distance_kernel: Optional[KernelName] = None
         self.distance_kernel = distance_kernel
         self.max_dataset_size = max_dataset_size
         self.regularization = regularization
@@ -402,7 +418,7 @@ class FeatureCalculator(nn.Module):
     def fit_distance(
         self,
         dataset: Optional[Union[torch.utils.data.Dataset, str, Path]] = None,
-        kernel: Optional[str] = None,
+        kernel: Optional[KernelName] = None,
     ) -> None:
         if dataset is None:
             dataset = self.dataset
@@ -456,7 +472,7 @@ class FeatureCalculator(nn.Module):
             return torch.cat([torch.full((n,), i, dtype=torch.long) for i, n in enumerate(counts)])
         return torch.empty((0,), dtype=torch.long)
 
-    def _resolve_distance_kernel(self, kernel: Optional[str] = None) -> str:
+    def _resolve_distance_kernel(self, kernel: Optional[KernelName] = None) -> KernelName:
         if kernel is None and self._resolved_distance_kernel is not None:
             return self._resolved_distance_kernel
         if kernel is not None:
@@ -477,11 +493,11 @@ class FeatureCalculator(nn.Module):
         return self._resolved_distance_kernel
 
     @property
-    def distance_kernel(self) -> Optional[str]:
+    def distance_kernel(self) -> Optional[KernelName]:
         return self._distance_kernel
 
     @distance_kernel.setter
-    def distance_kernel(self, kernel: Optional[str]) -> None:
+    def distance_kernel(self, kernel: Optional[KernelName]) -> None:
         self._distance_kernel = kernel
         self._resolved_distance_kernel = None
 
@@ -496,13 +512,13 @@ class FeatureCalculator(nn.Module):
 
     @staticmethod
     def _build_kernels(
-        kernels: Optional[Sequence[Union[FeatureKernel, Tuple[str, Union[FeatureProjector, int]]]]],
+        kernels: Optional[Sequence[Union[FeatureKernel, Tuple[KernelName, Union[FeatureProjector, int]]]]],
         repr_callback: Optional[nn.Module],
         target_layer: str = 'readout_mlp',
-    ) -> List[Union[FeatureKernel, Tuple[str, int]]]:
+    ) -> List[Union[FeatureKernel, Tuple[KernelName, int]]]:
         if kernels is None:
             kernels = [(_DEFAULT_KERNEL, _DEFAULT_N_RANDOM_FEATURES)]
-        built: List[Union[FeatureKernel, Tuple[str, int]]] = []
+        built: List[Union[FeatureKernel, Tuple[KernelName, int]]] = []
         for item in kernels:
             if isinstance(item, FeatureKernel):
                 built.append(item)
@@ -538,7 +554,7 @@ class H5Feature:
         self,
         path: Union[str, Path],
         num_models: int,
-        kernels: Optional[Sequence[str]] = None,
+        kernels: Optional[Sequence[KernelName]] = None,
         dataset_size: Optional[int] = None,
         compression: Optional[str] = None,
         chunk_rows: Optional[int] = None,
@@ -554,7 +570,7 @@ class H5Feature:
 
     def ensure(
         self,
-        kernels: Optional[Sequence[str]] = None,
+        kernels: Optional[Sequence[KernelName]] = None,
         dataset_size: Optional[int] = None,
     ) -> List[str]:
         if kernels is None:
@@ -589,7 +605,7 @@ class H5Feature:
             self.dataset_size = int(dataset_size)
         return kernels_list
 
-    def count(self, kernel: str, model_idx: int) -> int:
+    def count(self, kernel: KernelName, model_idx: int) -> int:
         if model_idx < 0 or model_idx >= self.num_models:
             raise ValueError("model_idx is out of range.")
         with h5py.File(self.path, "a") as handle:
@@ -600,7 +616,7 @@ class H5Feature:
 
     def append(
         self,
-        kernel: str,
+        kernel: KernelName,
         model_idx: int,
         feats: torch.Tensor,
         image_idx: Optional[torch.Tensor] = None,
@@ -670,14 +686,14 @@ class H5Feature:
                     idx.resize((self.num_models, new_total))
                 idx[model_idx, current:new_total] = image_idx.detach().cpu().numpy()
 
-    def load(self, kernel: str) -> torch.Tensor:
+    def load(self, kernel: KernelName) -> torch.Tensor:
         with h5py.File(self.path, "r") as handle:
             group = handle.get(f"features/{kernel}")
             if group is None or "data" not in group:
                 return torch.empty((self.num_models, 0, 0))
             return torch.from_numpy(group["data"][()])
 
-    def load_with_counts(self, kernel: str) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
+    def load_with_counts(self, kernel: KernelName) -> Tuple[torch.Tensor, torch.Tensor, Optional[torch.Tensor]]:
         with h5py.File(self.path, "r") as handle:
             group = handle.get(f"features/{kernel}")
             if group is None or "data" not in group:
@@ -694,7 +710,7 @@ class H5Feature:
                 image_idx = torch.from_numpy(group["image_idx"][()])
             return data, counts, image_idx
 
-    def load_image_idx(self, kernel: str) -> Optional[torch.Tensor]:
+    def load_image_idx(self, kernel: KernelName) -> Optional[torch.Tensor]:
         with h5py.File(self.path, "r") as handle:
             group = handle.get(f"features/{kernel}")
             if group is None or "image_idx" not in group:
@@ -709,7 +725,7 @@ class FeatureStatistics:
         self,
         models: List[nn.Module],
         dataset: torch.utils.data.Dataset,
-        kernels: Optional[Sequence[Union[str, Tuple[str, int]]]] = None,
+        kernels: Optional[Sequence[Union[KernelName, Tuple[KernelName, int]]]] = None,
         calculators: Optional[List[FeatureCalculator]] = None,
         n_random_features: int = 500,
         target_layer: str = 'readout_mlp',
@@ -839,35 +855,15 @@ class FeatureStatistics:
         dtype: Optional[torch.dtype] = None,
         desc: Optional[str] = None,
     ):
-        pin_memory = str(self.device).startswith("cuda")
-        loader = DataLoader(
+        from curator.data.utils import iter_batches
+
+        yield from iter_batches(
             dataset=dataset,
             batch_size=self.batch_size,
-            shuffle=False,
-            collate_fn=collate_atomsdata,
-            num_workers=0,
-            pin_memory=pin_memory,
+            device=self.device,
+            dtype=dtype,
+            desc=desc,
         )
-        if tqdm is not None and desc is not None:
-            iterator = tqdm(
-                loader,
-                desc=desc,
-                total=len(loader),
-                disable=not sys.stderr.isatty(),
-            )
-        else:
-            iterator = loader
-        for batch in iterator:
-            if hasattr(batch, "to"):
-                yield batch.to(device=self.device, dtype=dtype)
-            else:
-                for k, v in batch.items():
-                    if torch.is_tensor(v):
-                        if dtype is not None and v.is_floating_point():
-                            batch[k] = v.to(self.device, dtype=dtype)
-                        else:
-                            batch[k] = v.to(self.device)
-                yield batch
 
     def _compute(
         self,
@@ -936,6 +932,13 @@ class FeatureStatistics:
             )
             log_ctx = logging_redirect_tqdm() if logging_redirect_tqdm is not None else contextlib.nullcontext()
             with log_ctx:
+                if offset > 0:
+                    logger.info(
+                        "Resuming feature store for model %s at index %d/%s",
+                        model.__class__.__name__,
+                        offset,
+                        size_value,
+                    )
                 logger.info("Computing features for model %s", model.__class__.__name__)
                 for batch in self._iter_batches(self.dataset, dtype=model_dtype, desc=desc):
                     n_structures = len(batch[properties.n_atoms])
@@ -1021,7 +1024,7 @@ class DistanceMetrics:
     def __init__(
         self,
         regularization: float = 1e-6,
-        reduction: Optional[str] = None,
+        reduction: Optional[Reduction] = None,
     ) -> None:
         self.regularization = regularization
         self.reduction = reduction
@@ -1034,7 +1037,7 @@ class DistanceMetrics:
         self,
         features: torch.Tensor,
         image_idx: Optional[torch.Tensor] = None,
-        reduction: Optional[str] = None,
+        reduction: Optional[Reduction] = None,
     ) -> None:
         feats = self._prepare_features(features)
         mean = torch.mean(feats, dim=0)
@@ -1055,9 +1058,9 @@ class DistanceMetrics:
     def fit_from_stats(
         self,
         stats: FeatureStatistics,
-        kernel: str,
+        kernel: KernelName,
         image_idx: Optional[torch.Tensor] = None,
-        reduction: Optional[str] = None,
+        reduction: Optional[Reduction] = None,
     ) -> None:
         features = stats.get_features(normalize=False)
         if kernel not in features:
@@ -1068,7 +1071,7 @@ class DistanceMetrics:
         self,
         features: torch.Tensor,
         image_idx: Optional[torch.Tensor] = None,
-        reduction: Optional[str] = None,
+        reduction: Optional[Reduction] = None,
     ) -> torch.Tensor:
         if self.mean is None or self.std is None or self.precision is None:
             raise RuntimeError("DistanceMetrics must be fit before scoring.")
@@ -1082,7 +1085,7 @@ class DistanceMetrics:
         self,
         features: torch.Tensor,
         image_idx: Optional[torch.Tensor] = None,
-        reduction: Optional[str] = None,
+        reduction: Optional[Reduction] = None,
     ) -> torch.Tensor:
         feats = self._prepare_features(features)
         distances = torch.norm(feats, dim=1)
@@ -1092,7 +1095,7 @@ class DistanceMetrics:
         self,
         features: torch.Tensor,
         image_idx: Optional[torch.Tensor] = None,
-        reduction: Optional[str] = None,
+        reduction: Optional[Reduction] = None,
     ) -> torch.Tensor:
         feats = self._prepare_features(features)
         norms = torch.norm(feats, dim=1)
@@ -1102,9 +1105,9 @@ class DistanceMetrics:
     def score_from_stats(
         self,
         stats: FeatureStatistics,
-        kernel: str,
+        kernel: KernelName,
         image_idx: Optional[torch.Tensor] = None,
-        reduction: Optional[str] = None,
+        reduction: Optional[Reduction] = None,
     ) -> torch.Tensor:
         features = stats.get_features(normalize=False)
         if kernel not in features:
@@ -1125,7 +1128,7 @@ class DistanceMetrics:
         self,
         distances: torch.Tensor,
         image_idx: Optional[torch.Tensor],
-        reduction: Optional[str],
+        reduction: Optional[Reduction],
     ) -> torch.Tensor:
         reduction = reduction or self.reduction
         if reduction is None:

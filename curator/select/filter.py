@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Sequence, Union
+from typing import Dict, List, Optional, Sequence, Union, Literal
 
 import torch
 from ase import Atoms
@@ -16,11 +16,14 @@ class Filter:
         return dataset
 
 
+FilteringType = Literal["none", "subset", "superset", "exact", "overlap"]
+
+
 class ElementFilter(Filter):
     def __init__(
         self,
         required_elements: Optional[Sequence[Union[str, int]]] = None,
-        filtering_type: str = "superset",
+        filtering_type: FilteringType = "superset",
     ) -> None:
         self.required_elements = required_elements
         self.filtering_type = filtering_type

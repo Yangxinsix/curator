@@ -1,6 +1,6 @@
 import pytorch_lightning as pl
 import torch
-from typing import Union, Optional, List, Dict, Callable, Tuple
+from typing import Union, Optional, List, Dict, Callable, Tuple, Literal
 from dataclasses import dataclass, field
 from ._transform import Transform
 from ._neighborlist import NeighborListTransform, TorchNeighborList
@@ -17,6 +17,9 @@ from pytorch_lightning.utilities.combined_loader import CombinedLoader
 
 
 logger = logging.getLogger(__name__)
+
+DataTypeName = Literal["Ase", "Numpy", "Bamboo", "Sqlite3"]
+SplitMode = Literal["random", "sequential"]
 
 def _is_replay_name(name: str) -> bool:
     return str(name).lower().startswith("replay")
@@ -55,7 +58,7 @@ class AtomsDataModule(pl.LightningDataModule):
     def __init__(
         self,
         batch_size: int,
-        data_type: str = 'Ase',         # select from ['Ase', 'Numpy', 'Bamboo', 'Sqlite3']
+        data_type: DataTypeName = 'Ase',         # select from ['Ase', 'Numpy', 'Bamboo', 'Sqlite3']
         datapath: Union[List[str], str, None] = None,
         train_path: Union[List[str], str, None] = None,
         val_path: Union[List[str], str, None] = None,
@@ -71,7 +74,7 @@ class AtomsDataModule(pl.LightningDataModule):
         num_val: Union[int, float, None] = 0.1,
         num_test: Union[int, float, None] = None,
         val_only: bool = True,
-        train_val_split: str = "random",  # could be random or sequential
+        train_val_split: SplitMode = "random",  # could be random or sequential
         shuffle: bool = True,
         num_workers: int = 1,
         pin_memory: bool = True,
@@ -200,7 +203,7 @@ class AtomsDataModule(pl.LightningDataModule):
                     self._test_dataset = torch.utils.data.Subset(self.dataset, self.test_idx)
             
     
-    def setup_dataset(self, data_type: str, datapath: str) -> None:
+    def setup_dataset(self, data_type: DataTypeName, datapath: str) -> None:
         task = data_type.lower()
         if data_type == 'Ase':
             dataset = AseDataset(

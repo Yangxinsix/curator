@@ -1,6 +1,6 @@
 "keys to access properties of structures"
 
-from typing import Final, Dict, Set, List, Optional, Union
+from typing import Final, Dict, Set, List, Optional, Union, Literal
 import torch
 from dataclasses import dataclass
 
@@ -155,7 +155,7 @@ class HeadConfig:
     key: str  # property key in curator.data.properties
     dim: int = 1
     is_atomwise: bool = False  # whether the readout is per-atom before reduction
-    reduction: Optional[str] = "sum"  # "sum", "mean", or None
+    reduction: Optional[Literal["sum", "mean", "none"]] = "sum"  # "sum", "mean", "none", or None
     atomwise_key: Optional[str] = None  # optional key for per-atom output, e.g. atomic_energy
     write_atomwise: bool = False  # whether to write per-atom output to data
     # scale_by / shift_by accept:

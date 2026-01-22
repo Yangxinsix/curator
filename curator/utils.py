@@ -1,4 +1,5 @@
 import torch
+import json
 from e3nn.util.jit import script
 from omegaconf import open_dict, OmegaConf, DictConfig, ListConfig
 from hydra import compose, initialize, initialize_config_dir
@@ -9,7 +10,7 @@ from collections import abc
 import logging
 from ase import units
 from pathlib import Path, PosixPath
-from typing import Any, List, Optional, Tuple, Union, Dict
+from typing import Any, List, Optional, Tuple, Union, Dict, Literal
 import numpy as np
 import torch.serialization as torch_serialization
 import copy
@@ -17,6 +18,21 @@ import copy
 from ase.data import chemical_symbols
 import torch, re
 from curator.data import properties
+
+
+def write_json(path: Union[str, Path], payload: Any, indent: int = 2) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as handle:
+        json.dump(payload, handle, indent=indent)
+    return path
+
+
+def save_npz(path: Union[str, Path], **payload: Any) -> Path:
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(path, **payload)
+    return path
 
 def register_resolvers():
     OmegaConf.register_new_resolver("multiply", lambda x, y: x * y, replace=True)
@@ -693,7 +709,7 @@ def load_models(
 
 def update_model_domain_config(
     model_cfg: DictConfig,
-    domain_mode: str,
+    domain_mode: Literal["extend", "replace"],
     new_domains,
     logger=None,
 ) -> Optional[List[str]]:
@@ -739,9 +755,9 @@ def update_model_domain_config(
 def update_model_domains(
     model: torch.nn.Module,
     new_domains,
-    mode: str = "extend",
+    mode: Literal["extend", "replace"] = "extend",
     template_domain: str = "0",
-    init_strategy: str = "random",
+    init_strategy: Literal["random", "copy"] = "random",
     logger=None,
 ) -> int:
     """Extend or replace domain_modules in-place for a model."""
@@ -1433,7 +1449,8 @@ def scatter_min(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torc
     return out
 
 def scatter_reduce(src: torch.Tensor, index: torch.Tensor, dim: int = -1, out: torch.Tensor = None,
-                   reduce: str = 'sum', include_self: bool = False) -> torch.Tensor:
+                   reduce: Literal["sum", "mean", "max", "min"] = 'sum',
+                   include_self: bool = False) -> torch.Tensor:
     """
     Reduces all values from the `src` tensor into `out` at the indices specified in the `index` tensor
     along the dimension `dim` using the specified reduction ('sum', 'mean', 'max', 'min').
@@ -2069,7 +2086,7 @@ def _register_legacy_outputspec() -> None:
             key: str,
             dim: int = 1,
             is_atomwise: bool = False,
-            reduction: Optional[str] = "sum",
+            reduction: Optional[Literal["sum", "mean", "none"]] = "sum",
             atomwise_key: Optional[str] = None,
             write_atomwise: bool = False,
         ) -> None:

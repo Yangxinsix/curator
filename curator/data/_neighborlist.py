@@ -2,7 +2,7 @@ from abc import abstractmethod
 import torch
 from torch import nn
 import numpy as np
-from typing import Dict, Tuple, Union
+from typing import Dict, Tuple, Union, Literal
 from . import properties
 from ._transform import Transform
 import sys, warnings
@@ -295,7 +295,7 @@ class BatchNeighborList(nn.Module):
         cutoff: float, 
         requires_grad: bool=False, 
         return_distance: bool=False,
-        neighbor_list: Union[NeighborListTransform, str] = 'Torch',
+        neighbor_list: Union[NeighborListTransform, Literal["MatScipy", "Torch", "Asap3"]] = 'Torch',
     ) -> None:
         """Batch neighbor list
         

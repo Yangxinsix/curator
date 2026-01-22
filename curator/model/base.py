@@ -475,7 +475,7 @@ class LitNNP(pl.LightningModule):
                 batch_size=max(1, num_abs_dict[k]),
                 on_step=True,
                 on_epoch=True,
-                prog_bar=k.endswith("_total_loss"),
+                prog_bar=(k == "train_total_loss"),
                 sync_dist=True,
             )
         self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
@@ -543,7 +543,7 @@ class LitNNP(pl.LightningModule):
                 batch_size=num_abs_dict[k],
                 on_step=True,
                 on_epoch=True,
-                prog_bar=k.endswith("_total_loss"),
+                prog_bar=False,
                 sync_dist=True,
             )
         
@@ -588,7 +588,7 @@ class LitNNP(pl.LightningModule):
                 batch_size=num_abs_dict[k],
                 on_step=True,
                 on_epoch=True,
-                prog_bar=k.endswith("_total_loss"),
+                prog_bar=False,
                 sync_dist=True,
             )
                
@@ -633,7 +633,7 @@ class LitNNP(pl.LightningModule):
                 total += float(val) * weight
                 weight_sum += weight
             if weight_sum > 0:
-                self.log("val_total_loss", total / weight_sum, on_step=False, on_epoch=True, prog_bar=True, sync_dist=True)
+                self.log("val_total_loss", total / weight_sum, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         
         self._write_log_only("\n")
         self._write_log_and_console("Epoch summary")

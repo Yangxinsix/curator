@@ -25,7 +25,7 @@ from curator.layer import (
 )
 from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
 from curator.data import properties
-from typing import List, Optional, Dict, Union, Callable, Type
+from typing import List, Optional, Dict, Union, Callable, Type, Literal
 from ase.data import atomic_numbers
 from curator.model.base import Representation
 
@@ -62,7 +62,7 @@ class MACE(Representation):
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
         heads: Optional[list] = None,
-        distance_transform: Optional[Union[str, nn.Module]] = None,
+        distance_transform: Optional[Union[Literal["agnesi", "soft", "none", ""], nn.Module]] = None,
         filter_forbidden_irreps: bool = True,
         **kwargs,
     ) -> None:

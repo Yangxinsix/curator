@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from typing import List, Union, Optional, Callable, Dict, Tuple
+from typing import List, Union, Optional, Callable, Dict, Tuple, Literal
 from e3nn import o3
 from e3nn.nn import Activation
 from curator.data.properties import activation_fn, HeadConfig, resolve_heads
@@ -12,6 +12,8 @@ try:
     from torch_scatter import scatter_add, scatter_mean
 except ImportError:
     from curator.utils import scatter_add, scatter_mean
+
+AggregationMode = Literal["sum", "mean", "none"]
 
 class Dense(nn.Module):
     r"""
@@ -114,7 +116,10 @@ class AtomwiseNN(nn.Module):
 
         self.model_outputs = [h.key for h in self.heads]
         self.per_atom_flags = [bool(h.write_atomwise) for h in self.heads]
-        self.aggregation_modes = [(h.reduction if h.reduction is not None else "sum") for h in self.heads]
+        self.aggregation_modes: List[AggregationMode] = [
+            (h.reduction if h.reduction is not None else "sum")
+            for h in self.heads
+        ]
         self.per_atom_keys = [(h.atomwise_key or (h.key + "_pa")) for h in self.heads]
         self.split_size = [int(h.dim) for h in self.heads]
 

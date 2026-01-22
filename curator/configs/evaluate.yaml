@@ -14,3 +14,10 @@ evaluator:
     transforms: []
   save_data: False
   plot_figure: True
+  output_dir: ${run_path}/evaluate
+  device: ${device}
+  energy_unit: eV
+  force_unit: eV/Angstrom
+  batch_size: 8
+  num_workers: 0
+  pin_memory: null

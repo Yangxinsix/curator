@@ -612,11 +612,14 @@ def evaluate(config: DictConfig):
     from .utils import read_user_config, prune_config_targets, load_models
     from curator.model import EnsembleModel
     from curator.simulate import MLCalculator
+    import torch
 
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="evaluate")
     prune_config_targets(config, logger=log)
+    if config.model_path is None or config.datapath is None:
+        raise RuntimeError("Both model_path and datapath are required for evaluation.")
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -628,6 +631,18 @@ def evaluate(config: DictConfig):
         stream=True,
     )
     log.debug("Running on host: " + str(socket.gethostname()))
+    log.info("Evaluating datapath=%s", config.datapath)
+    log.info("Evaluating model_path=%s", config.model_path)
+    if isinstance(config.device, str) and config.device.startswith("cuda"):
+        try:
+            cuda_ok = torch.cuda.is_available()
+        except Exception:
+            log.warning("CUDA check failed; falling back to CPU.")
+            config.device = "cpu"
+        else:
+            if not cuda_ok:
+                log.warning("CUDA not available; falling back to CPU.")
+                config.device = "cpu"
 
     # Load model. Uses a compiled model, if any, otherwise a uncompiled model
     log.debug("Using model from <{}>".format(config.model_path))
@@ -643,6 +658,152 @@ def evaluate(config: DictConfig):
     
     evaluator = instantiate(config.evaluator, model=model)
     evaluator.evaluate(config.datapath)
+
+
+def evaluate_main(argv: Optional[List[str]] = None):
+    def _is_hydra_args(args: List[str]) -> bool:
+        for arg in args:
+            if not arg:
+                continue
+            if arg.startswith(("+", "~")):
+                return True
+            if "=" in arg and not arg.startswith("-"):
+                return True
+        return False
+
+    def _normalize_device(device: Optional[str]) -> Optional[str]:
+        if device is None:
+            return None
+        if not isinstance(device, str):
+            return device
+        if not device.startswith("cuda"):
+            return device
+        import torch
+        try:
+            cuda_ok = torch.cuda.is_available()
+        except Exception:
+            log.warning("CUDA check failed; falling back to CPU.")
+            return "cpu"
+        if not cuda_ok:
+            log.warning("CUDA not available; falling back to CPU.")
+            return "cpu"
+        return device
+
+    def _parse_args(args: Optional[List[str]] = None):
+        parser = argparse.ArgumentParser(
+            description="Evaluate a Curator model on a dataset",
+            fromfile_prefix_chars="+",
+        )
+        parser.add_argument(
+            "dataset",
+            nargs="?",
+            help="Dataset path (extxyz/xyz/traj); optional if --data is set",
+        )
+        parser.add_argument(
+            "model",
+            nargs="?",
+            help="Model checkpoint/run directory; optional if --model is set",
+        )
+        parser.add_argument(
+            "-d",
+            "--data",
+            dest="datapath",
+            nargs="+",
+            help="Dataset path(s)",
+        )
+        parser.add_argument(
+            "-m",
+            "--model",
+            dest="model_path",
+            nargs="+",
+            help="Model checkpoint or run directory path(s)",
+        )
+        parser.add_argument(
+            "--device",
+            type=str,
+            default="cuda",
+            help="Device for evaluation (default: cuda)",
+        )
+        parser.add_argument(
+            "--out",
+            type=str,
+            default="evaluate",
+            help="Base output directory (default: ./evaluate)",
+        )
+        parser.add_argument(
+            "--no-plot",
+            action="store_true",
+            help="Disable plotting",
+        )
+        parser.add_argument(
+            "--save-data",
+            action="store_true",
+            help="Save raw predictions/targets to results.npz",
+        )
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=8,
+            help="Batch size for evaluation (default: 8)",
+        )
+        parser.add_argument(
+            "--num-workers",
+            type=int,
+            default=0,
+            help="DataLoader workers (default: 0)",
+        )
+        parser.add_argument(
+            "--pin-memory",
+            action="store_true",
+            help="Enable DataLoader pin_memory",
+        )
+        if argcomplete:
+            argcomplete.autocomplete(parser)
+        return parser.parse_args(args)
+
+    if argv is None:
+        argv = sys.argv[1:]
+    if _is_hydra_args(argv):
+        return evaluate()
+    args = _parse_args(argv)
+
+    _ensure_resolvers()
+    from curator.simulate.evaluator import Evaluator
+    from curator.model import EnsembleModel
+    from .utils import load_models
+
+    datapath = args.datapath or args.dataset
+    model_path = args.model_path or args.model
+
+    if datapath is None or model_path is None:
+        raise RuntimeError("Both dataset and model are required for evaluation.")
+
+    out_base = Path(args.out)
+    out_base.mkdir(parents=True, exist_ok=True)
+    _configure_cli_logger(
+        log,
+        os.path.join(str(out_base), "predict.log"),
+        logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"),
+        stream=True,
+    )
+    log.info("Evaluating datapath=%s", datapath)
+    log.info("Evaluating model_path=%s", model_path)
+    device = _normalize_device(args.device) or args.device
+
+    models = load_models(model_path, device=device)
+    model = EnsembleModel(models) if len(models) > 1 else models[0]
+
+    evaluator = Evaluator(
+        model=model,
+        save_data=args.save_data,
+        plot_figure=not args.no_plot,
+        output_dir=args.out,
+        device=device,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_memory,
+    )
+    evaluator.evaluate(datapath)
 
 # Simulate with the model
 @hydra.main(config_path="configs", config_name="simulate", version_base=None)
@@ -707,21 +868,13 @@ def select(config: DictConfig):
     _ensure_resolvers()
     from hydra.utils import instantiate
     from pytorch_lightning import seed_everything
-    from .utils import read_user_config, prune_config_targets, load_models, log_logo
-    from curator.data import read_trajectory
-    import torch
-    from ase.io import read, Trajectory
     from omegaconf import OmegaConf
     from curator.select import GeneralActiveLearning
-    import json
-    from curator.data import AseDataset
-    from curator.data.utils import _prepare_data_source
+    from .utils import read_user_config, load_models, log_logo
 
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="select")
-    
-    prune_config_targets(config, logger=log)
 
     _configure_cli_logger(
         log,
@@ -742,118 +895,71 @@ def select(config: DictConfig):
     else:
         log.debug("Seed randomly...")
     
-    # Set up datamodule and load training and validation set
-    # The active learning only works for uncompiled model at the moment
+    # Load model and datasets
     log.debug("Using model from <{}>".format(config.model_path))
     models = load_models(config.model_path, config.device, load_compiled=False)
     cutoff = models[0].representation.cutoff
 
-    pool_atoms = None
-    pool_source = config.pool_set
-
-    # Load the pool data set and training data set
-    if config.dataset and config.split_file:
-        dataset = AseDataset(read_trajectory(config.dataset), cutoff=cutoff, transforms=instantiate(config.transforms))
-        with open(config.split_file) as f:
-            split = json.load(f)
-        data_dict = {}
-        for k in split:
-            data_dict[k] = torch.utils.data.Subset(dataset, split[k])
-    elif config.data_url:
-        data_url = dict(config.data_url)
-        if "url" not in data_url:
-            raise RuntimeError("data_url must include a 'url' field.")
-        log.info("Preparing pool data from URL: %s", data_url["url"])
-        pool_atoms = _prepare_data_source(
-            url=data_url["url"],
-            cache_dir=data_url.get("cache_dir"),
-            extract=data_url.get("extract", True),
-            filename=data_url.get("filename"),
-            ase_read_kwargs=data_url.get("ase_read_kwargs"),
-        )
-        pool_source = data_url.get("url")
-        data_dict = {
-            "pool": AseDataset(pool_atoms, cutoff=cutoff, transforms=instantiate(config.transforms))
-        }
-        if config.train_set:
-            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff, transforms=instantiate(config.transforms))
+    transforms = instantiate(config.transforms) if config.transforms else []
+    pool_source = None
+    if config.data_url is not None:
+        if isinstance(config.data_url, str):
+            pool_source = config.data_url
+        else:
+            data_url = dict(config.data_url)
+            if "url" not in data_url:
+                raise RuntimeError("data_url must include a 'url' field.")
+            pool_source = data_url["url"]
+            if len(data_url) > 1:
+                log.warning("data_url options are ignored; use pool_set with a URL string instead.")
     elif config.pool_set:
-        data_dict = {'pool': AseDataset(read_trajectory(config.pool_set), cutoff=cutoff, transforms=instantiate(config.transforms))}
-        if config.train_set:
-            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff, transforms=instantiate(config.transforms))
-    else:
-        raise RuntimeError("Please give valid pool data set for selection!")
+        pool_source = config.pool_set
+    if pool_source is None:
+        raise RuntimeError("pool_set or data_url is required for selection.")
 
-
-    # Check the size of pool data set
-    data_batch_size = OmegaConf.select(config, "data_batch_size")
-    select_batch_size = OmegaConf.select(config, "select_batch_size")
-    if select_batch_size is None:
-        select_batch_size = OmegaConf.select(config, "batch_size")
-    if data_batch_size is None:
-        data_batch_size = select_batch_size
-
-    if len(data_dict['pool']) < select_batch_size * 10: 
-            log.warning(f"The pool data set ({len(data_dict['pool'])}) is not large enough for selection! " 
-                + f"It should be larger than 10 times batch size ({select_batch_size*10}). "
-                + "Check your simulation!")
-    elif len(data_dict['pool']) < select_batch_size:
-        raise RuntimeError(f"""The pool data set ({len(data_dict['pool'])}) is not large enough for selection! Add more data or change batch size {select_batch_size}.""")
-
-    filters_cfg = OmegaConf.select(config, "filters")
-    structure_filter = None
-    if filters_cfg is not None:
-        structure_filter = instantiate(filters_cfg)
-        if isinstance(structure_filter, (list, tuple)) and not structure_filter:
-            structure_filter = None
+    select_batch_size = OmegaConf.select(config, "select_batch_size") or OmegaConf.select(config, "batch_size") or 100
+    data_batch_size = OmegaConf.select(config, "data_batch_size") or select_batch_size
+    save_features = None
+    if config.save_features:
+        if isinstance(config.save_features, str):
+            save_features = config.save_features
+        else:
+            save_features = os.path.join(config.run_path, "features.h5")
+    save_images = None
+    if config.save_images:
+        if isinstance(config.save_images, str):
+            save_images = config.save_images
+        else:
+            save_images = os.path.join(config.run_path, "selected.traj")
 
     # Select structures based on the active learning method
     al = GeneralActiveLearning(
+        models=models,
         kernel=config.kernel, 
+        kernels=OmegaConf.select(config, "export_kernels"),
         selection=config.method, 
         n_random_features=config.n_random_features,
+        batch_size=data_batch_size,
+        device=config.device,
+        dataset_cutoff=cutoff,
+        transforms=transforms,
+        save_features=save_features,
     )
+    save_json = os.path.join(config.run_path, "selected.json")
     indices = al.select(
-        models,
-        data_dict,
-        data_batch_size=data_batch_size,
+        pool_set=pool_source,
+        train_set=config.train_set,
         select_batch_size=select_batch_size,
-        debug=config.debug,
-        load_features=config.load_features,
-        save_features=config.save_features,
-        structure_filter=structure_filter,
-        export_kernels=OmegaConf.select(config, "export_kernels"),
-        export_raw_features=OmegaConf.select(config, "export_raw_features", default=True),
-        export_normalized_features=OmegaConf.select(config, "export_normalized_features", default=True),
+        save_json=save_json,
+        save_images=save_images,
+        normalize_features=OmegaConf.select(config, "export_normalized_features", default=True),
     )
 
-    # Save the selected indices
-    datapath = config.dataset if config.dataset and config.split_file else pool_source
-    if datapath is None:
-        datapath = "unknown"
-    elif not isinstance(datapath, str):
-        datapath = list(datapath)
-    al_info = {
-        'kernel': config.kernel,
-        'selection': config.method,
-        'dataset': datapath,
-        'selected': indices,
-    }
-    with open(config.run_path+'/selected.json', 'w') as f:
-        json.dump(al_info, f)
-    
-    log.debug(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for {len(indices)} selected structures!")
-    if config.save_images:
-        if pool_atoms is None:
-            pool_set = read_trajectory(config.pool_set)
-        else:
-            pool_set = pool_atoms
-        selected_images = [pool_set[i] for i in indices]
-        save_path = config.save_images if isinstance(config.save_images, str) else os.path.join(config.run_path, 'selected.traj')
-        with Trajectory(config.save_images if isinstance(config.save_images, str) else 'selected.traj', 'w') as traj:
-            for atoms in selected_images:
-                traj.write(atoms)
-        log.debug(f"Saving {len(indices)} selected images into {save_path}.")
+    log.debug(
+        "Active learning selection completed! Check %s for %d selected structures!",
+        os.path.abspath(save_json),
+        len(indices),
+    )
 
 # Label the dataset selected by active learning
 @hydra.main(config_path="configs", config_name="label", version_base=None)   

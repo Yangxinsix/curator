@@ -1,12 +1,16 @@
 from . import properties
-from .atoms_data import get_sample_atoms, get_sample_target
+from .atoms_data import atoms_data_from_dict, get_sample_atoms, get_sample_target
+from .collate_atoms_data import collate_atoms_data
 from typing import List, Dict, Tuple, Union, Optional, Sequence
 import torch
 from torch.utils.data import DataLoader, Dataset
 import math
+import contextlib
+import sys
 import numpy as np
 from ase.io import read
-from ._data_reader import Trajectory
+from ase.data import atomic_numbers
+from ._data_reader import Trajectory, CombinedTrajectoryReader
 from ase import Atoms
 from pathlib import PosixPath, Path
 from ase.io.trajectory import TrajectoryReader, SlicedTrajectory
@@ -23,35 +27,207 @@ from urllib.request import urlopen
 import logging
 try:
     from tqdm import tqdm
+    from tqdm.contrib.logging import logging_redirect_tqdm
 except ImportError:  # pragma: no cover - optional dependency
     tqdm = None
+    logging_redirect_tqdm = None
 
 logger = logging.getLogger(__name__)
+
+def _split_slice_spec(path: str) -> tuple[str, Optional[str]]:
+    if "@" not in path:
+        return path, None
+    base, spec = path.rsplit("@", 1)
+    if not base:
+        return path, None
+    if spec == "":
+        spec = None
+    return base, spec
+
+
+def _parse_slice_spec(spec: Optional[str]):
+    if spec is None:
+        return None
+    spec = spec.strip()
+    if spec == "":
+        return None
+    if ":" in spec:
+        parts = spec.split(":")
+        if len(parts) > 3:
+            raise ValueError(f"Invalid slice spec '{spec}'")
+        def _to_int(value: str):
+            return int(value) if value not in ("", None) else None
+        start = _to_int(parts[0])
+        stop = _to_int(parts[1]) if len(parts) > 1 else None
+        step = _to_int(parts[2]) if len(parts) > 2 else None
+        return slice(start, stop, step)
+    return int(spec)
+
+
+def _read_trajectory_path(path: str, *args, **kwargs):
+    base, spec = _split_slice_spec(path)
+    slice_obj = _parse_slice_spec(spec)
+    if base.endswith(".traj"):
+        reader = Trajectory(base)
+        if slice_obj is None:
+            return reader
+        sliced = reader[slice_obj]
+        if isinstance(sliced, Atoms):
+            return [sliced]
+        return sliced
+    if slice_obj is None:
+        result = read(base, ":", *args, **kwargs)
+    else:
+        result = read(base, slice_obj, *args, **kwargs)
+    if isinstance(result, Atoms):
+        return [result]
+    return result
+
 
 def read_trajectory(ase_db, *args, **kwargs):
     if isinstance(ase_db, (str, PosixPath)):
         ase_db = str(ase_db)  # Convert PosixPath to string if necessary
-        if ase_db.endswith('.traj'):
-            db = Trajectory(ase_db)
-        else:
-            db = read(ase_db, ':')
+        if ase_db.startswith(("http://", "https://")):
+            return _prepare_data_source(ase_db)
+        db = _read_trajectory_path(ase_db, *args, **kwargs)
     elif isinstance(ase_db, (list, ListConfig)):
         if all(isinstance(item, Atoms) for item in ase_db):
             db = ase_db
-        elif all(isinstance(item, (str, PosixPath)) and str(item).endswith('.traj') for item in ase_db):
-            db = Trajectory([str(item) for item in ase_db if os.path.getsize(item)])
+        elif all(isinstance(item, (str, PosixPath)) for item in ase_db):
+            readers = []
+            atoms_list: List[Atoms] = []
+            for item in ase_db:
+                item = str(item)
+                base, _ = _split_slice_spec(item)
+                if os.path.getsize(base) == 0:
+                    continue
+                entry = _read_trajectory_path(item, *args, **kwargs)
+                if isinstance(entry, (TrajectoryReader, SlicedTrajectory)):
+                    readers.append(entry)
+                else:
+                    atoms_list.extend(entry)
+            if readers and not atoms_list:
+                if len(readers) == 1:
+                    db = readers[0]
+                else:
+                    db = CombinedTrajectoryReader.from_readers(readers)
+            else:
+                for reader in readers:
+                    atoms_list.extend(list(reader))
+                db = atoms_list
         else:
             db = []
             for item in ase_db:
-                if isinstance(item, (str, PosixPath)) and os.path.getsize(item):
-                    item = str(item)  # Convert PosixPath to string if necessary
-                    db += read(item, index=':', *args, **kwargs)
+                if isinstance(item, (str, PosixPath)):
+                    item = str(item)
+                    base, _ = _split_slice_spec(item)
+                    if os.path.getsize(base):
+                        entry = _read_trajectory_path(item, *args, **kwargs)
+                        if isinstance(entry, (TrajectoryReader, SlicedTrajectory)):
+                            db.extend(list(entry))
+                        else:
+                            db.extend(entry)
+                elif isinstance(item, Atoms):
+                    db.append(item)
     elif isinstance(ase_db, TrajectoryReader):
         db = ase_db
     elif isinstance(ase_db, SlicedTrajectory):
         db = ase_db
 
     return db
+
+
+def iter_atoms(
+    data_source,
+    reader=None,
+    device=None,
+    dtype=None,
+    requires_grad: bool = True,
+    desc: Optional[str] = None,
+    task: str = "ase",
+):
+    atoms_iter = read_trajectory(data_source)
+    total = len(atoms_iter) if hasattr(atoms_iter, "__len__") else None
+    iterator = atoms_iter
+    log_ctx = logging_redirect_tqdm() if logging_redirect_tqdm is not None else contextlib.nullcontext()
+    if tqdm is not None and desc is not None:
+        iterator = tqdm(
+            atoms_iter,
+            desc=desc,
+            total=total,
+            disable=not sys.stderr.isatty(),
+        )
+    with log_ctx:
+        try:
+            for atoms in iterator:
+                if reader is None:
+                    yield atoms
+                    continue
+                atoms_dict = reader(atoms)
+                atoms_data = atoms_data_from_dict(atoms_dict, task=task)
+                atoms_data = atoms_data.to(device=device, dtype=dtype)
+                inputs = atoms_data.to_dict()
+                if requires_grad and properties.positions in inputs:
+                    pos = inputs[properties.positions]
+                    if isinstance(pos, torch.Tensor):
+                        pos.requires_grad_()
+                yield atoms, inputs
+        finally:
+            if hasattr(atoms_iter, "close"):
+                try:
+                    atoms_iter.close()
+                except Exception:
+                    pass
+            for attr in ("trajectory", "reader", "_reader"):
+                obj = getattr(atoms_iter, attr, None)
+                if obj is not None and hasattr(obj, "close"):
+                    try:
+                        obj.close()
+                    except Exception:
+                        pass
+
+
+def iter_batches(
+    dataset: Union[Dataset, DataLoader],
+    batch_size: int,
+    device=None,
+    dtype: Optional[torch.dtype] = None,
+    desc: Optional[str] = None,
+    num_workers: int = 0,
+    pin_memory: Optional[bool] = None,
+):
+    if pin_memory is None:
+        pin_memory = str(device).startswith("cuda") if device is not None else False
+    if isinstance(dataset, DataLoader):
+        loader = dataset
+    else:
+        loader = DataLoader(
+            dataset=dataset,
+            batch_size=batch_size,
+            shuffle=False,
+            collate_fn=collate_atoms_data,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+        )
+    iterator = loader
+    if tqdm is not None and desc is not None:
+        iterator = tqdm(
+            loader,
+            desc=desc,
+            total=len(loader),
+            disable=not sys.stderr.isatty(),
+        )
+    for batch in iterator:
+        if hasattr(batch, "to"):
+            yield batch.to(device=device, dtype=dtype)
+        else:
+            for k, v in batch.items():
+                if torch.is_tensor(v):
+                    if dtype is not None and v.is_floating_point():
+                        batch[k] = v.to(device, dtype=dtype)
+                    else:
+                        batch[k] = v.to(device)
+            yield batch
 
 def _prepare_data_source(
     url: str,

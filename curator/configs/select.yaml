@@ -4,22 +4,16 @@ seed: 123
 run_path: .
 model_path: null
 device: cuda
-dataset: null
-split_file: null
 train_set: null
-pool_set: null # This can also be a list
-data_url: null
+pool_set: null
+data_url: null # URL string; use pool_set for local paths
 data_batch_size: 8
 select_batch_size: 100
 kernel: full-g
+export_kernels: null
 method: lcmd_greedy
 n_random_features: 500
-load_features: null
-save_features: null
-export_kernels: null
-export_raw_features: true
+save_features: null # H5 feature file path when set
 export_normalized_features: true
 save_images: false
-debug: false
 transforms: []
-filters: []
