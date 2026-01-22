@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union, Literal
-import logging
+
+import h5py
+import numpy as np
 
 import torch
 from torch import nn
@@ -110,6 +113,7 @@ class GeneralActiveLearning:
         select_batch_size: int = 100,
         save_json: Optional[Union[str, Path]] = None,
         save_images: Optional[Union[bool, str, Path]] = None,
+        save_selected_features: Optional[Union[bool, str, Path]] = None,
         normalize_features: bool = True,
     ) -> List[int]:
         kernels = self._merge_kernels(self._resolved_kernels, self.kernel)
@@ -229,6 +233,14 @@ class GeneralActiveLearning:
             else:
                 save_path = Path("selected.traj")
             self._save_selected_images(pool_atoms, selected, save_path)
+        if save_selected_features:
+            if pool_store is None:
+                raise RuntimeError("save_selected_features requires save_features to be enabled.")
+            if isinstance(save_selected_features, (str, Path)):
+                save_path = Path(save_selected_features)
+            else:
+                save_path = Path("selected_features.h5")
+            self._save_selected_feature_store(pool_store, save_path, selected)
         return selected
 
     def _stats(
@@ -368,6 +380,65 @@ class GeneralActiveLearning:
             for idx in indices:
                 traj.write(atoms[idx])
         logger.info("Saved %d selected images to %s", len(indices), save_path)
+
+    def _save_selected_feature_store(
+        self,
+        store_path: Union[str, Path],
+        save_path: Path,
+        selected: List[int],
+    ) -> None:
+        selected_list = [int(i) for i in selected]
+        if not selected_list:
+            return
+        path = Path(store_path)
+        if save_path.exists():
+            save_path.unlink()
+        with h5py.File(path, "r") as src:
+            kernels = src.attrs.get("kernels")
+            if kernels is None:
+                return
+            kernels = [
+                k.decode() if isinstance(k, (bytes, bytearray)) else str(k)
+                for k in kernels
+            ]
+            num_models = int(src.attrs.get("num_models", 0))
+            if num_models <= 0:
+                return
+            selected_store = H5Feature(
+                save_path,
+                num_models=num_models,
+                kernels=kernels,
+                dataset_size=len(selected_list),
+            )
+            selected_set = set(selected_list)
+            remap = {idx: i for i, idx in enumerate(selected_list)}
+            for kernel in kernels:
+                group = src.get(f"features/{kernel}")
+                if group is None or "data" not in group:
+                    continue
+                data = group["data"]
+                image_idx = group.get("image_idx")
+                for model_idx in range(num_models):
+                    if image_idx is not None:
+                        idx = image_idx[model_idx][:]
+                        mask = np.isin(idx, list(selected_set))
+                        if not mask.any():
+                            continue
+                        feats = data[model_idx][mask]
+                        mapped = np.array([remap[int(i)] for i in idx[mask]], dtype=np.int64)
+                        order = np.argsort(mapped, kind="stable")
+                        feats = feats[order]
+                        mapped = mapped[order]
+                        selected_store.append(
+                            kernel,
+                            model_idx,
+                            torch.from_numpy(feats),
+                            torch.from_numpy(mapped),
+                        )
+                    else:
+                        feats = data[model_idx, selected_list, :]
+                        selected_store.append(kernel, model_idx, torch.from_numpy(feats))
+        logger.info("Saved selected features to %s", save_path)
 
     @staticmethod
     def _index_map(

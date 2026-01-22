@@ -925,6 +925,12 @@ def select(config: DictConfig):
             save_features = config.save_features
         else:
             save_features = os.path.join(config.run_path, "features.h5")
+    save_selected_features = None
+    if getattr(config, "save_selected_features", None):
+        if isinstance(config.save_selected_features, str):
+            save_selected_features = config.save_selected_features
+        else:
+            save_selected_features = os.path.join(config.run_path, "selected_features.h5")
     save_images = None
     if config.save_images:
         if isinstance(config.save_images, str):
@@ -952,6 +958,7 @@ def select(config: DictConfig):
         select_batch_size=select_batch_size,
         save_json=save_json,
         save_images=save_images,
+        save_selected_features=save_selected_features,
         normalize_features=OmegaConf.select(config, "export_normalized_features", default=True),
     )
 

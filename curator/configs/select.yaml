@@ -13,7 +13,8 @@ kernel: full-g
 export_kernels: null
 method: lcmd_greedy
 n_random_features: 500
-save_features: null # H5 feature file path when set
+save_features: null # H5 cache file path when set
+save_selected_features: null # Selected feature file path when set
 export_normalized_features: true
 save_images: false
 transforms: []
