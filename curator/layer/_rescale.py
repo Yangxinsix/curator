@@ -326,7 +326,20 @@ class GlobalRescaleShift(nn.Module):
         return self.atomic_shifts[0].enabled
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(heads={[h.key for h in self.heads]})"
+        def _format_scalar(val):
+            if torch.is_tensor(val):
+                v = val.detach().cpu()
+                return v.item() if v.numel() == 1 else v.tolist()
+            return val
+
+        scales = [_format_scalar(sc.scale) for sc in self.scales]
+        shifts = []
+        for sh in self.shifts:
+            if hasattr(sh, "shift"):
+                shifts.append(_format_scalar(sh.shift))
+            else:
+                shifts.append(None)
+        return f"{self.__class__.__name__}(heads={[h.key for h in self.heads]}, scale={scales}, shift_by={shifts})"
 
 
 class MultiDomainRescaleShift(nn.Module):
