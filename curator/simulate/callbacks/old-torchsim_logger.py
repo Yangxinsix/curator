@@ -219,45 +219,7 @@ class TorchSimThermoLogger(ThermoWithUncertainty):
         if self._unc_backend is not None:
             try:
                 atoms_obj = ctx.atoms
-                st = self._state(ctx)
-                n_sys = int(getattr(st, "n_systems", 1)) if st is not None else 1
-                
-                # For batched TorchSim runs, extract maha_dist directly from model.step_outputs
-                # instead of calling _unc_backend on each atoms (which doesn't work correctly
-                # because the atoms objects from state_to_atoms share the same calculator results)
-                if n_sys > 1 and hasattr(ctx, 'engine') and hasattr(ctx.engine, 'model'):
-                    model = ctx.engine.model
-                    step_outputs = getattr(model, 'step_outputs', None)
-                    if step_outputs is not None and 'maha_dist' in step_outputs:
-                        maha_dist = step_outputs['maha_dist']
-                        if hasattr(maha_dist, 'detach'):
-                            maha_dist = maha_dist.detach().cpu()
-                        if hasattr(maha_dist, '__len__') and len(maha_dist) == n_sys:
-                            # Per-system maha_dist values
-                            unc_list = []
-                            for i in range(n_sys):
-                                dist = float(maha_dist[i])
-                                unc_dict = {'maha_dist': dist}
-                                # Apply thresholds from backend if available
-                                low_thresh = getattr(self._unc_backend, 'low_threshold', None)
-                                high_thresh = getattr(self._unc_backend, 'high_threshold', None)
-                                if low_thresh is not None:
-                                    unc_dict['is_warning'] = dist >= low_thresh
-                                if high_thresh is not None:
-                                    unc_dict['is_outlier'] = dist >= high_thresh
-                                unc_list.append(unc_dict)
-                            ctx.state["uncertainty"] = unc_list
-                        else:
-                            # Fallback to single value for all systems
-                            dist = float(maha_dist) if not hasattr(maha_dist, '__len__') else float(maha_dist[0])
-                            ctx.state["uncertainty"] = {'maha_dist': dist}
-                    else:
-                        # Fallback: call backend on first atoms (will get same value for all)
-                        if isinstance(atoms_obj, list) and atoms_obj:
-                            ctx.state["uncertainty"] = self._unc_backend(atoms_obj[0]) or {}
-                        else:
-                            ctx.state["uncertainty"] = self._unc_backend(atoms_obj) or {}
-                elif isinstance(atoms_obj, list):
+                if isinstance(atoms_obj, list):
                     ctx.state["uncertainty"] = [self._unc_backend(a) or {} for a in atoms_obj]
                 else:
                     ctx.state["uncertainty"] = self._unc_backend(atoms_obj) or {}

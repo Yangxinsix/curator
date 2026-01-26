@@ -71,6 +71,7 @@ curator/configs/task/output_params/energy_force_virial_per_species_params.yaml
 curator/configs/task/outputs/energy_force.yaml
 curator/configs/task/outputs/energy_force_pa.yaml
 curator/configs/task/outputs/energy_force_per_species.yaml
+curator/configs/task/outputs/energy_force_residual.yaml
 curator/configs/task/outputs/energy_force_virial.yaml
 curator/configs/task/outputs/energy_force_virial_pa.yaml
 curator/configs/task/outputs/energy_force_virial_per_species.yaml
@@ -78,6 +79,7 @@ curator/configs/task/outputs/components/energy.yaml
 curator/configs/task/outputs/components/energy_per_atom.yaml
 curator/configs/task/outputs/components/forces.yaml
 curator/configs/task/outputs/components/forces_per_species.yaml
+curator/configs/task/outputs/components/residual_forces.yaml
 curator/configs/task/outputs/components/virial.yaml
 curator/configs/task/outputs/components/virial_per_atom.yaml
 curator/configs/task/scheduler/exponential.yaml
@@ -152,6 +154,7 @@ curator/simulate/sim_logging.py
 curator/simulate/callbacks/__init__.py
 curator/simulate/callbacks/calc.py
 curator/simulate/callbacks/early_stop.py
+curator/simulate/callbacks/old-torchsim_logger.py
 curator/simulate/callbacks/thermo.py
 curator/simulate/callbacks/thermo_uncertainty.py
 curator/simulate/callbacks/torchsim_logger.py
