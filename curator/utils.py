@@ -385,7 +385,7 @@ def convert_mace_to_curator(
     return output_path
 
 def _build_mace_from_curator(curator_model):
-    from curator.layer import GlobalRescaleShift
+    from curator.layer import GlobalRescaleShift, MultiDomainRescaleShift
     from curator.model import NeuralNetworkPotential, MACE
     """Best-effort recreation of a mace.modules.models.ScaleShiftMACE from a Curator MACE model."""
     try:
@@ -433,11 +433,50 @@ def _build_mace_from_curator(curator_model):
 
     scale, shift = 1.0, 0.0
     atomic_energies = torch.zeros(len(atomic_numbers))
+    num_heads = getattr(repr_model, "num_heads", 1)
+
+    def _pick_scalar(val):
+        if isinstance(val, list):
+            return val[0] if val else 0.0
+        if torch.is_tensor(val):
+            v = val.detach().cpu().reshape(-1)
+            return v[0].item() if v.numel() > 0 else 0.0
+        return val
+
     for m in output_modules:
+        if isinstance(m, MultiDomainRescaleShift):
+            scales = []
+            shifts = []
+            energies = []
+            for i in range(num_heads):
+                dom = str(i)
+                grs = m.domain_modules.get(dom)
+                if grs is None:
+                    grs = next(iter(m.domain_modules.values()))
+                scales.append(_pick_scalar(grs.scale_by))
+                shifts.append(_pick_scalar(grs.shift_by))
+                ae = grs.atomic_energies
+                if ae is None:
+                    ae = torch.zeros(len(atomic_numbers))
+                if not torch.is_tensor(ae):
+                    ae = torch.as_tensor(ae)
+                energies.append(ae)
+            scale = scales
+            shift = shifts
+            atomic_energies = torch.stack(energies, dim=0)
+            z_idx = torch.as_tensor(atomic_numbers, dtype=torch.long)
+            atomic_energies = torch.index_select(atomic_energies, -1, z_idx)
+            break
         if isinstance(m, GlobalRescaleShift):
-            scale = float(m.scale_by)
-            shift = float(m.shift_by)
-            atomic_energies = m.atomic_energies[atomic_numbers]
+            scale = _pick_scalar(m.scale_by)
+            shift = _pick_scalar(m.shift_by)
+            atomic_energies = m.atomic_energies
+            if atomic_energies is None:
+                break
+            if not torch.is_tensor(atomic_energies):
+                atomic_energies = torch.as_tensor(atomic_energies)
+            z_idx = torch.as_tensor(atomic_numbers, dtype=torch.long)
+            atomic_energies = torch.index_select(atomic_energies, -1, z_idx)
             break
 
     mace_model = mace_models.ScaleShiftMACE(
@@ -1985,12 +2024,16 @@ def update_model(model):
                 )
                 warnings.warn('Replace GradientOutput module.')
             if m.__class__.__name__ == 'GlobalRescaleShift':
-                scale_by = getattr(m, "scale_by", None)
-                if torch.is_tensor(scale_by):
-                    scale_by = scale_by.detach().clone().cpu().squeeze().item()
-                shift_by = getattr(m, "shift_by", None)
-                if torch.is_tensor(shift_by):
-                    shift_by = shift_by.detach().clone().cpu().squeeze().item()
+                def _as_scalar(value):
+                    if torch.is_tensor(value):
+                        v = value.detach().clone().cpu().reshape(-1)
+                        return v[0].item() if v.numel() > 0 else 0.0
+                    if isinstance(value, list):
+                        return value[0] if value else 0.0
+                    return value
+
+                scale_by = _as_scalar(getattr(m, "scale_by", None))
+                shift_by = _as_scalar(getattr(m, "shift_by", None))
                 scale_keys = list(getattr(m, "scale_keys", []))
                 shift_keys = list(getattr(m, "shift_keys", []))
                 output_keys = list(getattr(m, "output_keys", []))
@@ -1999,15 +2042,10 @@ def update_model(model):
 
                 atomwise_shift = bool(getattr(m, "atomwise_shift", False))
                 atomwise_norm = bool(getattr(m, "atomwise_normalization", False))
-                shift_by_e0 = getattr(m, "shift_by_E0", torch.tensor(False))
-                if torch.is_tensor(shift_by_e0):
-                    shift_by_e0 = bool(shift_by_e0.item())
                 per_species_shift = None
-                if shift_by_e0:
-                    atomic_energies = getattr(m, "atomic_energies", None)
-                    if torch.is_tensor(atomic_energies):
-                        values = atomic_energies.detach().cpu().tolist()
-                        per_species_shift = {i: float(v) for i, v in enumerate(values) if v != 0.0}
+                per_species_all = getattr(m, "per_species_shifts", None)
+                if isinstance(per_species_all, dict):
+                    per_species_shift = per_species_all.get(properties.energy) or per_species_all.get("energy")
 
                 heads = []
                 for key in output_keys:
@@ -2046,10 +2084,22 @@ def update_model(model):
                             )
                         )
 
+                def _is_scale_trainable(mod):
+                    for sc in getattr(mod, "scales", []):
+                        if isinstance(getattr(sc, "scale", None), torch.nn.Parameter):
+                            return True
+                    return False
+
+                def _is_shift_trainable(mod):
+                    for sh in getattr(mod, "shifts", []):
+                        if isinstance(getattr(sh, "shift", None), torch.nn.Parameter):
+                            return True
+                    return False
+
                 grs = GlobalRescaleShift(
                     heads=heads,
-                    scale_trainable=isinstance(getattr(m, "scale_by", None), torch.nn.Parameter),
-                    shift_trainable=isinstance(getattr(m, "shift_by", None), torch.nn.Parameter),
+                    scale_trainable=_is_scale_trainable(m),
+                    shift_trainable=_is_shift_trainable(m),
                 )
                 md = MultiDomainRescaleShift(heads=grs.heads)
                 md.domain_modules["0"] = grs

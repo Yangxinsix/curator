@@ -1,4 +1,4 @@
-from typing import Optional, Dict, Union, List
+from typing import Optional, Dict, Union, List, Any
 import torch
 from torch import nn
 from curator.data import properties
@@ -10,7 +10,7 @@ try:
 except ImportError:  # pragma: no cover
     from curator.utils import scatter_add
 
-from ase.data import atomic_numbers
+from ase.data import atomic_numbers, chemical_symbols
 
 
 # --------------------------------------------------------------------------- #
@@ -167,8 +167,8 @@ class GlobalRescaleShift(nn.Module):
             heads = heads.get("heads")
         if heads is None:
             heads = [HEAD_PRESETS["energy"]]
-        # ensure heads are HeadConfig instances
-        self.heads = resolve_heads([h.key if isinstance(h, HeadConfig) and h.key in HEAD_PRESETS else h for h in heads])
+        # ensure heads are HeadConfig instances (keep explicit HeadConfig overrides)
+        self.heads = resolve_heads(heads)
         # build per-head transforms
         scales = []
         shifts = []
@@ -205,6 +205,13 @@ class GlobalRescaleShift(nn.Module):
             or normalize_head_flag(h.shift_by) == "default"
             for h in self.heads
         )
+
+    @staticmethod
+    def _format_scalar(val: Any):
+        if torch.is_tensor(val):
+            v = val.detach().cpu().reshape(-1).tolist()
+            val = v[0] if len(v) == 1 else v
+        return val
 
     def forward(self, data: properties.Type) -> properties.Type:
         return self.scale(data, force_process=False)
@@ -305,40 +312,44 @@ class GlobalRescaleShift(nn.Module):
             return
         return self.setup_from_context(ctx)
 
-    # compatibility helpers for legacy access (first head)
+    # compatibility helpers for legacy access (single head) / return list for multi-head
     @property
-    def scale_by(self) -> torch.Tensor:
-        return self.scales[0].scale
+    def scale_by(self) -> List[Any]:
+        return [self._format_scalar(sc.scale) for sc in self.scales]
 
     @property
-    def shift_by(self) -> torch.Tensor:
-        shift0 = self.shifts[0]
-        return shift0.shift if hasattr(shift0, "shift") else torch.tensor([0.0])
+    def shift_by(self) -> List[Any]:
+        return [self._format_scalar(sh.shift) if hasattr(sh, "shift") else 0.0 for sh in self.shifts]
 
     @property
-    def atomic_energies(self) -> torch.Tensor:
+    def atomic_energies(self) -> Optional[torch.Tensor]:
         # legacy name; values are per-species shift table
-        return self.atomic_shifts[0].values
+        for i, h in enumerate(self.heads):
+            if h.key == properties.energy:
+                return self.atomic_shifts[i].values
+        return None
 
     @property
-    def shift_by_E0(self) -> torch.Tensor:
-        # legacy name; enabled flag for per-species shift
-        return self.atomic_shifts[0].enabled
+    def per_species_shifts(self) -> Dict[str, Dict[str, float]]:
+        out: Dict[str, Dict[str, float]] = {}
+        for shift in self.atomic_shifts:
+            enabled = shift.enabled
+            if torch.is_tensor(enabled) and not bool(enabled.item()):
+                continue
+            values = shift.values.detach().cpu()
+            nz = torch.nonzero(values, as_tuple=True)[0]
+            mapping = {}
+            for z in nz.tolist():
+                if z == 0:
+                    continue
+                mapping[chemical_symbols[z]] = float(values[z].item())
+            if mapping:
+                out[shift.key] = mapping
+        return out
 
     def __repr__(self):
-        def _format_scalar(val):
-            if torch.is_tensor(val):
-                v = val.detach().cpu()
-                return v.item() if v.numel() == 1 else v.tolist()
-            return val
-
-        scales = [_format_scalar(sc.scale) for sc in self.scales]
-        shifts = []
-        for sh in self.shifts:
-            if hasattr(sh, "shift"):
-                shifts.append(_format_scalar(sh.shift))
-            else:
-                shifts.append(None)
+        scales = [float(f"{x:.3g}") if isinstance(x, (int, float)) else x for x in self.scale_by]
+        shifts = [float(f"{x:.3g}") if isinstance(x, (int, float)) else x for x in self.shift_by]
         return f"{self.__class__.__name__}(heads={[h.key for h in self.heads]}, scale={scales}, shift_by={shifts})"
 
 
