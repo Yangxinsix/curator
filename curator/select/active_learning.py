@@ -15,37 +15,7 @@ import logging
 from curator.layer._feature import FeatureExtractor, RandomProjections
 
 logger = logging.getLogger(__name__)
-    
-class RandomProjections:
-    """Store parameters of random projections"""
-    def __init__(
-            self, 
-            model: nn.Module, 
-            num_features: int,
-            dtype = torch.get_default_dtype(),
-            target_layer: str = 'readout_mlp',
-        ):
-        self.num_features = num_features
-        self.in_feat_proj = []
-        self.out_grad_proj = []
-        device = next(model.parameters()).device
-        if self.num_features > 0:
-            layer = find_layer_by_name_recursive(model, target_layer)
-            representation = getattr(model, "representation", None)
-            if representation is not None and representation.__class__.__name__ == "MACE":
-                layer = layer[-1]
-            # Input feature projection matrices (in_features + 1 for bias term), output gradient projection matrices
-            for l in layer.children():
-                if isinstance(l, nn.Linear):
-                    self.in_feat_proj.append(torch.randn(l.in_features + 1, self.num_features, dtype=dtype, device=device))
-                    self.out_grad_proj.append(torch.randn(l.out_features, self.num_features, dtype=dtype, device=device))
-                elif isinstance(l, o3.Linear):
-                    self.in_feat_proj.append(torch.randn(l.irreps_in.dim + 1, self.num_features, dtype=dtype, device=device))
-                    self.out_grad_proj.append(torch.randn(l.irreps_out.dim, self.num_features, dtype=dtype, device=device))
-            
-    def __repr__(self):
-        return f'{self.__class__.__name__}(num_features={self.num_features})'
-    
+
 class FeatureStatistics:
     """Generate features from trained models and datasets."""
 
