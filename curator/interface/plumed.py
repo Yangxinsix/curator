@@ -78,6 +78,15 @@ class Plumed:
         input_lines = config.get("input_lines", []) or []
         if isinstance(input_lines, str):
             input_lines = [input_lines]
+        input_file = config.get("input_file", "") or config.get("input_path", "")
+        file_lines: List[str] = []
+        if input_file:
+            if not isinstance(input_file, str):
+                raise TypeError("plumed input_file must be a string path.")
+            input_path = input_file.format(i=system_index) if "{i}" in input_file else input_file
+            with open(input_path, "r", encoding="utf-8") as handle:
+                file_lines = [line.rstrip("\n") for line in handle]
+        input_lines = file_lines + list(input_lines)
         timestep = float(config.get("timestep", 1.0))
         kT = float(config.get("kT", 1.0))
         log = config.get("log", "")
@@ -150,7 +159,7 @@ class Plumed:
         cell: Optional[np.ndarray],
         step: int,
         system_index: int,
-    ) -> Tuple[float, np.ndarray]:
+    ) -> Tuple[float, np.ndarray, np.ndarray]:
         natoms = int(len(positions))
         plumed = self._get_plumed(natoms, system_index)
 
@@ -178,7 +187,7 @@ class Plumed:
         plumed.cmd("performCalc")
         energy_bias = np.zeros((1,), dtype=float)
         plumed.cmd("getBias", energy_bias)
-        return float(energy_bias[0]), forces_bias
+        return float(energy_bias[0]), forces_bias, virial
 
     def _apply_impl(
         self,
@@ -191,14 +200,14 @@ class Plumed:
         charges: Optional[np.ndarray],
         step: Optional[int],
         system_index: int = 0,
-    ) -> Tuple[float, np.ndarray]:
+    ) -> Tuple[float, np.ndarray, np.ndarray]:
         """Apply PLUMED bias for a single system (numpy inputs)."""
         pos = np.asarray(positions, dtype=float)
         frc = np.asarray(forces, dtype=float)
         e = float(np.asarray(energy, dtype=float).reshape(-1)[0])
 
         step_val = self._next_step(system_index, step)
-        energy_bias, forces_bias = self._compute_bias(
+        energy_bias, forces_bias, virial_bias = self._compute_bias(
             pos,
             e,
             masses=masses,
@@ -207,7 +216,7 @@ class Plumed:
             step=step_val,
             system_index=system_index,
         )
-        return e + energy_bias, frc + forces_bias
+        return e + energy_bias, frc + forces_bias, virial_bias
 
     def _tensor_to_numpy(self, value: Optional[object]) -> Optional[np.ndarray]:
         """Convert torch tensors to numpy arrays for PLUMED inputs."""
@@ -299,7 +308,7 @@ class Plumed:
                 else:
                     charges_i = c_arr[idx]
 
-            e_val, f_val = self._apply_impl(
+            e_val, f_val, v_val = self._apply_impl(
                 positions=pos_np[idx],
                 energy=np.asarray(e_flat[sys_idx], dtype=float),
                 forces=f_np[idx],
@@ -311,6 +320,24 @@ class Plumed:
             )
             e_flat[sys_idx] = float(e_val)
             f_np[idx] = f_val
+            if v_val is not None:
+                virial_val = np.asarray(v_val, dtype=float)
+                if properties.virial in outputs:
+                    v_np = self._tensor_to_numpy(outputs[properties.virial])
+                    if v_np is not None:
+                        if v_np.ndim == 2:
+                            v_np = v_np[None, ...]
+                        v_np[sys_idx] = v_np[sys_idx] + virial_val
+                        outputs[properties.virial] = torch.as_tensor(v_np, device=energy.device, dtype=energy.dtype)
+                if properties.stress in outputs and cell_i is not None:
+                    s_np = self._tensor_to_numpy(outputs[properties.stress])
+                    if s_np is not None:
+                        if s_np.ndim == 2:
+                            s_np = s_np[None, ...]
+                        vol = float(abs(np.linalg.det(np.asarray(cell_i, dtype=float))))
+                        if vol > 0:
+                            s_np[sys_idx] = s_np[sys_idx] + (-(virial_val / vol))
+                            outputs[properties.stress] = torch.as_tensor(s_np, device=energy.device, dtype=energy.dtype)
         t3 = time.perf_counter()
 
         e_t = torch.as_tensor(e_flat, device=energy.device, dtype=energy.dtype)
@@ -341,7 +368,7 @@ class Plumed:
                     charges = None
 
         t0 = time.perf_counter()
-        result = self._apply_impl(
+        e_new, f_new, _ = self._apply_impl(
             positions=np.asarray(positions, dtype=float),
             energy=np.asarray(energy, dtype=float),
             forces=np.asarray(forces, dtype=float),
@@ -352,7 +379,7 @@ class Plumed:
             system_index=0,
         )
         self._record_plumed_time(time.perf_counter() - t0)
-        return result
+        return e_new, f_new
 
     def finalize(self) -> None:
         for p in self._plumed:

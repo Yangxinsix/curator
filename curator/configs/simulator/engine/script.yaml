@@ -1,0 +1,19 @@
+_target_: curator.simulate.engines.script.ScriptEngine
+
+# Script to run (required)
+script: null
+python: python
+
+# Extra args passed to the script
+args: []
+env: {}
+workdir: ${run_path}
+
+# Standard inputs passed as CLI flags
+model_path: ${model_path}
+init_traj: ${..init_traj}
+out_traj: ${..out_traj}
+run_path: ${run_path}
+
+# Raise if script exits non-zero
+raise_on_nonzero: true

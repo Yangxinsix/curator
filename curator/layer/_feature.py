@@ -10,7 +10,7 @@ from pathlib import Path
 import h5py
 import torch
 from torch import nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 from curator.data import AseDataset, properties
 from .utils import find_layer_by_name_recursive
@@ -313,6 +313,7 @@ class FeatureCalculator(nn.Module):
         dataset: Optional[Union[torch.utils.data.Dataset, str, Path]] = None,
         distance_kernel: Optional[KernelName] = None,
         max_dataset_size: Optional[int] = None,
+        streaming: bool = False,
         regularization: float = 1e-6,
     ) -> None:
         super().__init__()
@@ -334,6 +335,7 @@ class FeatureCalculator(nn.Module):
         self._distance_kernel: Optional[KernelName] = None
         self.distance_kernel = distance_kernel
         self.max_dataset_size = max_dataset_size
+        self.streaming = streaming
         self.regularization = regularization
         # Prevent recursive forward when compute(predict=True) calls the model.
         self._skip_forward = False
@@ -434,6 +436,9 @@ class FeatureCalculator(nn.Module):
                 "call register_repr_callback first."
             )
         dataset = self._resolve_dataset(dataset)
+        if self.max_dataset_size is not None and hasattr(dataset, "__len__"):
+            max_n = min(int(self.max_dataset_size), len(dataset))
+            dataset = Subset(dataset, range(max_n))
         kernel = self._resolve_distance_kernel(kernel)
         image_idx = None
         reduction = None
@@ -448,7 +453,13 @@ class FeatureCalculator(nn.Module):
             device=str(next(self.repr_callback.parameters()).device),
         )
         metrics = DistanceMetrics(regularization=self.regularization)
-        metrics.fit_from_stats(stats, kernel, image_idx=image_idx, reduction=reduction)
+        metrics.fit_from_stats(
+            stats,
+            kernel,
+            image_idx=image_idx,
+            reduction=reduction,
+            streaming=self.streaming,
+        )
         device = next(self.repr_callback.parameters()).device
         self.register_buffer("feature_mean", metrics.mean.to(device))
         self.register_buffer("feature_std", metrics.std.to(device))
@@ -810,6 +821,27 @@ class FeatureStatistics:
         kernel_names = [FeatureKernel._normalize_kernel(k) for k, _ in kernel_specs]
         return calculators, kernel_names
 
+    def iter_kernel_features(self, kernel: KernelName):
+        calculators, kernel_names = self._resolve_calculators()
+        norm_kernel = FeatureKernel._normalize_kernel(str(kernel))
+        if norm_kernel not in kernel_names:
+            raise ValueError(f"Kernel '{norm_kernel}' is not available in FeatureStatistics.")
+        size = len(self.dataset) if hasattr(self.dataset, "__len__") else None
+        size_value = size if size is not None else "?"
+        model_dtype = next(self.models[0].parameters()).dtype
+        desc = f"stream-kernel={norm_kernel} size={size_value} bs={self.batch_size}"
+        log_ctx = logging_redirect_tqdm() if logging_redirect_tqdm is not None else contextlib.nullcontext()
+        with log_ctx:
+            logger.info("Streaming features for kernel %s", norm_kernel)
+            for batch in self._iter_batches(self.dataset, dtype=model_dtype, desc=desc):
+                per_model = []
+                for calculator in calculators:
+                    computed = calculator.compute(batch, predict=True)
+                    results = self._as_dict(computed, kernel_names)
+                    per_model.append(results[norm_kernel])
+                feats = per_model[0] if len(per_model) == 1 else torch.stack(per_model).mean(dim=0)
+                yield feats
+
     def _resolve_kernel_specs(self) -> List[Tuple[str, int]]:
         if self.kernels is None:
             kernels: List[Union[str, Tuple[str, int]]] = [_DEFAULT_KERNEL]
@@ -1061,11 +1093,92 @@ class DistanceMetrics:
         kernel: KernelName,
         image_idx: Optional[torch.Tensor] = None,
         reduction: Optional[Reduction] = None,
+        streaming: bool = False,
     ) -> None:
+        if streaming:
+            self.fit_from_stats_streaming(stats, kernel, image_idx=image_idx, reduction=reduction)
+            return
         features = stats.get_features(normalize=False)
         if kernel not in features:
             raise ValueError(f"Kernel '{kernel}' is not available in FeatureStatistics.")
         self.fit(features[kernel], image_idx=image_idx, reduction=reduction)
+
+    def fit_from_stats_streaming(
+        self,
+        stats: FeatureStatistics,
+        kernel: KernelName,
+        image_idx: Optional[torch.Tensor] = None,
+        reduction: Optional[Reduction] = None,
+    ) -> None:
+        logger.info("Streaming stats pass 1/2: mean/std/precision")
+        mean, std, precision = self._streaming_stats(stats, kernel)
+        logger.info("Streaming stats pass 2/2: reference distances")
+        distances = self._streaming_distances(stats, kernel, mean, std, precision)
+        self.mean = mean
+        self.std = std
+        self.precision = precision
+        self.reference_distances = self._reduce(distances, image_idx, reduction)
+
+    def _streaming_stats(
+        self,
+        stats: FeatureStatistics,
+        kernel: KernelName,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        count = 0
+        sum_x = None
+        sum_x2 = None
+        sum_xxT = None
+        for feats in stats.iter_kernel_features(kernel):
+            feats = feats.detach().cpu()
+            feats = self._prepare_features(feats)
+            if feats.numel() == 0:
+                continue
+            batch_n = feats.shape[0]
+            batch_sum = feats.sum(dim=0)
+            batch_sum2 = feats.pow(2).sum(dim=0)
+            batch_sum_xxT = feats.T @ feats
+            if sum_x is None:
+                sum_x = batch_sum
+                sum_x2 = batch_sum2
+                sum_xxT = batch_sum_xxT
+            else:
+                sum_x += batch_sum
+                sum_x2 += batch_sum2
+                sum_xxT += batch_sum_xxT
+            count += batch_n
+        if sum_x is None or sum_x2 is None or sum_xxT is None or count == 0:
+            raise RuntimeError("No features available for streaming statistics.")
+        denom = max(count - 1, 1)
+        mean = sum_x / count
+        var = (sum_x2 - count * mean.pow(2)) / denom
+        std = torch.sqrt(var)
+        std = torch.where(std == 0, torch.ones_like(std), std)
+        covariance = (sum_xxT - count * torch.outer(mean, mean)) / denom
+        eye = torch.eye(covariance.shape[0], device=covariance.device, dtype=covariance.dtype)
+        covariance = covariance + self.regularization * eye
+        precision = torch.linalg.inv(covariance)
+        return mean, std, precision
+
+    def _streaming_distances(
+        self,
+        stats: FeatureStatistics,
+        kernel: KernelName,
+        mean: torch.Tensor,
+        std: torch.Tensor,
+        precision: torch.Tensor,
+    ) -> torch.Tensor:
+        distances = []
+        for feats in stats.iter_kernel_features(kernel):
+            feats = feats.detach().cpu()
+            feats = self._prepare_features(feats)
+            if feats.numel() == 0:
+                continue
+            norm = (feats - mean) / std
+            dist_sq = torch.einsum("bi,ij,bj->b", norm, precision, norm)
+            distances.append(torch.sqrt(torch.clamp(dist_sq, min=0.0)))
+        if not distances:
+            raise RuntimeError("No features available for streaming distances.")
+        return torch.cat(distances, dim=0)
 
     def score(
         self,

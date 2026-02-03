@@ -33,7 +33,7 @@ def _load_single_source(
         raise FileNotFoundError(f"init_traj not found: {source}")
 
     from curator.data import read_trajectory
-    images = read_trajectory(source, index=":")
+    images = read_trajectory(source)
     if not images:
         raise RuntimeError(f"No frames in {source}")
 

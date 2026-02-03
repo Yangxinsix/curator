@@ -3,5 +3,6 @@ high_threshold: 1.1
 low_threshold: 0.95
 dataset: null
 kernel: local-full-g
-max_structures: 128
+max_structures: null
 n_random_features: 500
+streaming: true

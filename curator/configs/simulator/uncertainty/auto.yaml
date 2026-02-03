@@ -1,6 +1,10 @@
 _target_: curator.simulate.uncertainty.auto.AutoUncertainty
 calculator: ${calculator}
 dataset: ${dataset}
-maha_kwargs: {}
+maha_kwargs:
+  streaming: true
+  max_structures: null
+  kernel: local-full-g
+  n_random_features: 500
 ensemble_kwargs: {}
 device: ${device}

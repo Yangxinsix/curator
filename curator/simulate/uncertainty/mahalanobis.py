@@ -21,14 +21,16 @@ class MahalanobisUncertainty(BaseUncertainty):
         low_threshold: float = 0.95,
         calculator: Optional[Calculator] = None,
         dataset: Union[str, None] = None,
-        max_structures: Optional[int] = 128,
+        max_structures: Optional[int] = None,
         kernel: str = "local-full-g",
         n_random_features: int = 500,
+        streaming: bool = True,
     ) -> None:
         self.dataset = dataset
         self.max_structures = max_structures
         self.kernel = kernel
         self.n_random_features = n_random_features
+        self.streaming = streaming
         self.feature_calculator: Optional[FeatureCalculator] = None
         self._initialized = False
         self._high_spec = high_threshold
@@ -123,6 +125,7 @@ class MahalanobisUncertainty(BaseUncertainty):
                 max_dataset_size=self.max_structures,
                 kernels=[(self.kernel, self.n_random_features)],
                 distance_kernel=self.kernel,
+                streaming=self.streaming,
                 output_features=False,
             )
             model.output_modules.append(self.feature_calculator)

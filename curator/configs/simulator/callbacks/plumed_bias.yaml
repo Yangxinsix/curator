@@ -2,6 +2,7 @@ _target_: curator.simulate.callbacks.plumed_bias.PlumedBias
 plumed:
   _target_: curator.interface.plumed.Plumed
   plumed_kwargs:
+    input_file: ""
     input_lines: []
     timestep: 1.0
     kT: 1.0

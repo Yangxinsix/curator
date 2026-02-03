@@ -1,0 +1,9 @@
+defaults:
+  - engine: script
+  - _self_
+
+_target_: curator.simulate.core.simulator.Simulator
+init_traj: null
+start_index: null
+out_traj: ${run_path}/MD.traj
+run_kwargs: {}
