@@ -199,9 +199,10 @@ class CallbackModuleList(nn.ModuleList):
         super().append(module)
 
     def extend(self, modules):
+        module_list = list(modules)
         if self.on_register_callback is not None:
-            self.on_register_callback()
-        super().extend(modules)
+            self.on_register_callback(module_list)
+        super().extend(module_list)
 
     def insert(self, index, module):
         if self.on_register_callback is not None:

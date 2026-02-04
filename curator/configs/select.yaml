@@ -17,4 +17,6 @@ save_features: null # H5 cache file path when set
 save_selected_features: null # Selected feature file path when set
 export_normalized_features: true
 save_images: false
+compute_features_only: false
+target_domain: null
 transforms: []

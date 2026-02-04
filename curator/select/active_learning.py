@@ -82,6 +82,7 @@ class GeneralActiveLearning:
         save_features: Optional[Union[str, Path]] = None,
         checkpoint_interval: int = 0,
         structure_filter: Optional[Union[Filter, Sequence[Filter]]] = None,
+        target_domain: Optional[Union[str, int]] = None,
     ) -> None:
         self.models = models
         self.kernel = kernel
@@ -99,6 +100,7 @@ class GeneralActiveLearning:
         self.save_features = Path(save_features) if save_features else None
         self.checkpoint_interval = max(int(checkpoint_interval), 0)
         self.structure_filter = structure_filter
+        self.target_domain = target_domain
         self._resolved_kernels = self._resolve_kernels()
         self._calculators = (
             self._build_calculators(self.models, self._resolved_kernels)
@@ -115,8 +117,18 @@ class GeneralActiveLearning:
         save_images: Optional[Union[bool, str, Path]] = None,
         save_selected_features: Optional[Union[bool, str, Path]] = None,
         normalize_features: bool = True,
+        compute_features_only: bool = False,
     ) -> List[int]:
         kernels = self._merge_kernels(self._resolved_kernels, self.kernel)
+        if compute_features_only and not kernels:
+            raise ValueError(
+                "compute_features_only=True requires at least one feature kernel "
+                "(e.g., local-gnn/full-g) via kernel or export_kernels."
+            )
+        if compute_features_only:
+            logger.info(
+                "compute_features_only=True: features will be computed/exported and structure selection is skipped."
+            )
 
         pool_atoms = self._read_trajectory(pool_set)
         pool_dataset = self._make_dataset(pool_atoms)
@@ -163,6 +175,42 @@ class GeneralActiveLearning:
                 normalize=normalize_features,
                 save=False,
             )
+
+        if compute_features_only:
+            if save_selected_features:
+                logger.warning(
+                    "save_selected_features is ignored when compute_features_only=True."
+                )
+            if save_images:
+                logger.warning(
+                    "save_images is ignored when compute_features_only=True."
+                )
+            selected: List[int] = []
+            if save_json is not None:
+                save_path = Path(save_json)
+                save_path.parent.mkdir(parents=True, exist_ok=True)
+                payload = {
+                    "kernel": self.kernel,
+                    "selection": None,
+                    "compute_features_only": True,
+                    "dataset": {
+                        "pool": str(pool_set),
+                        "train": str(train_set) if train_set is not None else None,
+                    },
+                    "selected": selected,
+                    "summary": {
+                        "count": 0,
+                        "filter_enabled": self.structure_filter is not None,
+                        "pool_size_before": len(pool_dataset),
+                        "pool_size_after": len(filtered_pool),
+                    },
+                }
+                with open(save_path, "w", encoding="utf-8") as handle:
+                    json.dump(payload, handle, indent=2)
+            logger.info(
+                "Feature-only run completed; no structures were selected."
+            )
+            return selected
 
         matrix, num_atoms, n_train = self._kernel_matrix(
             pool_stats=pool_stats,
@@ -337,8 +385,18 @@ class GeneralActiveLearning:
                 specs.append((str(item[0]), int(item[1])))
         calculators: List[FeatureCalculator] = []
         for model in models:
-            extractor = FeatureExtractor(repr_callback=model, target_layer=self.target_layer)
-            calculators.append(FeatureCalculator(extractor=extractor, kernels=specs))
+            extractor = FeatureExtractor(
+                repr_callback=model,
+                target_layer=self.target_layer,
+                target_domain=self.target_domain,
+            )
+            calculators.append(
+                FeatureCalculator(
+                    extractor=extractor,
+                    kernels=specs,
+                    target_domain=self.target_domain,
+                )
+            )
         return calculators
 
     def _filter_set(

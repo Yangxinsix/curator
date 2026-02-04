@@ -64,8 +64,15 @@ else
     cat >> $lammps_dir/cmake/CMakeLists.txt << "EOF2"
 
 find_package(Torch REQUIRED)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${TORCH_CXX_FLAGS }")
-target_link_libraries(lammps PUBLIC "${TORCH_LIBRARIES}")
+if (TORCH_CXX_FLAGS)
+  target_compile_options(lammps PUBLIC ${TORCH_CXX_FLAGS})
+endif()
+if (TARGET Torch::Torch)
+  target_link_libraries(lammps PUBLIC Torch::Torch)
+else()
+  target_include_directories(lammps PUBLIC "${TORCH_INCLUDE_DIRS}")
+  target_link_libraries(lammps PUBLIC "${TORCH_LIBRARIES}")
+endif()
 EOF2
 
 fi

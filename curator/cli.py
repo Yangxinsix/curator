@@ -950,6 +950,7 @@ def select(config: DictConfig):
         dataset_cutoff=cutoff,
         transforms=transforms,
         save_features=save_features,
+        target_domain=OmegaConf.select(config, "target_domain"),
     )
     save_json = os.path.join(config.run_path, "selected.json")
     indices = al.select(
@@ -960,6 +961,7 @@ def select(config: DictConfig):
         save_images=save_images,
         save_selected_features=save_selected_features,
         normalize_features=OmegaConf.select(config, "export_normalized_features", default=True),
+        compute_features_only=bool(OmegaConf.select(config, "compute_features_only", default=False)),
     )
 
     log.debug(

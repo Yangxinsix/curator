@@ -16,18 +16,17 @@ References:
 #include "neigh_list.h"
 #include "neigh_request.h"
 #include "neighbor.h"
-#include "potential_file_reader.h"
-#include "tokenizer.h"
 
-#include <unordered_map>
-#include <string>
+#include <cassert>
+#include <cstdint>
 #include <cmath>
 #include <cstring>
-#include <numeric>
-#include <cassert>
+#include <cstdlib>
 #include <iostream>
-#include <sstream>
+#include <numeric>
 #include <string>
+#include <unordered_map>
+#include <vector>
 #include <torch/torch.h>
 #include <torch/script.h>
 #include <torch/csrc/jit/runtime/graph_executor.h>
@@ -193,67 +192,58 @@ void PairCurator::compute(int eflag, int vflag){
 
   assert(list->inum==atom->nlocal); // This should be true, if my understanding is correct
 
+  int nlocal = atom->nlocal;
+  int nall = atom->nlocal + atom->nghost;
+
   // Total number of bonds (sum of number of neighbors)
-  int nedges = std::accumulate(list->numneigh, list->numneigh+list->inum, 0);
-  torch::Tensor tag2type_tensor = torch::zeros({atom->nlocal}, torch::TensorOptions().dtype(torch::kInt64));
-  auto tag2type = tag2type_tensor.accessor<long, 1>();
+  int nedges = std::accumulate(list->numneigh, list->numneigh + list->inum, 0);
+  torch::Tensor atomic_numbers_tensor =
+      torch::zeros({nall}, torch::TensorOptions().dtype(torch::kInt64));
+  auto atomic_numbers = atomic_numbers_tensor.accessor<long, 1>();
 
-  // Inverse mapping from tag to "real" atom index
-  std::vector<int> tag2i(list->inum);
-
-  // Loop over real atoms to store tags, types and positions
-  for(int ii = 0; ii < list->inum; ii++){
-    int i = list->ilist[ii];
-    int itag = atom->tag[i];
+  for (int i = 0; i < nall; i++) {
     int itype = atom->type[i];  // type is 1-based
-
-    // Inverse mapping from tag to x/f atom index
-    tag2i[itag-1] = i; // tag is probably 1-based
-    tag2type[itag-1] = type_mapper[itype];
+    atomic_numbers[i] = type_mapper[itype];
   }
 
   // Loop over atoms and neighbors,
   // store edges and edge_diff
   // ii follows the order of the neighbor lists,
   // i follows the order of x, f, etc.
-  long edges[nedges][2];
-  double edge_diff[nedges][3];
+  std::vector<int64_t> edges(2 * nedges);
+  std::vector<double> edge_diff(3 * nedges);
   int edge_counter = 0;
   if (debug_mode) {
-    std::cout << "num_atoms = " << atom->nlocal << std::endl;
+    std::cout << "num_atoms = " << nall << std::endl;
     std::cout << "nedges = " << nedges << std::endl;
-    std::cout << "elems = " << tag2type_tensor << std::endl;
+    std::cout << "elems = " << atomic_numbers_tensor << std::endl;
   }
   if (debug_mode) printf("curator edges: i j xi[:] xj[:]\n");
   for(int ii = 0; ii < list->inum; ii++){
     int i = list->ilist[ii];
-    int itag = atom->tag[i];   // atom tag is 1-based
     int itype = atom->type[i];
-    if (debug_mode) printf("i_index: %d type: %d num_neigh: %d\n", itag-1, itype, list->numneigh[ii]);
+    if (debug_mode) printf("i_index: %d type: %d num_neigh: %d\n", i, itype, list->numneigh[ii]);
 
-    for(int jj = 0; jj < list->numneigh[i]; jj++){
-      int j = list->firstneigh[i][jj];
+    for(int jj = 0; jj < list->numneigh[ii]; jj++){
+      int j = list->firstneigh[ii][jj];
       j &= NEIGHMASK;
-      int jtag = atom->tag[j];
-//      int jtype = atom->type[j];
 
       double dx = x[j][0] - x[i][0];
       double dy = x[j][1] - x[i][1];
       double dz = x[j][2] - x[i][2];
 
-      domain->minimum_image(dx, dy, dz);
+      domain->minimum_image(FLERR, dx, dy, dz);
       double rsq = dx*dx + dy*dy + dz*dz;
       if (rsq < cutoff*cutoff){
-          // TODO: double check order
-          edges[edge_counter][0] = itag - 1; // tag is probably 1-based
-          edges[edge_counter][1] = jtag - 1; // tag is probably 1-based
-          edge_diff[edge_counter][0] = dx;
-          edge_diff[edge_counter][1] = dy;
-          edge_diff[edge_counter][2] = dz;
+          edges[2 * edge_counter] = i;
+          edges[2 * edge_counter + 1] = j;
+          edge_diff[3 * edge_counter] = dx;
+          edge_diff[3 * edge_counter + 1] = dy;
+          edge_diff[3 * edge_counter + 2] = dz;
           edge_counter++;
 
           if (debug_mode){
-              printf("%d %d %.10g %.10g %.10g %.10g\n", itag-1, jtag-1,
+              printf("%d %d %.10g %.10g %.10g %.10g\n", i, j,
                 dx,dy,dz,sqrt(rsq));
           }
 
@@ -263,13 +253,22 @@ void PairCurator::compute(int eflag, int vflag){
   if (debug_mode) printf("end curator edges\n");
 
   // shorten the list before sending to nequip
-  torch::Tensor edges_tensor = torch::from_blob(edges, {edge_counter, 2}, torch::TensorOptions().dtype(torch::kInt64));
-  torch::Tensor edge_diff_tensor = torch::from_blob(edge_diff, {edge_counter, 3}, torch::TensorOptions().dtype(torch::kFloat64));
+  torch::Tensor edges_tensor;
+  torch::Tensor edge_diff_tensor;
+  if (edge_counter > 0) {
+    edges_tensor = torch::from_blob(
+        edges.data(), {edge_counter, 2}, torch::TensorOptions().dtype(torch::kInt64));
+    edge_diff_tensor = torch::from_blob(
+        edge_diff.data(), {edge_counter, 3}, torch::TensorOptions().dtype(torch::kFloat64));
+  } else {
+    edges_tensor = torch::empty({0, 2}, torch::TensorOptions().dtype(torch::kInt64));
+    edge_diff_tensor = torch::empty({0, 3}, torch::TensorOptions().dtype(torch::kFloat64));
+  }
   edge_diff_tensor = edge_diff_tensor.to(torch::kFloat32);
  
   // define curator n_atoms input
   torch::Tensor n_atoms_tensor = torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64));
-  n_atoms_tensor[0] = atom->nlocal;
+  n_atoms_tensor[0] = nall;
   torch::Tensor n_pairs_tensor = torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64));
   n_pairs_tensor[0] = edge_counter;
 
@@ -278,7 +277,7 @@ void PairCurator::compute(int eflag, int vflag){
   input.insert("_n_pairs", n_pairs_tensor.to(device));
   input.insert("_edge_index" , edges_tensor.to(device));
   input.insert("_edge_difference", edge_diff_tensor.to(device));
-  input.insert("atomic_numbers", tag2type_tensor.to(device));
+  input.insert("atomic_numbers", atomic_numbers_tensor.to(device));
 
   if(debug_mode){
     std::cout << "curator model input:\n";
@@ -286,7 +285,7 @@ void PairCurator::compute(int eflag, int vflag){
     std::cout << "num_pairs:\n" << n_pairs_tensor << "\n";
     std::cout << "edge_index:\n" << edges_tensor << "\n";
     std::cout << "edge_difference:\n" << edge_diff_tensor<< "\n";
-    std::cout << "atomic_numbers:\n" << tag2type_tensor << "\n";
+    std::cout << "atomic_numbers:\n" << atomic_numbers_tensor << "\n";
   }
 
   std::vector<torch::IValue> input_vector(1, input);
@@ -342,12 +341,11 @@ void PairCurator::compute(int eflag, int vflag){
     }
   }
   
-  // Write forces and per-atom energies (0-based tags here)
-  for(int itag = 0; itag < list->inum; itag++){
-    int i = tag2i[itag];
-    f[i][0] = forces[itag][0];
-    f[i][1] = forces[itag][1];
-    f[i][2] = forces[itag][2];
+  // Write forces for local atoms
+  for (int i = 0; i < nlocal; i++) {
+    f[i][0] = forces[i][0];
+    f[i][1] = forces[i][1];
+    f[i][2] = forces[i][2];
   }
 }
 

@@ -68,6 +68,7 @@ class FeatureExtractor(nn.Module):
         repr_callback: Optional[Callable] = None,
         model_outputs: Optional[List[str]] = None,
         target_layer: str = 'readout_mlp',
+        target_domain: Optional[Union[str, int]] = None,
     ) -> None:
         """Extract features from neural networks.
 
@@ -81,6 +82,7 @@ class FeatureExtractor(nn.Module):
         self.hooks = []
         self.model_outputs = model_outputs if model_outputs is not None else ["feature", "gradient"]
         self.target_layer = target_layer
+        self.target_domain = target_domain
         self._linear_types = self._resolve_linear_types()
 
         if self.repr_callback is not None:
@@ -115,7 +117,25 @@ class FeatureExtractor(nn.Module):
         self.attach(repr_callback)
 
     def add_hooks(self) -> None:
-        layer = find_layer_by_name_recursive(self.repr_callback, self.target_layer)
+        if self.repr_callback is None:
+            raise RuntimeError("repr_callback is not set.")
+        search_root = self.repr_callback
+        readout = find_layer_by_name_recursive(self.repr_callback, "readout")
+        domain_modules = getattr(readout, "domain_modules", None)
+        if self.target_domain is not None:
+            if domain_modules is None:
+                raise ValueError("target_domain is set but model has no domain_modules.")
+            dom = str(self.target_domain)
+            if dom not in domain_modules:
+                raise ValueError(f"target_domain '{dom}' not found in model domain_modules.")
+            search_root = domain_modules[dom]
+        elif domain_modules is not None and len(domain_modules) > 1:
+            logger.warning(
+                "Multiple domains detected in readout; FeatureExtractor defaults to the first discovered domain. "
+                "Set target_domain to select explicitly."
+            )
+
+        layer = find_layer_by_name_recursive(search_root, self.target_layer)
         assert layer is not None, f"Target layer {self.target_layer} is not found!"
         linear_modules = [m for m in layer.modules() if isinstance(m, self._linear_types)]
         if not linear_modules:
@@ -136,7 +156,7 @@ class FeatureExtractor(nn.Module):
         return data
 
     def __repr__(self) -> str:
-        return f'{self.__class__.__name__}(target_layer={self.target_layer})'
+        return f'{self.__class__.__name__}(target_layer={self.target_layer}, target_domain={self.target_domain})'
 
     def _reset(self) -> None:
         self._features = []
@@ -315,9 +335,20 @@ class FeatureCalculator(nn.Module):
         max_dataset_size: Optional[int] = None,
         streaming: bool = False,
         regularization: float = 1e-6,
+        target_domain: Optional[Union[str, int]] = None,
     ) -> None:
         super().__init__()
-        self.extractor = extractor or FeatureExtractor()
+        if extractor is None:
+            self.extractor = FeatureExtractor(target_domain=target_domain)
+        else:
+            self.extractor = extractor
+            if target_domain is not None and self.extractor.target_domain != target_domain:
+                logger.warning(
+                    "FeatureCalculator target_domain overrides extractor target_domain (%s -> %s).",
+                    self.extractor.target_domain,
+                    target_domain,
+                )
+                self.extractor.target_domain = target_domain
         if kernel_calculators is not None:
             self.kernels = list(kernel_calculators)
         else:
@@ -325,6 +356,7 @@ class FeatureCalculator(nn.Module):
                 kernels,
                 repr_callback=self.extractor.repr_callback,
                 target_layer=self.extractor.target_layer,
+                target_domain=self.extractor.target_domain,
             )
         self.repr_callback: Optional[nn.Module] = None
         self.output_features = output_features
@@ -360,6 +392,7 @@ class FeatureCalculator(nn.Module):
             self.kernels,
             repr_callback=repr_callback,
             target_layer=self.extractor.target_layer,
+            target_domain=self.extractor.target_domain,
         )
         self._resolved_distance_kernel = None
         if self.compute_maha_dist and self.dataset is not None:
@@ -526,6 +559,7 @@ class FeatureCalculator(nn.Module):
         kernels: Optional[Sequence[Union[FeatureKernel, Tuple[KernelName, Union[FeatureProjector, int]]]]],
         repr_callback: Optional[nn.Module],
         target_layer: str = 'readout_mlp',
+        target_domain: Optional[Union[str, int]] = None,
     ) -> List[Union[FeatureKernel, Tuple[KernelName, int]]]:
         if kernels is None:
             kernels = [(_DEFAULT_KERNEL, _DEFAULT_N_RANDOM_FEATURES)]
@@ -543,11 +577,21 @@ class FeatureCalculator(nn.Module):
                 if repr_callback is None:
                     built.append((kernel, projector))
                 else:
+                    module = repr_callback
+                    if target_domain is not None:
+                        readout = find_layer_by_name_recursive(repr_callback, "readout")
+                        domain_modules = getattr(readout, "domain_modules", None)
+                        if domain_modules is None:
+                            raise ValueError("target_domain is set but model has no domain_modules.")
+                        dom = str(target_domain)
+                        if dom not in domain_modules:
+                            raise ValueError(f"target_domain '{dom}' not found in model domain_modules.")
+                        module = domain_modules[dom]
                     built.append(
                         FeatureKernel(
                             kernel,
                             RandomProjections(
-                                repr_callback,
+                                module,
                                 projector,
                                 target_layer=target_layer,
                             ),
