@@ -53,27 +53,50 @@ fi
 
 echo "Updating CMakeLists.txt..."
 # Check for double-patch
-if grep -q "find_package(Torch REQUIRED)" $lammps_dir/cmake/CMakeLists.txt
+if grep -q "PKG_CURATOR" $lammps_dir/cmake/CMakeLists.txt
 then
     echo "This LAMMPS installation _seems_ to already have been patched. CMakeLists.txt file not modified."
 else
     # Update CMakeLists.txt
     sed -i "s/set(CMAKE_CXX_STANDARD 11)/set(CMAKE_CXX_STANDARD 14)/" $lammps_dir/cmake/CMakeLists.txt
 
-    # Add libtorch
-    cat >> $lammps_dir/cmake/CMakeLists.txt << "EOF2"
+    # Add PKG_CURATOR option + Torch linkage with proper source gating
+    python - << "PY"
+from pathlib import Path
 
-find_package(Torch REQUIRED)
-if (TORCH_CXX_FLAGS)
-  target_compile_options(lammps PUBLIC ${TORCH_CXX_FLAGS})
+path = Path(r"$lammps_dir/cmake/CMakeLists.txt")
+text = path.read_text()
+needle = "add_library(lammps ${ALL_SOURCES})"
+if needle not in text:
+    raise SystemExit("add_library(lammps ${ALL_SOURCES}) not found in CMakeLists.txt")
+
+block = '''option(PKG_CURATOR "Enable CURATOR package" OFF)
+set(CURATOR_SOURCES
+  ${LAMMPS_SOURCE_DIR}/pair_curator.cpp
+  ${LAMMPS_SOURCE_DIR}/compute_uncertainty.cpp
+)
+if(NOT PKG_CURATOR)
+  list(REMOVE_ITEM ALL_SOURCES ${CURATOR_SOURCES})
 endif()
-if (TARGET Torch::Torch)
-  target_link_libraries(lammps PUBLIC Torch::Torch)
-else()
-  target_include_directories(lammps PUBLIC "${TORCH_INCLUDE_DIRS}")
-  target_link_libraries(lammps PUBLIC "${TORCH_LIBRARIES}")
+
+add_library(lammps ${ALL_SOURCES})
+
+if(PKG_CURATOR)
+  find_package(Torch REQUIRED)
+  if (TORCH_CXX_FLAGS)
+    target_compile_options(lammps PUBLIC ${TORCH_CXX_FLAGS})
+  endif()
+  if (TARGET Torch::Torch)
+    target_link_libraries(lammps PUBLIC Torch::Torch)
+  else()
+    target_include_directories(lammps PUBLIC "${TORCH_INCLUDE_DIRS}")
+    target_link_libraries(lammps PUBLIC "${TORCH_LIBRARIES}")
+  endif()
 endif()
-EOF2
+'''
+
+path.write_text(text.replace(needle, block, 1))
+PY
 
 fi
 

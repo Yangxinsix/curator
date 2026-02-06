@@ -16,5 +16,7 @@ new_domains: null
 # customize loss ratios
 energy_weight: 1
 forces_weight: 100
+# per-atom energy loss (divide energy targets by n_atoms in loss only)
+energy_per_atom_loss: true
 # stress_weight: 50
 patience: 200

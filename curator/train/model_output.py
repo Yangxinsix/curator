@@ -6,6 +6,7 @@ from torchmetrics import Metric
 import torch
 from collections import OrderedDict
 from .metrics import AtomsMetric
+from curator.data import properties
 
 class ModelOutput(nn.Module):
     """ Base class for model outputs."""
@@ -17,6 +18,7 @@ class ModelOutput(nn.Module):
         metrics: Optional[Dict[str, Metric]] = None,
         target_property: Optional[str] = None,
         is_penalty: bool = False,
+        per_atom_loss: bool = False,
         # per_species_loss: bool=False,
         # per_species_metrics: bool=False,
     ) -> None:
@@ -33,6 +35,7 @@ class ModelOutput(nn.Module):
         self.name = name
         self.target_property = target_property or name
         self.is_penalty = is_penalty
+        self.per_atom_loss = per_atom_loss
         self.loss_fn = loss_fn
         self.loss_weight = loss_weight
         if metrics is not None:
@@ -60,10 +63,16 @@ class ModelOutput(nn.Module):
             loss = self.loss_weight * pred[self.name].square().mean()
             num_obs = 1
         elif self.loss_fn is not None:
-            loss = self.loss_weight * self.loss_fn(
-                pred[self.name], target[self.target_property]
-            )
-            num_obs = target[self.target_property].view(-1).shape[0]
+            pred_val = pred[self.name]
+            target_val = target[self.target_property]
+            if self.per_atom_loss and target is not None and properties.n_atoms in target:
+                n_atoms = target[properties.n_atoms]
+                if torch.is_tensor(n_atoms) and pred_val.shape[:1] == n_atoms.shape[:1]:
+                    scale = (s := n_atoms.to(dtype=pred_val.dtype, device=pred_val.device)).unsqueeze(-1) if pred_val.dim() > 1 else s
+                    pred_val = pred_val / scale
+                    target_val = target_val / scale
+            loss = self.loss_weight * self.loss_fn(pred_val, target_val)
+            num_obs = target_val.numel()
         else:
             return 0.0
 
