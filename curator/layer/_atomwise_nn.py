@@ -1,11 +1,10 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from typing import List, Union, Optional, Callable, Dict
-from dataclasses import dataclass
+from typing import List, Union, Optional, Callable, Dict, Tuple, Literal
 from e3nn import o3
 from e3nn.nn import Activation
-from curator.data.properties import activation_fn
+from curator.data.properties import activation_fn, HeadConfig, resolve_heads
 from curator.data import properties
 from ._cuequivariance_wrapper import Linear
 import warnings
@@ -14,13 +13,7 @@ try:
 except ImportError:
     from curator.utils import scatter_add, scatter_mean
 
-@dataclass
-class OutputSpec:
-    key: str = 'energy'                         # name of this properties
-    per_atom: bool = False                  # if per_atom property should be output
-    aggregation_mode: Optional[str] = 'sum'  # sum, mean or None, when use None output as is, means this property is per atom
-    per_atom_key: str = 'atomic_energy'               # the key of per_atom property
-    split_size: int = 1                 # dim size of this property
+AggregationMode = Literal["sum", "mean", "none"]
 
 class Dense(nn.Module):
     r"""
@@ -72,7 +65,7 @@ class AtomwiseNN(nn.Module):
         n_hidden_layers: int = 1,
         use_e3nn: bool = False,
         activation: Union[Callable, nn.Module, str, List[Callable], List[nn.Module], List[str]] = 'silu',
-        output_keys: Union[List[str], List[Dict]] = ["energy"],
+        heads: Optional[List[Union[HeadConfig, Dict, str]]] = None,
         *args,
         **kwargs,
     ):
@@ -108,83 +101,39 @@ class AtomwiseNN(nn.Module):
         else:
             acts = [activation_fn[activation] if isinstance(activation, str) else activation for _ in range(self.n_hidden_layers)] + [None]
 
-        self.readout_mlp = nn.Sequential(*[
-            Dense(n_neurons[i], n_neurons[i + 1], acts[i], use_e3nn=use_e3nn)
-            for i in range(self.n_hidden_layers + 1)
-        ])
+        self._n_neurons = n_neurons
+        self._acts = acts
+
+        self.readout_mlp = self._make_readout()
 
         n_out = out_features if isinstance(out_features, int) else out_features.dim
+        self._n_out = int(n_out)
 
-        # Prepare and store output specifications
-        self._output_specs: List[OutputSpec] = []
-        model_outputs = []
-        per_atom_flags = []
-        aggregation_modes = []
-        per_atom_keys = []
-        split_sizes = []
+        # Prepare and store output specifications using HeadConfig
+        self.heads: List[HeadConfig] = resolve_heads(heads) if heads is not None else []
+        if not self.heads:
+            self.heads = [HeadConfig(key="energy", is_atomwise=True, reduction="sum", atomwise_key="atomic_energy")]
 
-        for spec in output_keys:
-            if isinstance(spec, str):
-                spec = OutputSpec(
-                    key=spec,
-                    per_atom=False,
-                    aggregation_mode='sum',
-                    per_atom_key=spec + '_pa',
-                    split_size=1,
-                )
-            else:
-                if 'key' not in spec:
-                    raise ValueError("No output key is specified!")
-                spec = OutputSpec(
-                    key=spec['key'],
-                    per_atom=spec.get('per_atom', False),
-                    aggregation_mode=spec.get('aggregation_mode', 'sum'),
-                    per_atom_key=spec.get('per_atom_key', spec['key'] + '_pa'),
-                    split_size=spec.get('split_size', 1),
-                )
-
-            self._output_specs.append(spec)
-            model_outputs.append(spec.key)
-            per_atom_flags.append(spec.per_atom)
-            aggregation_modes.append(spec.aggregation_mode or "none")
-            per_atom_keys.append(spec.per_atom_key)
-            split_sizes.append(spec.split_size)
-
-        self.model_outputs = model_outputs
-        self.per_atom_flags = per_atom_flags
-        self.aggregation_modes = aggregation_modes
-        self.per_atom_keys = per_atom_keys
-        self.split_size = split_sizes
+        self.model_outputs = [h.key for h in self.heads]
+        self.per_atom_flags = [bool(h.write_atomwise) for h in self.heads]
+        self.aggregation_modes: List[AggregationMode] = [
+            (h.reduction if h.reduction is not None else "sum")
+            for h in self.heads
+        ]
+        self.per_atom_keys = [(h.atomwise_key or (h.key + "_pa")) for h in self.heads]
+        self.split_size = [int(h.dim) for h in self.heads]
 
         assert sum(self.split_size) == n_out, "Output feature dimensions do not match split sizes!"
 
-    def output_specs(self) -> List[OutputSpec]:
-        return [
-            OutputSpec(
-                key=k,
-                per_atom=pa,
-                aggregation_mode=(am if am != 'none' else None),
-                per_atom_key=pak,
-                split_size=ss,
-            )
-            for k, pa, am, pak, ss in zip(
-                self.model_outputs,
-                self.per_atom_flags,
-                self.aggregation_modes,
-                self.per_atom_keys,
-                self.split_size,
-            )
-        ]
-
-    def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> torch.Tensor:
+    def _compute(self, input: torch.Tensor) -> torch.Tensor:
         return self.readout_mlp(input)
 
     def _parse_outputs(self, out: torch.Tensor, index: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
         out = out.split(self.split_size, dim=1)
         output_dict: Dict[str, torch.Tensor] = {}
 
-        for i in range(len(self.model_outputs)):
-            prop = out[i].squeeze()
+        for i, head in enumerate(self.heads):
+            prop = out[i].squeeze(-1)
             key = self.model_outputs[i]
             per_atom = self.per_atom_flags[i]
             aggregation_mode = self.aggregation_modes[i]
@@ -214,6 +163,15 @@ class AtomwiseNN(nn.Module):
         data.update(output_dict)
 
         return data
+
+    def _make_readout(self) -> nn.Sequential:
+        return nn.Sequential(*[
+            Dense(self._n_neurons[i], self._n_neurons[i + 1], self._acts[i], use_e3nn=self.use_e3nn)
+            for i in range(self.n_hidden_layers + 1)
+        ])
+
+    def _get_domain(self, data: properties.Type) -> Optional[str]:
+        return None
 
 class MACEAtomwiseNN(AtomwiseNN):
     """Atomwise feed-forward neural networks for MACE
@@ -258,7 +216,13 @@ class MACEAtomwiseNN(AtomwiseNN):
         else:
             self.MLP_irreps = MLP_irreps
 
-        super().__init__(in_features=o3.Irreps(str(self.hidden_irreps[0])), n_hidden=self.MLP_irreps, use_e3nn=True, *args, **kwargs)
+        super().__init__(
+            in_features=o3.Irreps(str(self.hidden_irreps[0])),
+            n_hidden=self.MLP_irreps,
+            use_e3nn=True,
+            *args,
+            **kwargs,
+        )
         self.num_interactions = num_interactions
 
         self.readouts = nn.ModuleList()
@@ -270,12 +234,186 @@ class MACEAtomwiseNN(AtomwiseNN):
         self.readouts.append(self.readout_mlp)
         self.in_features_list.append(self.hidden_irreps[0].dim)
 
-    def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None) -> properties.Type:
+    def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None, domain: Optional[str] = None) -> properties.Type:
         # split node features to list then calculate contributions from different parts
         node_feat_list = torch.split(input, self.in_features_list, dim=-1)
+
+        readouts = self.readouts
         out_list = []
-        for readout, node_feat in zip(self.readouts, node_feat_list):
+        for readout, node_feat in zip(readouts, node_feat_list):
             out_list.append(readout(node_feat))
-    
         out = torch.sum(torch.stack(out_list, dim=0), dim=0)
         return out
+
+
+class MultiDomainAtomwiseNN(nn.Module):
+    """
+    Domain-aware wrapper holding one AtomwiseNN-like module per domain.
+    Routes atoms by properties.domain_atom and merges outputs with index_select/scatter.
+    """
+
+    def __init__(
+        self,
+        domains: Optional[List[Union[str, int]]] = None,
+        readout_cls: Union[type, Callable] = AtomwiseNN,
+        heads_by_domain: Optional[Dict[Union[str, int], List[Union[HeadConfig, Dict, str]]]] = None,
+        *args,
+        **kwargs,
+    ):
+        super().__init__()
+        self.domains = [str(d) for d in domains] if domains else ["0"]
+
+        base_kwargs = dict(kwargs)
+        base_heads_by_domain = {}
+        if heads_by_domain:
+            base_heads_by_domain = {str(k): v for k, v in heads_by_domain.items()}
+        base_kwargs.pop("domains", None)
+        base_kwargs.pop("heads_by_domain", None)
+
+        self.domain_modules = nn.ModuleDict()
+        for dom in self.domains:
+            domain_kwargs = dict(base_kwargs)
+            heads_for_domain = base_heads_by_domain.get(dom, domain_kwargs.get("heads"))
+            if heads_for_domain is not None:
+                resolved = resolve_heads(heads_for_domain)
+                domain_kwargs["heads"] = heads_for_domain
+                domain_kwargs["out_features"] = sum(int(h.dim) for h in resolved)
+            self.domain_modules[dom] = readout_cls(*args, **domain_kwargs)
+
+    def _get_domain(self, data: properties.Type) -> str:
+        if properties.domain not in data:
+            return self.domains[0]
+        dom = data[properties.domain]
+        if torch.is_tensor(dom):
+            if dom.numel() == 0:
+                return self.domains[0]
+            dom = dom.view(-1)[0].item()
+        dom = str(dom)
+        if dom in self.domain_modules:
+            return dom
+        return self.domains[0]
+
+    def _ensure_image_index(self, data: properties.Type) -> None:
+        if properties.image_idx not in data:
+            data[properties.image_idx] = torch.zeros(
+                data[properties.n_atoms].item(),
+                dtype=data[properties.edge_idx].dtype,
+                device=data[properties.edge_idx].device,
+            )
+
+    def _split_domain_labels(
+        self, data: properties.Type, n_atoms: int
+    ) -> Optional[torch.Tensor]:
+        atom_domain = None
+        if properties.domain_atom in data:
+            atom_domain = data[properties.domain_atom]
+        elif properties.domain in data:
+            dom = data[properties.domain]
+            if torch.is_tensor(dom) and dom.numel() == n_atoms:
+                atom_domain = dom
+        return atom_domain
+
+    def _per_atom_output_keys(self, module: AtomwiseNN) -> set:
+        keys = set()
+        for i, key in enumerate(module.model_outputs):
+            if module.aggregation_modes[i] == "none":
+                keys.add(key)
+            if module.per_atom_flags[i]:
+                keys.add(module.per_atom_keys[i])
+        return keys
+
+    def _compute_outputs_subset(
+        self,
+        module: AtomwiseNN,
+        node_feat: torch.Tensor,
+        index: torch.Tensor,
+        atom_idx: torch.Tensor,
+    ) -> Tuple[Dict[str, torch.Tensor], torch.Tensor]:
+        node_feat_sub = node_feat.index_select(0, atom_idx)
+        index_sub = index.index_select(0, atom_idx)
+        out = module._compute(node_feat_sub)
+        return module._parse_outputs(out, index_sub), index_sub
+
+    def _init_combined(
+        self,
+        output: Dict[str, torch.Tensor],
+        module: AtomwiseNN,
+        n_atoms: int,
+        n_graphs: int,
+    ) -> Dict[str, torch.Tensor]:
+        per_atom_keys = self._per_atom_output_keys(module)
+        combined = {}
+        for key, val in output.items():
+            if key in per_atom_keys:
+                shape = (n_atoms,) + val.shape[1:]
+            else:
+                shape = (n_graphs,) + val.shape[1:]
+            combined[key] = val.new_zeros(shape)
+        return combined
+
+    def _scatter_outputs(
+        self,
+        combined: Dict[str, torch.Tensor],
+        output: Dict[str, torch.Tensor],
+        module: AtomwiseNN,
+        atom_idx: torch.Tensor,
+    ) -> None:
+        per_atom_keys = self._per_atom_output_keys(module)
+        for key, val in output.items():
+            if key in per_atom_keys:
+                combined[key].index_copy_(0, atom_idx, val)
+            else:
+                combined[key][: val.shape[0]].add_(val)
+
+    def forward(self, data: properties.Type) -> properties.Type:
+        self._ensure_image_index(data)
+        node_feat = data[properties.node_feat]
+        index = data[properties.image_idx]
+        n_atoms = node_feat.shape[0]
+        n_graphs = int(index.max().item()) + 1 if index.numel() > 0 else 0
+
+        atom_domain = self._split_domain_labels(data, n_atoms)
+        if atom_domain is None:
+            dom = self._get_domain(data)
+            return self.domain_modules[dom](data)
+
+        atom_domain = atom_domain.to(torch.long)
+        combined = None
+        matched = torch.zeros((n_atoms,), dtype=torch.bool, device=node_feat.device)
+
+        for dom, module in self.domain_modules.items():
+            if not str(dom).isdigit():
+                continue
+            dom_id = int(dom)
+            mask = atom_domain == dom_id
+            if not torch.any(mask):
+                continue
+            atom_idx = mask.nonzero(as_tuple=False).view(-1)
+            output, _ = self._compute_outputs_subset(module, node_feat, index, atom_idx)
+            if combined is None:
+                combined = self._init_combined(output, module, n_atoms, n_graphs)
+            self._scatter_outputs(combined, output, module, atom_idx)
+            matched[atom_idx] = True
+
+        if combined is None:
+            dom = self.domains[0]
+            return self.domain_modules[dom](data)
+
+        remaining = ~matched
+        if torch.any(remaining):
+            atom_idx = remaining.nonzero(as_tuple=False).view(-1)
+            fallback_dom = self.domains[0]
+            output, _ = self._compute_outputs_subset(self.domain_modules[fallback_dom], node_feat, index, atom_idx)
+            self._scatter_outputs(combined, output, self.domain_modules[fallback_dom], atom_idx)
+
+        data.update(combined)
+        return data
+
+
+class MultiDomainMACEAtomwiseNN(MultiDomainAtomwiseNN):
+    """
+    MultiDomain wrapper specialized for MACEAtomwiseNN.
+    """
+
+    def __init__(self, domains: Optional[List[Union[str, int]]] = None, *args, **kwargs):
+        super().__init__(domains=domains, readout_cls=MACEAtomwiseNN, *args, **kwargs)

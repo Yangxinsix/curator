@@ -1,6 +1,6 @@
 from ._atomic_linear import AtomwiseLinear, AtomwiseNonLinear
 from ._atomwise_reduce import AtomwiseReduce
-from ._atomwise_nn import AtomwiseNN, MACEAtomwiseNN
+from ._atomwise_nn import AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from ._convnet import ConvNetLayer
 from ._charge_equilibration import ChargeEquilibration
 from ._ewald import EwaldSummation
@@ -11,15 +11,17 @@ from ._mace_interaction import (
     RealAgnosticInteractionBlock,
     RealAgnosticResidualInteractionBlock,
 )
+from ._mace_readout_adapter import MACEReadoutAdapter
 from ._node_embedding import OneHotAtomEncoding
 from ._painn_message import PainnMessage
 from ._painn_update import PainnUpdate
 from ._pairwise_distance import PairwiseDistance, get_pair_distance
+from ._pair_repulsion import ZBLBasis, PairRepulsionEnergy
 from ._symmetric_contraction import Contraction, SymmetricContraction
-from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift
+from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift, MultiDomainRescaleShift
 from ._strain import Strain
-from ._feature import FeatureExtractor, FeatureCalculator, RandomProjections
-from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN
+from ._feature import FeatureExtractor, FeatureCalculator, RandomProjections, normalize_kernel
+from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from .cutoff import CosineCutoff, PolynomialCutoff
 from .nonlinearities import ShiftedSoftPlus
 from .radial_basis import (
@@ -28,6 +30,8 @@ from .radial_basis import (
     GaussianBasis,
     RadialBasisEdgeEncoding,
     SphericalHarmonicEdgeAttrs,
+    AgnesiTransform,
+    SoftTransform,
 )
 from .utils import (
     tp_path_exists, 
@@ -43,6 +47,8 @@ __all__ = [
     AtomwiseReduce,
     AtomwiseNN,
     MACEAtomwiseNN,
+    MultiDomainAtomwiseNN,
+    MultiDomainMACEAtomwiseNN,
     ConvNetLayer,
     ChargeEquilibration,
     EwaldSummation,
@@ -50,6 +56,7 @@ __all__ = [
     EquivariantProductBasisBlock,
     RealAgnosticInteractionBlock,
     RealAgnosticResidualInteractionBlock,
+    MACEReadoutAdapter,
     Contraction,
     SymmetricContraction,
     OneHotAtomEncoding,
@@ -63,6 +70,8 @@ __all__ = [
     GaussianBasis,
     RadialBasisEdgeEncoding,
     SphericalHarmonicEdgeAttrs,
+    AgnesiTransform,
+    SoftTransform,
     tp_path_exists,
     tp_out_irreps_with_instructions,
     linear_out_irreps,
@@ -70,13 +79,19 @@ __all__ = [
     reshape_irreps,
     PairwiseDistance,         # input modules (preprocess, calculate pairwise distances)
     Strain,                   # input modules (preprocess, add strain on cell and atom positions)
+    ZBLBasis,
+    PairRepulsionEnergy,
     GradientOutput,           # output modules (output forces and stress)
     GlobalRescaleShift,            # output modules (postprocess energy)
     PerSpeciesRescaleShift,
+    MultiDomainRescaleShift,
     FeatureExtractor,
     FeatureCalculator, 
     RandomProjections,
+    normalize_kernel,
     MACEAtomwiseNN,
     AtomwiseNN,
+    MultiDomainAtomwiseNN,
+    MultiDomainMACEAtomwiseNN,
     Dense,
 ]

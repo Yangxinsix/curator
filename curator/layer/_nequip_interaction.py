@@ -1,5 +1,5 @@
 import torch
-from typing import Dict, Callable, Optional, Any
+from typing import Dict, Callable, Optional, Any, Literal
 from curator.data import properties
 
 from e3nn.nn import Gate, NormActivation
@@ -31,13 +31,18 @@ class InteractionLayer(torch.nn.Module):
         irreps_in,
         feature_irreps_hidden,
         convolution=ConvNetLayer,
-        convolution_kwargs: dict = {},
+        convolution_kwargs: Optional[dict] = None,
         resnet: bool = False,
-        nonlinearity_type: str = "gate",
-        nonlinearity_scalars: Dict[int, Callable] = {"e": "ssp", "o": "tanh"},
-        nonlinearity_gates: Dict[int, Callable] = {"e": "ssp", "o": "abs"},
+        nonlinearity_type: Literal["gate", "norm"] = "gate",
+        nonlinearity_scalars: Optional[Dict[int, Callable]] = None,
+        nonlinearity_gates: Optional[Dict[int, Callable]] = None,
     ):
         super().__init__()
+        if nonlinearity_scalars is None:
+            nonlinearity_scalars = {"e": "ssp", "o": "tanh"}
+        if nonlinearity_gates is None:
+            nonlinearity_gates = {"e": "ssp", "o": "abs"}
+        convolution_kwargs = {} if convolution_kwargs is None else dict(convolution_kwargs)
         # initialization
         assert nonlinearity_type in ("gate", "norm")
         # make the nonlin dicts from parity ints instead of convinience strs

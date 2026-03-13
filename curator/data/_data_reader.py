@@ -102,7 +102,7 @@ class AseDataReader(DataReader):
         self,
         cutoff: Optional[float] = None,
         compute_neighbor_list: bool = True,
-        transforms: List[Transform] = [],
+        transforms: Optional[List[Transform]] = None,
         return_cell_displacements: bool = False,
         default_dtype: torch.dtype = torch.get_default_dtype(),
     )   -> None:
@@ -115,7 +115,7 @@ class AseDataReader(DataReader):
         """ 
         self.cutoff = cutoff
         self.compute_neighbor_list = compute_neighbor_list
-        self.transforms = transforms
+        self.transforms = transforms if transforms is not None else []
         self.default_dtype = default_dtype
         if self.compute_neighbor_list:
             assert isinstance(self.cutoff, float), "Cutoff radius must be given when compute the neighbor list"

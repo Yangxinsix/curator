@@ -6,6 +6,8 @@ from curator.data import properties
 from e3nn.util.jit import compile_mode
 from .cutoff import CutoffFunction, PolynomialCutoff
 import abc
+import ase.data
+from typing import Optional
 
 class RadialBasis(torch.nn.Module, metaclass=abc.ABCMeta):
     @abc.abstractmethod
@@ -134,21 +136,165 @@ class RadialBasisEdgeEncoding(torch.nn.Module):
         self,
         basis: RadialBasis,
         cutoff_fn: CutoffFunction,
+        distance_transform: Optional[nn.Module] = None,
+        atomic_numbers: Optional[torch.Tensor] = None,
     ):
         super().__init__()
         self.basis = basis
         self.cutoff_fn = cutoff_fn
+        # Optional MACE-style distance preprocessing (Agnesi/Soft); requires atomic numbers.
+        self.distance_transform = distance_transform
+        if atomic_numbers is not None:
+            self.register_buffer(
+                "atomic_numbers",
+                torch.as_tensor(atomic_numbers, dtype=torch.long),
+            )
+        else:
+            self.atomic_numbers = None
         
         # output edge dist irreps
         self.irreps_out = self.basis.irreps_out
 
     def forward(self, data: properties.Type) -> properties.Type:
         edge_dist = data[properties.edge_dist]
-        data[properties.edge_dist_embedding] = (
-            self.basis(edge_dist) * self.cutoff_fn(edge_dist)[:, None]
-        )
+        cutoff = self.cutoff_fn(edge_dist)
+        edge_dist_for_basis = edge_dist
+        if self.distance_transform is not None:
+            if self.atomic_numbers is None:
+                raise ValueError("distance_transform requires atomic_numbers to be set.")
+            if edge_dist_for_basis.dim() == 1:
+                edge_dist_for_basis = edge_dist_for_basis.unsqueeze(-1)
+            edge_dist_for_basis = self.distance_transform(
+                edge_dist_for_basis,
+                data[properties.node_attr],
+                data[properties.edge_idx],
+                self.atomic_numbers.to(edge_dist_for_basis.device),
+            )
+        if edge_dist_for_basis.dim() > 1 and edge_dist_for_basis.shape[-1] == 1:
+            edge_dist_for_basis = edge_dist_for_basis.squeeze(-1)
+        data[properties.edge_dist_embedding] = self.basis(edge_dist_for_basis) * cutoff[:, None]
         
         return data
+
+
+@compile_mode("script")
+class AgnesiTransform(torch.nn.Module):
+    """Agnesi transform used for radial distance preprocessing."""
+
+    def __init__(
+        self,
+        q: float = 0.9183,
+        p: float = 4.5791,
+        a: float = 1.0805,
+        trainable: bool = False,
+    ):
+        super().__init__()
+        self.register_buffer("q", torch.tensor(q, dtype=torch.get_default_dtype()))
+        self.register_buffer("p", torch.tensor(p, dtype=torch.get_default_dtype()))
+        self.register_buffer("a", torch.tensor(a, dtype=torch.get_default_dtype()))
+        self.register_buffer(
+            "covalent_radii",
+            torch.tensor(
+                ase.data.covalent_radii,
+                dtype=torch.get_default_dtype(),
+            ),
+        )
+        if trainable:
+            self.a = torch.nn.Parameter(torch.tensor(1.0805, requires_grad=True))
+            self.q = torch.nn.Parameter(torch.tensor(0.9183, requires_grad=True))
+            self.p = torch.nn.Parameter(torch.tensor(4.5791, requires_grad=True))
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        node_attrs: torch.Tensor,
+        edge_index: torch.Tensor,
+        atomic_numbers: torch.Tensor,
+    ) -> torch.Tensor:
+        if edge_index.dim() == 2 and edge_index.shape[0] == 2:
+            sender = edge_index[0]
+            receiver = edge_index[1]
+        else:
+            sender = edge_index[:, 0]
+            receiver = edge_index[:, 1]
+        node_atomic_numbers = atomic_numbers[torch.argmax(node_attrs, dim=1)].unsqueeze(
+            -1
+        )
+        Z_u = node_atomic_numbers[sender].to(torch.int64)
+        Z_v = node_atomic_numbers[receiver].to(torch.int64)
+        r_0: torch.Tensor = 0.5 * (self.covalent_radii[Z_u] + self.covalent_radii[Z_v])
+        r_over_r_0 = x / r_0
+        return (
+            1
+            + (
+                self.a
+                * torch.pow(r_over_r_0, self.q)
+                / (1 + torch.pow(r_over_r_0, self.q - self.p))
+            )
+        ).reciprocal_()
+
+    def __repr__(self):
+        return (
+            f"{self.__class__.__name__}(a={self.a:.4f}, q={self.q:.4f}, p={self.p:.4f})"
+        )
+
+
+@compile_mode("script")
+class SoftTransform(torch.nn.Module):
+    """Tanh-based smooth distance transformation."""
+
+    def __init__(self, alpha: float = 4.0, trainable: bool = False):
+        super().__init__()
+        self.register_buffer(
+            "alpha", torch.tensor(alpha, dtype=torch.get_default_dtype())
+        )
+        if trainable:
+            self.alpha = torch.nn.Parameter(self.alpha.clone())
+        self.register_buffer(
+            "covalent_radii",
+            torch.tensor(
+                ase.data.covalent_radii,
+                dtype=torch.get_default_dtype(),
+            ),
+        )
+
+    def compute_r_0(
+        self,
+        node_attrs: torch.Tensor,
+        edge_index: torch.Tensor,
+        atomic_numbers: torch.Tensor,
+    ) -> torch.Tensor:
+        if edge_index.dim() == 2 and edge_index.shape[0] == 2:
+            sender = edge_index[0]
+            receiver = edge_index[1]
+        else:
+            sender = edge_index[:, 0]
+            receiver = edge_index[:, 1]
+        node_atomic_numbers = atomic_numbers[torch.argmax(node_attrs, dim=1)].unsqueeze(
+            -1
+        )
+        Z_u = node_atomic_numbers[sender].to(torch.int64)
+        Z_v = node_atomic_numbers[receiver].to(torch.int64)
+        r_0: torch.Tensor = self.covalent_radii[Z_u] + self.covalent_radii[Z_v]
+        return r_0
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        node_attrs: torch.Tensor,
+        edge_index: torch.Tensor,
+        atomic_numbers: torch.Tensor,
+    ) -> torch.Tensor:
+        r_0 = self.compute_r_0(node_attrs, edge_index, atomic_numbers)
+        p_0 = (3 / 4) * r_0
+        p_1 = (4 / 3) * r_0
+        m = 0.5 * (p_0 + p_1)
+        alpha = self.alpha / (p_1 - p_0)
+        s_x = 0.5 * (1.0 + torch.tanh(alpha * (x - m)))
+        return p_0 + (x - p_0) * s_x
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(alpha={self.alpha.item():.4f})"
 
 class SphericalHarmonicEdgeAttrs(torch.nn.Module):
     def __init__(

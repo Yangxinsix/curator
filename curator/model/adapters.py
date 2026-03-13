@@ -53,10 +53,7 @@ def parse_external_model_spec(raw: str) -> Optional[ExternalModelSpec]:
 _ADAPTER_LOADERS: Dict[str, Callable[[ExternalModelSpec, Optional[torch.device]], nn.Module]] = {}
 
 
-def register_adapter_loader(
-    scheme: str,
-    loader: Callable[[ExternalModelSpec, Optional[torch.device]], nn.Module],
-) -> None:
+def register_adapter_loader(scheme: str, loader: Callable[[ExternalModelSpec, Optional[torch.device]], nn.Module]) -> None:
     _ADAPTER_LOADERS[scheme.lower()] = loader
 
 
@@ -72,9 +69,7 @@ def load_external_model(raw: str, device: Optional[torch.device] = None) -> nn.M
     loader = _ADAPTER_LOADERS.get(spec.scheme)
     if loader is None:
         known = ", ".join(sorted(_ADAPTER_LOADERS.keys()))
-        raise ValueError(
-            f"Unsupported external model scheme '{spec.scheme}'. Known schemes: {known}"
-        )
+        raise ValueError(f"Unsupported external model scheme '{spec.scheme}'. Known schemes: {known}")
     return loader(spec, device=device)
 
 
@@ -108,6 +103,7 @@ class _MatGLAtoms2GraphFallback:
         periodic = bool(atoms.pbc.all())
         work_atoms = atoms
 
+        # matscipy expects an invertible cell even when pbc=False.
         if not periodic:
             work_atoms = atoms.copy()
             pos = np.asarray(work_atoms.get_positions())
@@ -128,9 +124,7 @@ class _MatGLAtoms2GraphFallback:
         src_id, dst_id, images, _ = neighbour_list("ijSD", work_atoms, self.cutoff)
 
         if periodic:
-            frac_or_cart_coords = np.asarray(
-                atoms.get_scaled_positions(False), dtype=np.float32
-            )
+            frac_or_cart_coords = np.asarray(atoms.get_scaled_positions(False), dtype=np.float32)
             lattice_for_graph = [np.array(atoms.cell.array, dtype=np.float32)]
             images = np.asarray(images, dtype=np.int64)
         else:
@@ -192,11 +186,12 @@ class MatGLAdapter(nn.Module):
 
         if self.backend not in {"DGL", "PYG"}:
             raise ValueError(f"Unsupported MatGL backend: {self.backend}")
-        self.graph_converter = self._build_graph_converter(
-            tuple(element_types), float(cutoff)
-        )
+        self.graph_converter = self._build_graph_converter(tuple(element_types), float(cutoff))
 
+        # CURATOR select path expects models[i].representation.cutoff.
         self.representation = SimpleNamespace(cutoff=float(cutoff))
+
+        # Keep CURATOR default target name usable without extra config.
         self.readout_mlp = self._resolve_target_layer(self.target_layer)
         if self.target_layer != "readout_mlp":
             setattr(self, self.target_layer, self.readout_mlp)
@@ -211,8 +206,7 @@ class MatGLAdapter(nn.Module):
             if layer is not None:
                 return layer
         raise ValueError(
-            f"Cannot find target layer '{target_layer}' "
-            "(or fallbacks final_layer/readout) in MatGL model."
+            f"Cannot find target layer '{target_layer}' (or fallbacks final_layer/readout) in MatGL model."
         )
 
     def _build_graph_converter(self, element_types: tuple[str, ...], cutoff: float):
@@ -225,9 +219,7 @@ class MatGLAdapter(nn.Module):
         except Exception:
             return _MatGLAtoms2GraphFallback(element_types, cutoff, self.backend)
 
-    def _extract_cells(
-        self, data: properties.Type, batch_size: int
-    ) -> Optional[torch.Tensor]:
+    def _extract_cells(self, data: properties.Type, batch_size: int) -> Optional[torch.Tensor]:
         cell = data.get(properties.cell)
         if cell is None:
             return None
@@ -246,14 +238,9 @@ class MatGLAdapter(nn.Module):
         return None
 
     def _batch_to_atoms(self, data: properties.Type) -> list[Atoms]:
-        if (
-            properties.n_atoms not in data
-            or properties.atomic_numbers not in data
-            or properties.positions not in data
-        ):
+        if properties.n_atoms not in data or properties.atomic_numbers not in data or properties.positions not in data:
             raise KeyError(
-                f"Batch must include {properties.n_atoms}, "
-                f"{properties.atomic_numbers}, and {properties.positions}."
+                f"Batch must include {properties.n_atoms}, {properties.atomic_numbers}, and {properties.positions}."
             )
         n_atoms = data[properties.n_atoms].detach().view(-1).to("cpu", torch.long).tolist()
         z = data[properties.atomic_numbers].detach().to("cpu", torch.long).view(-1)
@@ -267,12 +254,7 @@ class MatGLAdapter(nn.Module):
             numbers = z[offset : offset + n_int].numpy()
             positions = pos[offset : offset + n_int].numpy()
             if cells is not None:
-                atoms = Atoms(
-                    numbers=numbers,
-                    positions=positions,
-                    cell=cells[i].numpy(),
-                    pbc=True,
-                )
+                atoms = Atoms(numbers=numbers, positions=positions, cell=cells[i].numpy(), pbc=True)
             else:
                 atoms = Atoms(numbers=numbers, positions=positions, pbc=False)
             atoms_list.append(atoms)
@@ -288,9 +270,7 @@ class MatGLAdapter(nn.Module):
             return lat_t
         if lat_t.dim() == 1 and lat_t.numel() == 9:
             return lat_t.view(3, 3)
-        raise ValueError(
-            f"Unsupported lattice shape from MatGL converter: {tuple(lat_t.shape)}"
-        )
+        raise ValueError(f"Unsupported lattice shape from MatGL converter: {tuple(lat_t.shape)}")
 
     def _batch_graphs(self, atoms_list: list[Atoms]):
         graphs = []

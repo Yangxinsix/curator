@@ -1,12 +1,10 @@
 import torch
-import warnings
 from torch import nn
 from e3nn import o3
 from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
 from functools import partial
 
-from functools import partial
 from curator.layer import (
     OneHotAtomEncoding,
     AtomwiseLinear,
@@ -22,10 +20,14 @@ from curator.layer import (
     RealAgnosticResidualInteractionBlock,
     RealAgnosticInteractionBlock,
     EquivariantProductBasisBlock,
+    AgnesiTransform,
+    SoftTransform,
 )
-from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE, set_use_cueq
+from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
 from curator.data import properties
-from typing import List, Optional, Dict, Union, Callable, Type
+from typing import List, Optional, Dict, Union, Callable, Type, Literal
+from ase.data import atomic_numbers
+from curator.model.base import Representation
 
 activation_fn = {
     "silu": torch.nn.SiLU(),
@@ -35,7 +37,7 @@ activation_fn = {
 }
 
 @compile_mode('script')
-class MACE(nn.Module):
+class MACE(Representation):
     """MACE model."""
     def __init__(
         self,
@@ -59,6 +61,9 @@ class MACE(nn.Module):
         power: int = 6,
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
         use_cueq: bool = False,
+        heads: Optional[list] = None,
+        distance_transform: Optional[Union[Literal["agnesi", "soft", "none", ""], nn.Module]] = None,
+        filter_forbidden_irreps: bool = True,
         **kwargs,
     ) -> None:
         """MACE model.
@@ -83,20 +88,14 @@ class MACE(nn.Module):
                 energies are exposed at properties.atomic_energy_heads and averaged for
                 properties.atomic_energy.
         """
-        super().__init__()
+        super().__init__(heads=heads)
         
         self.cutoff = cutoff
         self.parity = parity
         self.species = species
 
         # use cuequivariance globally
-        set_use_cueq(use_cueq)
-        if use_cueq and not IS_CUET_AVAILABLE:
-            warnings.warn(
-                "Requested use_cueq=True but cuequivariance is not available; "
-                "falling back to e3nn kernels.",
-                RuntimeWarning,
-            )
+        self._enable_cueq(use_cueq)
 
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions
@@ -117,9 +116,12 @@ class MACE(nn.Module):
                 ]
             ).sort()[0].simplify()
             self.lmax = lmax
-        # MACE prohibits some irreps like 0e, 1e to be used
-        forbidden_ir = ['0o', '1e', '2o', '3e', '4o']
-        self.hidden_irreps = o3.Irreps([irrep for irrep in self.hidden_irreps if str(irrep.ir) not in forbidden_ir])
+        # MACE prohibits some irreps like 0e, 1e to be used; allow opt-out for strict conversions.
+        if filter_forbidden_irreps:
+            forbidden_ir = ['0o', '1e', '2o', '3e', '4o']
+            self.hidden_irreps = o3.Irreps(
+                [irrep for irrep in self.hidden_irreps if str(irrep.ir) not in forbidden_ir]
+            )
         self.num_features = self.hidden_irreps.count(o3.Irrep(0, 1))
 
         if radial_MLP is None:
@@ -150,9 +152,30 @@ class MACE(nn.Module):
             
         self.embeddings = nn.ModuleDict()
         self.embeddings['onehot_embedding'] = OneHotAtomEncoding(num_elements=num_elements, species=species)
+        if species is not None:
+            self.register_buffer(
+                "atomic_numbers",
+                torch.tensor([atomic_numbers[s] for s in species], dtype=torch.long),
+            )
+        else:
+            self.atomic_numbers = None
+        # Resolve distance transform by name for config-friendly usage.
+        if isinstance(distance_transform, str):
+            name = distance_transform.lower()
+            if name in ("none", ""):
+                distance_transform = None
+            elif name == "agnesi":
+                distance_transform = AgnesiTransform()
+            elif name == "soft":
+                distance_transform = SoftTransform()
+            else:
+                raise ValueError(f"Unsupported distance_transform '{distance_transform}'")
+
         self.embeddings['radial_basis'] = RadialBasisEdgeEncoding(
             basis=BesselBasis(cutoff=cutoff, num_basis=num_basis, sqrt_prefactor=True),
             cutoff_fn=PolynomialCutoff(cutoff=cutoff, power=power),
+            distance_transform=distance_transform,
+            atomic_numbers=self.atomic_numbers,
         )
         self.embeddings['sphere_harmonics'] = SphericalHarmonicEdgeAttrs(edge_sh_irreps=self.edge_sh_irreps)
         
@@ -207,18 +230,17 @@ class MACE(nn.Module):
             self.products.append(prod)
 
             # Setup readout function
-            if isinstance(readout, AtomwiseNN):
-                self.readout = readout
-            else:
-                self.readout = readout(num_interactions=num_interactions, hidden_irreps=self.hidden_irreps)
+        self.readout = self._instantiate_readout(
+            readout,
+            heads=self.heads,
+            num_interactions=num_interactions,
+            hidden_irreps=self.hidden_irreps,
+            MLP_irreps=self.MLP_irreps,
+        )
             
     def forward(self, data: properties.Type) -> properties.Type:
         # add mask for local interaction part
-        edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
-        mask = edge_dist < self.cutoff
-        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
-
-        
+        edge_cache = self._apply_cutoff_mask(data, self.cutoff)
         for m in self.embeddings.values():
             data = m(data)
         
@@ -251,6 +273,5 @@ class MACE(nn.Module):
         data = self.readout(data)
 
         # restore neighbor list
-        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx, edge_diff, edge_dist
-        
+        self._restore_cutoff_mask(data, edge_cache)
         return data
