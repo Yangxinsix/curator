@@ -20,7 +20,21 @@ from ._pair_repulsion import ZBLBasis, PairRepulsionEnergy
 from ._symmetric_contraction import Contraction, SymmetricContraction
 from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift, MultiDomainRescaleShift
 from ._strain import Strain
-from ._feature import FeatureExtractor, FeatureCalculator, RandomProjections, normalize_kernel
+from ._feature import (
+    FeatureAggregator,
+    FeatureCalculator,
+    FeatureExtractor,
+    FeatureKernel,
+    FeatureProjector,
+    FeatureStatistics,
+    H5Feature,
+    KMEAggregator,
+    MeanAggregator,
+    RandomProjections,
+    SumAggregator,
+    DistanceMetrics,
+    normalize_kernel,
+)
 from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from .cutoff import CosineCutoff, PolynomialCutoff
 from .nonlinearities import ShiftedSoftPlus
@@ -87,7 +101,16 @@ __all__ = [
     MultiDomainRescaleShift,
     FeatureExtractor,
     FeatureCalculator, 
+    FeatureAggregator,
+    FeatureKernel,
+    FeatureProjector,
+    FeatureStatistics,
+    H5Feature,
+    KMEAggregator,
+    MeanAggregator,
     RandomProjections,
+    SumAggregator,
+    DistanceMetrics,
     normalize_kernel,
     MACEAtomwiseNN,
     AtomwiseNN,
