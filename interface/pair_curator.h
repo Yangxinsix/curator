@@ -17,7 +17,11 @@ PairStyle(curator,PairCurator)
 
 #include "pair.h"
 
+#include <string>
+#include <unordered_map>
+
 #include <torch/torch.h>
+#include <torch/script.h>
 
 namespace LAMMPS_NS {
     

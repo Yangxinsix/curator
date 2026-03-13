@@ -24,6 +24,7 @@ class FeatureStatistics:
         models: List[nn.Module],
         dataset: torch.utils.data.Dataset,
         n_random_features: int=500,
+        target_layer: str='readout_mlp',
         random_projections: Optional[List[RandomProjections]] = None,
         batch_size: int=8,
         device: Optional[str]=None,
@@ -32,8 +33,12 @@ class FeatureStatistics:
         self.models = models
         self.batch_size = batch_size
         self.dataset = dataset
+        self.target_layer = target_layer
         if random_projections is None:
-            self.random_projections = [RandomProjections(model, n_random_features) for model in self.models]
+            self.random_projections = [
+                RandomProjections(model, n_random_features, target_layer=target_layer)
+                for model in self.models
+            ]
         else:
             self.random_projections = random_projections
         self.device = device or next(models[0].parameters()).device
@@ -240,7 +245,7 @@ class FeatureStatistics:
         if cache_key not in self._features_cache:
             global_g = []
             for model, random_proj in zip(self.models, self.random_projections):
-                feature_extractor = FeatureExtractor(model)
+                feature_extractor = FeatureExtractor(model, target_layer=self.target_layer)
                 model_batches = []
                 for b, batch in enumerate(self._iter_batches(dataset)):
                     if self.debug:
@@ -615,11 +620,13 @@ class GeneralActiveLearning:
         kernel = 'full-g',
         selection = 'max_diag',
         n_random_features = 0,
+        target_layer = 'readout_mlp',
         save_features = False,
     ):
         self.kernel = kernel
         self.selection = selection
         self.n_random_features = n_random_features
+        self.target_layer = target_layer
         self.save_features = save_features
     
     def select(
@@ -642,7 +649,14 @@ class GeneralActiveLearning:
                                f' not with {self.selection}!')
         
         stats = {
-            key: FeatureStatistics(models, ds, self.n_random_features, batch_size=batch_size, debug=debug)
+            key: FeatureStatistics(
+                models,
+                ds,
+                self.n_random_features,
+                target_layer=self.target_layer,
+                batch_size=batch_size,
+                debug=debug,
+            )
             for key, ds in datasets.items()
         }
         

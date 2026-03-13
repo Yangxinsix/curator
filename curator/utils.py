@@ -323,6 +323,11 @@ def load_model(
     load_weights_only: bool = False,
     cfg: Optional[DictConfig] = None,
 ) -> torch.nn.Module:
+    if isinstance(model_file, str):
+        from curator.model.adapters import is_external_model_spec, load_external_model
+
+        if is_external_model_spec(model_file):
+            return load_external_model(model_file, device=device)
     return load_trained_model(
         model_file,
         device=device,
@@ -387,6 +392,12 @@ def load_models(
     models: List[torch.nn.Module] = []
     for m in model_like:
         if isinstance(m, (str, Path)):
+            if isinstance(m, str):
+                from curator.model.adapters import is_external_model_spec, load_external_model
+
+                if is_external_model_spec(m):
+                    models.append(load_external_model(m, device=device))
+                    continue
             p = _resolve_path_like(Path(m))
             if p.is_file() and p.suffix in {'.pt', '.pth', '.ckpt'}:
                 models.append(

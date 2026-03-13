@@ -12,6 +12,7 @@ batch_size: 100              # batch size for model inference during selection
 kernel: full-g               # kernel type for feature embedding
 method: lcmd_greedy          # selection strategy
 n_random_features: 500       # random Fourier features for kernel approximation
+target_layer: readout_mlp    # feature layer; use final_layer for MatGL adapters
 save_features: false         # persist computed features to disk
 save_images: false           # save selected structures
 debug: false                 # enable verbose debugging

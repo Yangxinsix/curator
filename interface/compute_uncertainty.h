@@ -7,6 +7,8 @@ ComputeStyle(uncertainty,ComputeUncertainty);
 
 #include "compute.h"
 
+#include <string>
+
 namespace LAMMPS_NS {
 
 class ComputeUncertainty : public Compute {

@@ -6,6 +6,8 @@
 #include "pair_curator.h"
 #include "update.h"
 #include <cstring>
+#include <cstdlib>
+#include <iostream>
 
 using namespace LAMMPS_NS;
 

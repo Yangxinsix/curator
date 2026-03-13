@@ -6,5 +6,10 @@ from .base import (
     LitNNP,
 )
 from .ensemble import EnsembleModel
+from .adapters import (
+    MatGLAdapter,
+    is_external_model_spec,
+    load_external_model,
+)
 
 from . import compat
