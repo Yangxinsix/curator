@@ -945,6 +945,7 @@ def select(config: DictConfig):
         kernels=OmegaConf.select(config, "export_kernels"),
         selection=config.method, 
         n_random_features=config.n_random_features,
+        target_layer=OmegaConf.select(config, "target_layer", default="readout_mlp"),
         batch_size=data_batch_size,
         device=config.device,
         dataset_cutoff=cutoff,
