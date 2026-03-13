@@ -1,0 +1,49 @@
+simulator:
+  _target_: curator.simulate.simulator.MDSimulator
+  init_traj: ./example/LiFePO4.traj
+  out_traj: ./example/simulate/MD_ensemble.traj
+  start_index: -1
+  print_step: 1
+  dump_step: 10
+  max_steps: 50
+  initialize_velocities: true
+  temperature: 298.15
+  variables:
+    - step
+    - temp
+    - epot
+    - ekin
+    - etot
+    - natoms
+  monitor: force_sd
+  calculator:
+    _target_: curator.simulate.calculator.MLCalculator
+    model: ${model_path}
+  dynamics:
+    _target_: ase.md.Langevin
+    _partial_: true
+    timestep: 0.5
+    temperature_K: ${simulator.temperature}
+    friction: 0.1
+  logger:
+    _target_: curator.simulate.logger.MDLogger
+    header: true
+    monitor: ${simulator.monitor}
+    low: 0.05
+    high: 0.5
+    save_path: ./example/simulate/warning_struct_ensemble.traj
+  uncertainty:
+    _target_: curator.simulate.uncertainty.EnsembleUncertainty
+    uncertainty_keys:
+      - force_sd
+      - energy_sd
+
+cfg: null
+seed: 1234
+run_path: ./example/simulate
+model_path:
+  - ./example/train/ensemble/model_1/model_path
+  - ./example/train/ensemble/model_2/model_path
+  - ./example/train/ensemble/model_3/model_path
+device: cpu
+deploy: null

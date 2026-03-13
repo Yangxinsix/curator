@@ -11,34 +11,38 @@ simulator:
     warmup: true
     require_forces: false
     apply_to_neb_images: false
-    device: ${device}
   - _target_: curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty
-    variables: basic_energies
     interval: 1
-    header: true
-    monitor: maha_dist
-    low: null
-    high: null
+    variables: basic_energies
+    monitor: null
+    low: 0.05
+    high: 0.5
+    save_path: warning_struct.traj
+    uncertain_count: null
     uncertainty_backend:
       _target_: curator.simulate.uncertainty.auto.AutoUncertainty
-      calculator: ${model_path}
+      calculator: ${calculator}
       dataset: ${dataset}
-      device: ${device}
-  - _target_: curator.simulate.callbacks.trajectory.TrajectoryWriter
-    path: ${run_path}/trajectory_sys{i}.traj
-    interval: 1
-    per_system: true
+      maha_kwargs:
+        kernel: local-full-g
+        low_threshold: 0.9
+        high_threshold: 0.99
+        max_structures: 128
+      ensemble_kwargs:
+        uncertainty_keys:
+        - force_sd
+        - energy_sd
   - _target_: curator.simulate.callbacks.early_stop.EarlyStop
   _target_: curator.simulate.core.simulator.Simulator
-  init_traj: ../LiFePO4.traj
-  start_index: null
+  init_traj: ../../LiFePO4.traj
+  start_index: 0
   run_kwargs:
     steps: 1000
-cfg: ase.yaml
+cfg: simulate.yaml
 seed: 1234
 run_path: .
-model_path: ../best_model.ckpt
-dataset: null
+model_path: ../../train/model_path/best_model_epoch=119_step=15240_val_total_loss=0.01.ckpt
+dataset: ../../LiFePO4.traj
 device: cuda
 deploy: null
 calculator: ${model_path}
