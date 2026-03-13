@@ -2009,7 +2009,9 @@ def update_model(model):
     if hasattr(new_rep, "readout") and hasattr(new_rep.readout, "domain_modules"):
         remapped = {}
         for k, v in old_state_dict.items():
-            if k.startswith("readout."):
+            if k.startswith("readout.domain_modules."):
+                remapped[k] = v
+            elif k.startswith("readout."):
                 remapped[f"readout.domain_modules.0.{k[len('readout.') :]}"] = v
             else:
                 remapped[k] = v

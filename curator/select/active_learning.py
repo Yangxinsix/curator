@@ -96,7 +96,7 @@ class GeneralActiveLearning:
             representation = getattr(models[0], "representation", None)
             dataset_cutoff = getattr(representation, "cutoff", None)
         self.dataset_cutoff = dataset_cutoff
-        self.transforms = list(transforms) if transforms else None
+        self.transforms = list(transforms) if transforms is not None else []
         self.save_features = Path(save_features) if save_features else None
         self.checkpoint_interval = max(int(checkpoint_interval), 0)
         self.structure_filter = structure_filter
