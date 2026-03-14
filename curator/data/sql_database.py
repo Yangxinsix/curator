@@ -4,6 +4,7 @@ import io
 import os
 import multiprocessing
 import torch
+from typing import Dict
 from curator.data import properties, NeighborListTransform, Asap3NeighborList
 from ase.data import chemical_symbols, atomic_numbers
 from ase import units
@@ -248,13 +249,21 @@ class Sqlite3Dataset(QMDatabase, torch.utils.data.Dataset):
             cutoff = None, 
             compute_neighbor_list = False,
             return_cell_displacements = False,
-            transforms = [],
+            transforms = None,
+            task: str = "sqlite3",
+            weight: float = 1.0,
+            meta: Dict = None,
+            return_atoms_data: bool = True,
             **kwargs,
         ):
         super().__init__(filename, **kwargs)
         self.cutoff = cutoff
         self.compute_neighbor_list = compute_neighbor_list
-        self.transforms = transforms
+        self.transforms = transforms if transforms is not None else []
+        self.task = task
+        self.weight = weight
+        self.meta = meta
+        self.return_atoms_data = return_atoms_data
         if self.compute_neighbor_list:
             assert isinstance(self.cutoff, float), "Cutoff radius must be given when compute the neighbor list"
             if not any([isinstance(t, NeighborListTransform) for t in self.transforms]):
@@ -268,7 +277,13 @@ class Sqlite3Dataset(QMDatabase, torch.utils.data.Dataset):
         # transform
         for t in self.transforms:
             atoms_data = t(atoms_data)
-        return atoms_data
+        if not self.return_atoms_data:
+            return atoms_data
+        meta = None if self.meta is None else dict(self.meta)
+        if meta is not None:
+            meta.setdefault("index", idx)
+        from .atoms_data import atoms_data_from_dict
+        return atoms_data_from_dict(atoms_data, task=self.task, weight=self.weight, meta=meta)
     
     @staticmethod
     def dict_to_torch_tensors(data_dict, default_dtype=torch.float32):

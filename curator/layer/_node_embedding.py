@@ -57,3 +57,11 @@ class OneHotAtomEncoding(torch.nn.Module):
         if self.species is None:
             self.species = _datamodule._get_species()
             self.type_mapper = TypeMapper(self.species)
+
+    def setup_from_datamodule(self, datamodule):
+        return self.datamodule(datamodule)
+
+    def setup_from_context(self, ctx):
+        if self.species is None and ctx.species:
+            self.species = ctx.species
+            self.type_mapper = TypeMapper(self.species)

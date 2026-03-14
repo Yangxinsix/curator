@@ -147,7 +147,12 @@ class RealAgnosticInteractionBlock(Interaction):
             tp_weights,
         ) # [n_edges, irreps]
 
-        node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0) # [n_nodes, irreps]， message
+        out_feat = torch.zeros(
+            (node_feat.shape[0], edge_feat.shape[1]),
+            device=edge_feat.device,
+            dtype=edge_feat.dtype,
+        )
+        node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0, out=out_feat) # [n_nodes, irreps]， message
         node_feat = self.truncate_ghost(node_feat, n_local)
         node_attr = self.truncate_ghost(node_attr, n_local)
 
@@ -162,6 +167,17 @@ class RealAgnosticInteractionBlock(Interaction):
             avg_num_neigh = _datamodule._get_avg_num_neighbors()
             if avg_num_neigh is not None:
                 self.avg_num_neighbors = torch.tensor([avg_num_neigh])
+
+    def setup_from_datamodule(self, datamodule):
+        return self.datamodule(datamodule)
+
+    def setup_from_context(self, ctx):
+        if not self._initialized and ctx.avg_num_neighbors is not None:
+            self.avg_num_neighbors = torch.tensor([ctx.avg_num_neighbors])
+
+    def setup_from_context(self, ctx):
+        if not self._initialized and ctx.avg_num_neighbors is not None:
+            self.avg_num_neighbors = torch.tensor([ctx.avg_num_neighbors])
 
 
 @compile_mode("script")
@@ -251,7 +267,12 @@ class RealAgnosticResidualInteractionBlock(Interaction):
             edge_diff_embedding,
             tp_weights,
         )
-        node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0)
+        out_feat = torch.zeros(
+            (node_feat.shape[0], edge_feat.shape[1]),
+            device=edge_feat.device,
+            dtype=edge_feat.dtype,
+        )
+        node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0, out=out_feat)
         node_feat = self.truncate_ghost(node_feat, n_local)
         node_attr = self.truncate_ghost(node_attr, n_local)
         sc = self.truncate_ghost(sc, n_local)

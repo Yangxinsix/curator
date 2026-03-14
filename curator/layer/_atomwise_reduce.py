@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from typing import Optional, Union, Sequence
+from typing import Optional, Union, Sequence, Literal
 from curator.data import properties
 try:
     from torch_scatter import scatter_add, scatter_mean
@@ -13,7 +13,7 @@ class AtomwiseReduce(nn.Module):
         self,
         output_key: str = "energy",
         per_atom_output: bool = False,
-        aggregation_mode: str = "sum",     # should be sum or mean
+        aggregation_mode: Literal["sum", "mean"] = "sum",     # should be sum or mean
     ) -> None:
         super().__init__()
         self.model_outputs = [output_key]

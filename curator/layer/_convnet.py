@@ -28,7 +28,7 @@ class ConvNetLayer(Interaction):
         invariant_neurons: int=8,
         avg_num_neighbors: Optional[float]=None,
         use_sc: bool=True,
-        nonlinearity_scalars: Dict[int, Callable] = {"e": "ssp"},
+        nonlinearity_scalars: Optional[Dict[int, Callable]] = None,
     ) -> None:
         """
         Convolution Block.
@@ -43,6 +43,8 @@ class ConvNetLayer(Interaction):
         :param use_sc: bool, use self-connection or not
         """
         super().__init__()
+        if nonlinearity_scalars is None:
+            nonlinearity_scalars = {"e": "ssp"}
 
         if avg_num_neighbors is not None:
             self._initialized = True
@@ -165,7 +167,12 @@ class ConvNetLayer(Interaction):
         edge_features = self.tp(
             node_feat[edge_idx[:, 1]], edge_diff_embedding, weight
         )
-        node_feat = scatter_add(edge_features, edge_idx[:, 0], dim=0)
+        out_feat = torch.zeros(
+            (node_feat.shape[0], edge_features.shape[1]),
+            device=edge_features.device,
+            dtype=edge_features.dtype,
+        )
+        node_feat = scatter_add(edge_features, edge_idx[:, 0], dim=0, out=out_feat)
 
         node_feat = self.truncate_ghost(node_feat, n_local)
         # Necessary to get TorchScript to be able to type infer when its not None
@@ -186,3 +193,10 @@ class ConvNetLayer(Interaction):
             avg_num_neigh = _datamodule._get_avg_num_neighbors()
             if avg_num_neigh is not None:
                 self.avg_num_neighbors = torch.tensor([avg_num_neigh])
+
+    def setup_from_datamodule(self, datamodule):
+        return self.datamodule(datamodule)
+
+    def setup_from_context(self, ctx):
+        if not self._initialized and ctx.avg_num_neighbors is not None:
+            self.avg_num_neighbors = torch.tensor([ctx.avg_num_neighbors])

@@ -80,8 +80,18 @@ class PainnMessage(Interaction):
         message_vector = (message_vector + edge_vector).reshape(-1, self.num_features * 3)
         
         # sum message
-        residual_scalar = scatter_add(message_scalar, edge_idx[:, 0], dim=0)
-        residual_vector = scatter_add(message_vector, edge_idx[:, 0], dim=0)
+        out_scalar = torch.zeros(
+            (node_scalar.shape[0], message_scalar.shape[1]),
+            device=message_scalar.device,
+            dtype=message_scalar.dtype,
+        )
+        out_vector = torch.zeros(
+            (node_vector.shape[0], message_vector.shape[1]),
+            device=message_vector.device,
+            dtype=message_vector.dtype,
+        )
+        residual_scalar = scatter_add(message_scalar, edge_idx[:, 0], dim=0, out=out_scalar)
+        residual_vector = scatter_add(message_vector, edge_idx[:, 0], dim=0, out=out_vector)
         
         # new node state
         residual_node_feat = torch.cat([residual_scalar, residual_vector], dim=-1)

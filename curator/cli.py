@@ -1,8 +1,5 @@
-# General modules for all tasks
-from hydra.utils import instantiate
 import hydra
-from hydra import compose, initialize
-from omegaconf import DictConfig, OmegaConf, open_dict
+from omegaconf import DictConfig, OmegaConf
 import sys, os, json
 from pathlib import Path
 import argparse
@@ -11,25 +8,10 @@ try:
 except ImportError:  # pragma: no cover
     argcomplete = None
 
-import pytorch_lightning.callbacks
-import pytorch_lightning.loggers
-from .utils import (
-    read_user_config,
-    CustomFormatter,
-    register_resolvers,
-    find_best_model,
-    load_models,
-    upgrade_checkpoint,
-    convert_mace_to_curator,
-    normalize_config_sequences,
-    prune_config_targets,
-)
 import logging
 import socket
 import contextlib
 from typing import Optional, Union, Dict, List
-from pytorch_lightning import seed_everything
-from curator.simulate.sim_logging import log_simulation_summary
 
 # very ugly solution for solving pytorch lighting and myqueue conflictions
 if "SLURM_NTASKS" in os.environ:
@@ -41,9 +23,46 @@ if "SLURM_JOB_NAME" in os.environ:
 log = logging.getLogger('curator')
 log.setLevel(logging.DEBUG)
 
-# register omegaconf resolvers
-register_resolvers()
+class _ConsoleProgressFilter(logging.Filter):
+    def filter(self, record: logging.LogRecord) -> bool:
+        return not getattr(record, "progress", False)
 
+def _configure_cli_logger(
+    logger: logging.Logger,
+    log_path: str,
+    formatter: logging.Formatter,
+    stream: bool = True,
+) -> None:
+    log_path = os.path.abspath(log_path)
+    for handler in list(logger.handlers):
+        if isinstance(handler, logging.StreamHandler) and getattr(handler, "stream", None) in (sys.stdout, sys.stderr):
+            logger.removeHandler(handler)
+    if not any(
+        isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", None) == log_path
+        for h in logger.handlers
+    ):
+        fh = logging.FileHandler(log_path, mode="w")
+        fh.setFormatter(formatter)
+        fh.setLevel(logging.DEBUG)
+        logger.addHandler(fh)
+    if stream:
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(formatter)
+        sh.addFilter(_ConsoleProgressFilter())
+        logger.addHandler(sh)
+    logger.propagate = False
+
+_resolvers_registered = False
+
+
+def _ensure_resolvers():
+    global _resolvers_registered
+    if _resolvers_registered:
+        return
+    from .utils import register_resolvers
+
+    register_resolvers()
+    _resolvers_registered = True
 
 # Trainining with Pytorch Lightning (only with weights and biasses)
 @hydra.main(config_path="configs", config_name="train", version_base=None)
@@ -56,19 +75,30 @@ def train(config: DictConfig) -> None:
         None
 
     """
+    _ensure_resolvers()
+    from hydra.utils import instantiate
     import torch
-    import pytorch_lightning
-    from pytorch_lightning import (
-    LightningDataModule, 
-    Trainer,
+    from pytorch_lightning.loggers import WandbLogger
+    from pytorch_lightning import seed_everything
+    from curator.model import LitNNP, NeuralNetworkPotential
+    from .utils import (
+        read_user_config,
+        CustomFormatter,
+        find_best_model,
+        normalize_config_sequences,
+        prune_config_targets,
+        update_config_from_datamodule,
+        log_logo,
+        update_model_domains,
     )
-    from curator.model import LitNNP
-    from e3nn.util.jit import script
 
-    # set up logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "training.log"), mode="w")
-    fh.setFormatter(CustomFormatter())
-    log.addHandler(fh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "training.log"),
+        CustomFormatter(),
+        stream=True,
+    )
+    log_logo(log)
     
     # Load the arguments 
     if config.cfg is not None:
@@ -76,13 +106,18 @@ def train(config: DictConfig) -> None:
 
     normalize_config_sequences(config)
     prune_config_targets(config, logger=log)
-    prune_config_targets(config, logger=log)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     log.debug("Running on host: " + str(socket.gethostname()))
     
     # Set up seed
+    if hasattr(config, "trainer") and getattr(config.trainer, "accelerator", None) == "cpu":
+        try:
+            torch.cuda.is_available = lambda: False  # avoid CUDA init on CPU-only runs
+            torch.cuda.device_count = lambda: 0
+        except Exception:
+            pass
     if "seed" in config:
         log.debug(f"Seed with <{config.seed}>")
         seed_everything(config.seed, workers=True)
@@ -91,13 +126,33 @@ def train(config: DictConfig) -> None:
     
     # Initiate the datamodule
     log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_path}")
-    datamodule: LightningDataModule = hydra.utils.instantiate(config.data)
+    datamodule = instantiate(config.data)
     datamodule.setup()
     # something must be inferred from data before instantiating the model
-    if datamodule.species == 'auto':
-        config.data.species = datamodule._get_species()
+    update_config_from_datamodule(config, datamodule, logger=log)
 
-    model = hydra.utils.instantiate(config.model)
+    # Extend or replace domains
+    domain_mode = getattr(config.task, "domain_mode", None)
+    new_domains = getattr(config.task, "new_domains", None)
+    if domain_mode is None and config.model_path is not None:
+        if hasattr(datamodule, "domain_modules") and len(datamodule.domain_modules) > 1:
+            domain_mode = "extend"
+            config.task.domain_mode = domain_mode
+            log.debug("Auto-set domain_mode=extend for multi-domain fine-tune.")
+    if domain_mode in ("extend", "replace") and new_domains is None:
+        if hasattr(datamodule, "domain_modules") and hasattr(datamodule, "domain_to_id"):
+            inferred = []
+            for name in datamodule.domain_modules.keys():
+                if str(name).lower().startswith("replay"):
+                    continue
+                dom_id = datamodule.domain_to_id.get(name)
+                if dom_id is not None:
+                    inferred.append(str(dom_id))
+            if inferred:
+                new_domains = inferred
+                config.task.new_domains = inferred
+                log.debug("Inferred new_domains from datapath (excluding replay): %s", inferred)
+
     resume_ckpt = None
     checkpoint_outputs = None
 
@@ -106,19 +161,55 @@ def train(config: DictConfig) -> None:
         log.debug(f"Loading trained model from {config.model_path}")
         if config.task.load_entire_model:
             state_dict = torch.load(config.model_path)
-            model = state_dict['model']
-            checkpoint_outputs = state_dict.get('outputs')
-        elif config.task.load_weights_only:
-            from collections import OrderedDict
-            state_dict = torch.load(config.model_path)
-            new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in state_dict['state_dict'].items())
-            model.load_state_dict(new_state_dict, strict=False)
+            if isinstance(state_dict, torch.nn.Module):
+                model = state_dict
+                checkpoint_outputs = getattr(state_dict, "outputs", None)
+            else:
+                model = state_dict['model']
+                checkpoint_outputs = state_dict.get('outputs')
+            if not isinstance(model, NeuralNetworkPotential):
+                raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
         else:
-            resume_ckpt = config.model_path
-            log.debug(
-                "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
-                resume_ckpt,
-            )
+            model = instantiate(config.model)
+            if config.task.load_weights_only:
+                from collections import OrderedDict
+                state_dict = torch.load(config.model_path)
+                if isinstance(state_dict, torch.nn.Module):
+                    state_dict = {"state_dict": state_dict.state_dict()}
+                new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in state_dict['state_dict'].items())
+                model.load_state_dict(new_state_dict, strict=False)
+            else:
+                resume_ckpt = config.model_path
+                log.debug(
+                    "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
+                    resume_ckpt,
+                )
+    else:
+        model = instantiate(config.model)
+
+    init_from = getattr(config.task, "init_new_domains_from", None)
+    if domain_mode in ("extend", "replace") and new_domains is not None:
+        init_strategy = "copy" if init_from is not None else "random"
+        updated = update_model_domains(
+            model,
+            new_domains,
+            mode=domain_mode,
+            template_domain=init_from or "0",
+            init_strategy=init_strategy,
+            logger=log,
+        )
+        log.debug("Updated model domains: mode=%s new_domains=%s updated=%s", domain_mode, new_domains, updated)
+
+    # Casting model dtype to data dtype
+    target_dtype = None
+    if hasattr(datamodule, "default_dtype"):
+        target_dtype = datamodule.default_dtype
+    elif hasattr(datamodule, "domain_modules") and datamodule.domain_modules:
+        first_dm = next(iter(datamodule.domain_modules.values()))
+        target_dtype = getattr(first_dm, "default_dtype", None)
+    if target_dtype is not None:
+        model = model.to(dtype=target_dtype)
+        log.debug("Casting model dtype to data dtype %s", target_dtype)
 
     if config.compile:
         log.debug("Compiling model with torch.compile")
@@ -138,11 +229,11 @@ def train(config: DictConfig) -> None:
     
     # Initiate the training
     log.debug(f"Instantiating trainer <{config.trainer._target_}>")
-    trainer: Trainer = hydra.utils.instantiate(config.trainer)
+    trainer = instantiate(config.trainer)
     # log.debug(f"Trainer callbacks: {str(callback for callback in trainer.callbacks)}")
     
     # wandb bug!!
-    if isinstance(trainer.logger, pytorch_lightning.loggers.WandbLogger):
+    if isinstance(trainer.logger, WandbLogger):
         os.makedirs(trainer.logger.save_dir + '/wandb', exist_ok=True)
 
     # Train the model
@@ -170,10 +261,14 @@ def tmp_train(config: DictConfig):
         None
     
     """
+    _ensure_resolvers()
     import torch
+    from hydra.utils import instantiate
     from e3nn.util.jit import script
     from torch_ema import ExponentialMovingAverage
+    from pytorch_lightning import seed_everything
     from .utils import EarlyStopping
+    from .utils import read_user_config, normalize_config_sequences, CustomFormatter
     from curator.train import train
 
     # Load the arguments
@@ -193,11 +288,12 @@ def tmp_train(config: DictConfig):
     else:
         log.debug("Seed randomly...")
     
-    # Setup the logger
-    # set up logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "training.log"), mode="w")
-    fh.setFormatter(CustomFormatter())
-    log.addHandler(fh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "training.log"),
+        CustomFormatter(),
+        stream=True,
+    )
     
     # Set up datamodule and load training and validation set
     # Initiate the datamodule
@@ -355,6 +451,7 @@ def _convert_parse_args(argv: Optional[List[str]] = None):
 
 def convert_main(argv: Optional[List[str]] = None):
     args = _convert_parse_args(argv)
+    from .utils import upgrade_checkpoint, convert_mace_to_curator
 
     device = args.device
     target = None
@@ -465,10 +562,12 @@ def deploy(
         None
     
     """
+    _ensure_resolvers()
     import torch
     from e3nn.util.jit import script
     from curator.model import EnsembleModel
     from curator.layer.utils import find_layer_by_name_recursive
+    from .utils import read_user_config, normalize_config_sequences, load_models
 
     cfg = None
     if cfg_path is not None:
@@ -508,23 +607,42 @@ def deploy(
 
 @hydra.main(config_path="configs", config_name="evaluate", version_base=None)
 def evaluate(config: DictConfig):
+    _ensure_resolvers()
+    from hydra.utils import instantiate
+    from .utils import read_user_config, prune_config_targets, load_models
     from curator.model import EnsembleModel
     from curator.simulate import MLCalculator
+    import torch
 
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="evaluate")
     prune_config_targets(config, logger=log)
+    if config.model_path is None or config.datapath is None:
+        raise RuntimeError("Both model_path and datapath are required for evaluation.")
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
 
-    # set logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "predict.log"), mode="w")
-    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
-    fh.setLevel(logging.DEBUG)
-    log.addHandler(fh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "predict.log"),
+        logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"),
+        stream=True,
+    )
     log.debug("Running on host: " + str(socket.gethostname()))
+    log.info("Evaluating datapath=%s", config.datapath)
+    log.info("Evaluating model_path=%s", config.model_path)
+    if isinstance(config.device, str) and config.device.startswith("cuda"):
+        try:
+            cuda_ok = torch.cuda.is_available()
+        except Exception:
+            log.warning("CUDA check failed; falling back to CPU.")
+            config.device = "cpu"
+        else:
+            if not cuda_ok:
+                log.warning("CUDA not available; falling back to CPU.")
+                config.device = "cpu"
 
     # Load model. Uses a compiled model, if any, otherwise a uncompiled model
     log.debug("Using model from <{}>".format(config.model_path))
@@ -541,6 +659,152 @@ def evaluate(config: DictConfig):
     evaluator = instantiate(config.evaluator, model=model)
     evaluator.evaluate(config.datapath)
 
+
+def evaluate_main(argv: Optional[List[str]] = None):
+    def _is_hydra_args(args: List[str]) -> bool:
+        for arg in args:
+            if not arg:
+                continue
+            if arg.startswith(("+", "~")):
+                return True
+            if "=" in arg and not arg.startswith("-"):
+                return True
+        return False
+
+    def _normalize_device(device: Optional[str]) -> Optional[str]:
+        if device is None:
+            return None
+        if not isinstance(device, str):
+            return device
+        if not device.startswith("cuda"):
+            return device
+        import torch
+        try:
+            cuda_ok = torch.cuda.is_available()
+        except Exception:
+            log.warning("CUDA check failed; falling back to CPU.")
+            return "cpu"
+        if not cuda_ok:
+            log.warning("CUDA not available; falling back to CPU.")
+            return "cpu"
+        return device
+
+    def _parse_args(args: Optional[List[str]] = None):
+        parser = argparse.ArgumentParser(
+            description="Evaluate a Curator model on a dataset",
+            fromfile_prefix_chars="+",
+        )
+        parser.add_argument(
+            "dataset",
+            nargs="?",
+            help="Dataset path (extxyz/xyz/traj); optional if --data is set",
+        )
+        parser.add_argument(
+            "model",
+            nargs="?",
+            help="Model checkpoint/run directory; optional if --model is set",
+        )
+        parser.add_argument(
+            "-d",
+            "--data",
+            dest="datapath",
+            nargs="+",
+            help="Dataset path(s)",
+        )
+        parser.add_argument(
+            "-m",
+            "--model",
+            dest="model_path",
+            nargs="+",
+            help="Model checkpoint or run directory path(s)",
+        )
+        parser.add_argument(
+            "--device",
+            type=str,
+            default="cuda",
+            help="Device for evaluation (default: cuda)",
+        )
+        parser.add_argument(
+            "--out",
+            type=str,
+            default="evaluate",
+            help="Base output directory (default: ./evaluate)",
+        )
+        parser.add_argument(
+            "--no-plot",
+            action="store_true",
+            help="Disable plotting",
+        )
+        parser.add_argument(
+            "--save-data",
+            action="store_true",
+            help="Save raw predictions/targets to results.npz",
+        )
+        parser.add_argument(
+            "--batch-size",
+            type=int,
+            default=8,
+            help="Batch size for evaluation (default: 8)",
+        )
+        parser.add_argument(
+            "--num-workers",
+            type=int,
+            default=0,
+            help="DataLoader workers (default: 0)",
+        )
+        parser.add_argument(
+            "--pin-memory",
+            action="store_true",
+            help="Enable DataLoader pin_memory",
+        )
+        if argcomplete:
+            argcomplete.autocomplete(parser)
+        return parser.parse_args(args)
+
+    if argv is None:
+        argv = sys.argv[1:]
+    if _is_hydra_args(argv):
+        return evaluate()
+    args = _parse_args(argv)
+
+    _ensure_resolvers()
+    from curator.simulate.evaluator import Evaluator
+    from curator.model import EnsembleModel
+    from .utils import load_models
+
+    datapath = args.datapath or args.dataset
+    model_path = args.model_path or args.model
+
+    if datapath is None or model_path is None:
+        raise RuntimeError("Both dataset and model are required for evaluation.")
+
+    out_base = Path(args.out)
+    out_base.mkdir(parents=True, exist_ok=True)
+    _configure_cli_logger(
+        log,
+        os.path.join(str(out_base), "predict.log"),
+        logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"),
+        stream=True,
+    )
+    log.info("Evaluating datapath=%s", datapath)
+    log.info("Evaluating model_path=%s", model_path)
+    device = _normalize_device(args.device) or args.device
+
+    models = load_models(model_path, device=device)
+    model = EnsembleModel(models) if len(models) > 1 else models[0]
+
+    evaluator = Evaluator(
+        model=model,
+        save_data=args.save_data,
+        plot_figure=not args.no_plot,
+        output_dir=args.out,
+        device=device,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        pin_memory=args.pin_memory,
+    )
+    evaluator.evaluate(datapath)
+
 # Simulate with the model
 @hydra.main(config_path="configs", config_name="simulate", version_base=None)
 def simulate(config: DictConfig):
@@ -551,6 +815,11 @@ def simulate(config: DictConfig):
     Returns:
         None
     """
+    _ensure_resolvers()
+    from hydra.utils import instantiate
+    from pytorch_lightning import seed_everything
+    from .utils import read_user_config, normalize_config_sequences, prune_config_targets, log_logo, CustomFormatter
+    from curator.simulate.sim_logging import log_simulation_summary
     from curator.model import EnsembleModel
     from curator.simulate import MLCalculator
 
@@ -561,22 +830,16 @@ def simulate(config: DictConfig):
         normalize_config_sequences(config)
         prune_config_targets(config, logger=log)
     
-    # Ensure run_path exists before writing any artifacts
-    Path(config.run_path).mkdir(parents=True, exist_ok=True)
-
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     
-    # set logger
-    # set up logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "simulation.log"), mode="w")
-    fh.setFormatter(CustomFormatter())
-    log.addHandler(fh)
-    # mirror to stdout for live feedback
-    if not any(isinstance(h, logging.StreamHandler) and getattr(h, "stream", None) is sys.stdout for h in log.handlers):
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setFormatter(CustomFormatter())
-        log.addHandler(sh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "simulation.log"),
+        CustomFormatter(),
+        stream=True,
+    )
+    log_logo(log)
 
     # Brief simulation summary for easier debugging
     log.debug("Running on host: " + str(socket.gethostname()))
@@ -602,26 +865,24 @@ def select(config: DictConfig):
     Returns:
         None
     """
-    from curator.data import read_trajectory
-    import torch
-    from ase.io import read, Trajectory
+    _ensure_resolvers()
+    from hydra.utils import instantiate
+    from pytorch_lightning import seed_everything
     from omegaconf import OmegaConf
     from curator.select import GeneralActiveLearning
-    import json
-    from curator.data import AseDataset
+    from .utils import read_user_config, load_models, log_logo
 
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="select")
-    
-    prune_config_targets(config, logger=log)
 
-    # set up logger
-    # set logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "selection.log"), mode="w")
-    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
-    fh.setLevel(logging.DEBUG)
-    log.addHandler(fh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "selection.log"),
+        logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"),
+        stream=True,
+    )
+    log_logo(log)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -634,66 +895,81 @@ def select(config: DictConfig):
     else:
         log.debug("Seed randomly...")
     
-    # Set up datamodule and load training and validation set
-    # The active learning only works for uncompiled model at the moment
+    # Load model and datasets
     log.debug("Using model from <{}>".format(config.model_path))
     models = load_models(config.model_path, config.device, load_compiled=False)
     cutoff = models[0].representation.cutoff
 
-    # Load the pool data set and training data set
-    if config.dataset and config.split_file:
-        dataset = AseDataset(read_trajectory(config.dataset), cutoff=cutoff, transforms=instantiate(config.transforms))
-        with open(config.split_file) as f:
-            split = json.load(f)
-        data_dict = {}
-        for k in split:
-            data_dict[k] = torch.utils.data.Subset(dataset, split[k])
+    transforms = instantiate(config.transforms) if config.transforms else []
+    pool_source = None
+    if config.data_url is not None:
+        if isinstance(config.data_url, str):
+            pool_source = config.data_url
+        else:
+            data_url = dict(config.data_url)
+            if "url" not in data_url:
+                raise RuntimeError("data_url must include a 'url' field.")
+            pool_source = data_url["url"]
+            if len(data_url) > 1:
+                log.warning("data_url options are ignored; use pool_set with a URL string instead.")
     elif config.pool_set:
-        data_dict = {'pool': AseDataset(read_trajectory(config.pool_set), cutoff=cutoff, transforms=instantiate(config.transforms))}
-        if config.train_set:
-            data_dict["train"] = AseDataset(read_trajectory(config.train_set), cutoff=cutoff, transforms=instantiate(config.transforms))
-    else:
-        raise RuntimeError("Please give valid pool data set for selection!")
+        pool_source = config.pool_set
+    if pool_source is None:
+        raise RuntimeError("pool_set or data_url is required for selection.")
 
-
-    # Check the size of pool data set
-    if len(data_dict['pool']) < config.batch_size * 10: 
-            log.warning(f"The pool data set ({len(data_dict['pool'])}) is not large enough for selection! " 
-                + f"It should be larger than 10 times batch size ({config.batch_size*10}). "
-                + "Check your simulation!")
-    elif len(data_dict['pool']) < config.batch_size:
-        raise RuntimeError(f"""The pool data set ({len(data_dict['pool'])}) is not large enough for selection! Add more data or change batch size {config.batch_size}.""")
+    select_batch_size = OmegaConf.select(config, "select_batch_size") or OmegaConf.select(config, "batch_size") or 100
+    data_batch_size = OmegaConf.select(config, "data_batch_size") or select_batch_size
+    save_features = None
+    if config.save_features:
+        if isinstance(config.save_features, str):
+            save_features = config.save_features
+        else:
+            save_features = os.path.join(config.run_path, "features.h5")
+    save_selected_features = None
+    if getattr(config, "save_selected_features", None):
+        if isinstance(config.save_selected_features, str):
+            save_selected_features = config.save_selected_features
+        else:
+            save_selected_features = os.path.join(config.run_path, "selected_features.h5")
+    save_images = None
+    if config.save_images:
+        if isinstance(config.save_images, str):
+            save_images = config.save_images
+        else:
+            save_images = os.path.join(config.run_path, "selected.traj")
 
     # Select structures based on the active learning method
     al = GeneralActiveLearning(
+        models=models,
         kernel=config.kernel, 
+        kernels=OmegaConf.select(config, "export_kernels"),
         selection=config.method, 
         n_random_features=config.n_random_features,
-        save_features=config.save_features,
+        target_layer=OmegaConf.select(config, "target_layer", default="readout_mlp"),
+        batch_size=data_batch_size,
+        device=config.device,
+        dataset_cutoff=cutoff,
+        transforms=transforms,
+        save_features=save_features,
+        target_domain=OmegaConf.select(config, "target_domain"),
     )
-    indices = al.select(models, data_dict, al_batch_size=config.batch_size, debug=config.debug)
+    save_json = os.path.join(config.run_path, "selected.json")
+    indices = al.select(
+        pool_set=pool_source,
+        train_set=config.train_set,
+        select_batch_size=select_batch_size,
+        save_json=save_json,
+        save_images=save_images,
+        save_selected_features=save_selected_features,
+        normalize_features=OmegaConf.select(config, "export_normalized_features", default=True),
+        compute_features_only=bool(OmegaConf.select(config, "compute_features_only", default=False)),
+    )
 
-    # Save the selected indices
-    datapath = config.dataset if config.dataset and config.split_file else config.pool_set
-    datapath = datapath if isinstance(datapath, str) else list(datapath)
-    al_info = {
-        'kernel': config.kernel,
-        'selection': config.method,
-        'dataset': datapath,
-        'selected': indices,
-    }
-    with open(config.run_path+'/selected.json', 'w') as f:
-        json.dump(al_info, f)
-    
-    log.debug(f"Active learning selection completed! Check {os.path.abspath(config.run_path+'/selected.json')} for selected structures!")
-    if config.save_images:
-        pool_set = read_trajectory(config.pool_set)
-        selected_images = [pool_set[i] for i in indices]
-        save_path = config.save_images if isinstance(config.save_images, str) else os.path.join(config.run_path, 'selected.traj')
-        with Trajectory(config.save_images if isinstance(config.save_images, str) else 'selected.traj', 'w') as traj:
-            for atoms in selected_images:
-                traj.write(atoms)
-        log.debug(f"Saving selected images into {save_path}.")
+    log.debug(
+        "Active learning selection completed! Check %s for %d selected structures!",
+        os.path.abspath(save_json),
+        len(indices),
+    )
 
 # Label the dataset selected by active learning
 @hydra.main(config_path="configs", config_name="label", version_base=None)   
@@ -705,6 +981,9 @@ def label(config: DictConfig):
     Returns:
         None
     """
+    _ensure_resolvers()
+    from hydra.utils import instantiate
+    from .utils import read_user_config, log_logo
     from curator.data import read_trajectory
     from ase.db import connect
     from ase.io import Trajectory
@@ -717,12 +996,13 @@ def label(config: DictConfig):
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="label")
 
-    # set up logger
-    # set logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "labelling.log"), mode="w")
-    fh.setFormatter(logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"))
-    fh.setLevel(logging.DEBUG)
-    log.addHandler(fh)
+    _configure_cli_logger(
+        log,
+        os.path.join(config.run_path, "labelling.log"),
+        logging.Formatter("%(asctime)s - %(levelname)7s - %(message)s"),
+        stream=True,
+    )
+    log_logo(log)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)

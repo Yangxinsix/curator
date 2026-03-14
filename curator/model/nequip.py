@@ -16,13 +16,14 @@ from curator.layer import (
     SphericalHarmonicEdgeAttrs,
     InteractionLayer,
 )
-from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE, set_use_cueq
+from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
+from curator.model.base import Representation
 
 from typing import OrderedDict, Dict, List, Optional, Union, Callable, Type
 from functools import partial
 
 from e3nn.util.jit import compile_mode
-class Nequip(torch.nn.Module):
+class Nequip(Representation):
     """Nequip model."""
     def __init__(
         self,
@@ -41,11 +42,12 @@ class Nequip(torch.nn.Module):
         # parameters for interaction blocks and convnet
         resnet: bool = False,
         nonlinearity_type: str = "gate",
-        nonlinearity_scalars: Dict[int, Callable] = {"e": "ssp", "o": "tanh"},
-        nonlinearity_gates: Dict[int, Callable] = {"e": "ssp", "o": "abs"},
-        convolution_kwargs: dict = {},
+        nonlinearity_scalars: Optional[Dict[int, Callable]] = None,
+        nonlinearity_gates: Optional[Dict[int, Callable]] = None,
+        convolution_kwargs: Optional[dict] = None,
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
         use_cueq: bool = False,
+        heads: Optional[list] = None,
         **kwargs,
     ) -> None:
         """Nequip model.
@@ -70,20 +72,20 @@ class Nequip(torch.nn.Module):
             nonlinearity_gates (Dict[int, Callable], optional): Nonlinearity for gates. Defaults to {"e": "ssp", "o": "abs"}.
             convolution_kwargs (dict, optional): Convolution kwargs. Defaults to {}.
         """
-        super().__init__()
+        super().__init__(heads=heads)
         self.cutoff = cutoff
         self.num_features = num_features
         self.lmax = lmax
         self.parity = parity
         self.species = species
         
-        set_use_cueq(use_cueq)
-        if use_cueq and not IS_CUET_AVAILABLE:
-            warnings.warn(
-                "Requested use_cueq=True but cuequivariance is not available; "
-                "falling back to e3nn kernels.",
-                RuntimeWarning,
-            )
+        self._enable_cueq(use_cueq)
+
+        if nonlinearity_scalars is None:
+            nonlinearity_scalars = {"e": "ssp", "o": "tanh"}
+        if nonlinearity_gates is None:
+            nonlinearity_gates = {"e": "ssp", "o": "abs"}
+        convolution_kwargs = {} if convolution_kwargs is None else dict(convolution_kwargs)
         
         if num_elements is None:
             num_elements = len(species) if species is not None else 119
@@ -158,17 +160,16 @@ class Nequip(torch.nn.Module):
             self.irreps_in.update(interaction.irreps_out)
         
         # Setup readout function
-        if isinstance(readout, AtomwiseNN):
-            self.readout = readout
-        else:
-            self.readout = readout(self.irreps_in[properties.node_feat], use_e3nn=True)
+        self.readout = self._instantiate_readout(
+            readout,
+            heads=self.heads,
+            in_features=self.irreps_in[properties.node_feat],
+            use_e3nn=True,
+        )
         
     def forward(self, data: properties.Type) -> properties.Type:
         # add mask for local interaction part
-        edge_idx, edge_diff, edge_dist = data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist]
-        mask = edge_dist < self.cutoff
-        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
-
+        edge_cache = self._apply_cutoff_mask(data, self.cutoff)
         for m in self.embeddings.values():
             data = m(data)
         
@@ -187,7 +188,5 @@ class Nequip(torch.nn.Module):
         data[properties.node_feat] = node_feat
         data = self.readout(data)
 
-        # restore neighbor list
-        data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx, edge_diff, edge_dist
-        
+        self._restore_cutoff_mask(data, edge_cache)
         return data
