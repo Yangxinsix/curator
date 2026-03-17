@@ -194,14 +194,19 @@ void PairCurator::compute(int eflag, int vflag){
 
   int nlocal = atom->nlocal;
   int nall = atom->nlocal + atom->nghost;
+  tagint *tag = atom->tag;
+  constexpr double zero_tol = 1e-20;
+  std::unordered_map<tagint, int> owned_index_by_tag;
+  owned_index_by_tag.reserve(nlocal);
+  for (int i = 0; i < nlocal; i++) owned_index_by_tag[tag[i]] = i;
 
   // Total number of bonds (sum of number of neighbors)
   int nedges = std::accumulate(list->numneigh, list->numneigh + list->inum, 0);
   torch::Tensor atomic_numbers_tensor =
-      torch::zeros({nall}, torch::TensorOptions().dtype(torch::kInt64));
+      torch::zeros({nlocal}, torch::TensorOptions().dtype(torch::kInt64));
   auto atomic_numbers = atomic_numbers_tensor.accessor<long, 1>();
 
-  for (int i = 0; i < nall; i++) {
+  for (int i = 0; i < nlocal; i++) {
     int itype = atom->type[i];  // type is 1-based
     atomic_numbers[i] = type_mapper[itype];
   }
@@ -213,8 +218,12 @@ void PairCurator::compute(int eflag, int vflag){
   std::vector<int64_t> edges(2 * nedges);
   std::vector<double> edge_diff(3 * nedges);
   int edge_counter = 0;
+  int skipped_zero_edges = 0;
+  int skipped_self_image_edges = 0;
+  int missing_owned_tag_edges = 0;
   if (debug_mode) {
-    std::cout << "num_atoms = " << nall << std::endl;
+    std::cout << "num_atoms = " << nlocal << std::endl;
+    std::cout << "num_lammps_atoms = " << nall << std::endl;
     std::cout << "nedges = " << nedges << std::endl;
     std::cout << "elems = " << atomic_numbers_tensor << std::endl;
   }
@@ -231,12 +240,20 @@ void PairCurator::compute(int eflag, int vflag){
       double dx = x[j][0] - x[i][0];
       double dy = x[j][1] - x[i][1];
       double dz = x[j][2] - x[i][2];
-
-      domain->minimum_image(FLERR, dx, dy, dz);
       double rsq = dx*dx + dy*dy + dz*dz;
+      if (rsq <= zero_tol) {
+          skipped_zero_edges++;
+          if (tag != nullptr && tag[i] == tag[j]) skipped_self_image_edges++;
+          continue;
+      }
       if (rsq < cutoff*cutoff){
+          auto owned_j = owned_index_by_tag.find(tag[j]);
+          if (owned_j == owned_index_by_tag.end()) {
+              missing_owned_tag_edges++;
+              continue;
+          }
           edges[2 * edge_counter] = i;
-          edges[2 * edge_counter + 1] = j;
+          edges[2 * edge_counter + 1] = owned_j->second;
           edge_diff[3 * edge_counter] = dx;
           edge_diff[3 * edge_counter + 1] = dy;
           edge_diff[3 * edge_counter + 2] = dz;
@@ -250,6 +267,13 @@ void PairCurator::compute(int eflag, int vflag){
       }
     }
   }
+  if (debug_mode) {
+    std::cout << "skipped_zero_edges = " << skipped_zero_edges << std::endl;
+    std::cout << "skipped_self_image_edges = " << skipped_self_image_edges << std::endl;
+    std::cout << "missing_owned_tag_edges = " << missing_owned_tag_edges << std::endl;
+  }
+  if (missing_owned_tag_edges > 0)
+    error->all(FLERR, "Pair style curator found ghost neighbors whose tags are not owned locally; current pair_curator graph export only supports local-owned node indexing");
   if (debug_mode) printf("end curator edges\n");
 
   // shorten the list before sending to nequip
@@ -268,7 +292,7 @@ void PairCurator::compute(int eflag, int vflag){
  
   // define curator n_atoms input
   torch::Tensor n_atoms_tensor = torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64));
-  n_atoms_tensor[0] = nall;
+  n_atoms_tensor[0] = nlocal;
   torch::Tensor n_pairs_tensor = torch::zeros({1}, torch::TensorOptions().dtype(torch::kInt64));
   n_pairs_tensor[0] = edge_counter;
 
@@ -304,8 +328,11 @@ void PairCurator::compute(int eflag, int vflag){
   // get virial
   auto it = output.find("virial");
   if (it != output.end()) {
-    torch::Tensor virial_tensor = output.at("virial").toTensor().squeeze().cpu();
-    auto pred_virials = virial_tensor.accessor<float, 1>();
+    torch::Tensor virial_tensor = output.at("virial").toTensor().cpu();
+    torch::Tensor virial_local;
+    if (virial_tensor.dim() == 1) virial_local = virial_tensor;
+    else virial_local = virial_tensor.reshape({-1, virial_tensor.size(-1)})[0];
+    auto pred_virials = virial_local.accessor<float, 1>();
     // curator uses Voigt notation for virial tensors: xx,yy,zz,yz,xz,xy. lammps: xx,yy,zz,xy,xz,yz
     virial[0] = pred_virials[0];
     virial[1] = pred_virials[1];
@@ -358,4 +385,12 @@ double PairCurator::get_uncertainty(const std::string &name) const {
     error->all(FLERR, error_msg.c_str());
     return 0.0; // This line will not be reached due to error->all()
   }
+}
+
+void *PairCurator::extract(const char *name, int &dim)
+{
+  dim = 0;
+  auto it = uncertainties.find(std::string(name));
+  if (it == uncertainties.end()) return nullptr;
+  return static_cast<void *>(&it->second);
 }

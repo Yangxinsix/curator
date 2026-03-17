@@ -566,8 +566,20 @@ def deploy(
     import torch
     from e3nn.util.jit import script
     from curator.model import EnsembleModel
+    from curator.layer import PairwiseDistance
     from curator.layer.utils import find_layer_by_name_recursive
     from .utils import read_user_config, normalize_config_sequences, load_models
+
+    def disable_internal_neighborlist(model_obj) -> int:
+        disabled = 0
+        for module in model_obj.modules():
+            if isinstance(module, PairwiseDistance):
+                module.compute_neighbor_list = False
+                module.batch_nl = None
+                module.compute_distance_from_R = False
+                module.compute_forces = True
+                disabled += 1
+        return disabled
 
     cfg = None
     if cfg_path is not None:
@@ -587,6 +599,8 @@ def deploy(
     else:
         model = models[0]
 
+    disabled_neighborlist_modules = disable_internal_neighborlist(model)
+
     if lammps_mliap:
         if not element_types:
             raise ValueError("element_types must be provided when exporting LAMMPS MLIAP models.")
@@ -595,7 +609,34 @@ def deploy(
         if target_path == 'compiled_model.pt':
             target_path = 'lmp_model.pt'
         torch.save(lmp_model, target_path)
+        if disabled_neighborlist_modules:
+            log.info(
+                "Disabled internal PairwiseDistance neighbor-list construction in %d module(s) before LAMMPS MLIAP export.",
+                disabled_neighborlist_modules,
+            )
         return lmp_model
+
+    # TorchScript struggles with dynamic ModuleDict logic in MultiDomain readout
+    # when there is only one domain; collapse to the single AtomwiseNN.
+    readout = getattr(getattr(model, "representation", None), "readout", None)
+    if hasattr(readout, "domain_modules"):
+        domain_modules = list(readout.domain_modules.values())
+        if len(domain_modules) == 1:
+            model.representation.readout = domain_modules[0]
+
+    # Collapse single-domain MultiDomainRescaleShift into GlobalRescaleShift.
+    if hasattr(model, "output_modules"):
+        for i, module in enumerate(model.output_modules):
+            if hasattr(module, "domain_modules"):
+                domain_modules = list(module.domain_modules.values())
+                if len(domain_modules) == 1:
+                    model.output_modules[i] = domain_modules[0]
+
+    if disabled_neighborlist_modules:
+        log.info(
+            "Disabled internal PairwiseDistance neighbor-list construction in %d module(s) before deploy.",
+            disabled_neighborlist_modules,
+        )
 
     # Compile the model
     model_compiled = script(model)

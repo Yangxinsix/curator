@@ -1,71 +1,92 @@
-#!/bin/bash
-# usage: patch_lammps.sh [-e] /path/to/lammps/
-#
-#
-# References:
-#
-#    .. [#pair_nequip] https://github.com/mir-group/pair_nequip
+#!/usr/bin/env bash
+set -euo pipefail
 
+usage() {
+  cat <<'EOF'
+Usage:
+  patch_lammps.sh [-e] /path/to/lammps-source
 
-SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-echo $SCRIPT_DIR
+Options:
+  -e    use symlinks instead of copying files
+  -h    show this help message
 
+What this script does:
+  1. updates LAMMPS CMakeLists.txt to add PKG_CURATOR and Torch linkage
+  2. installs CURATOR interface files into the LAMMPS source tree
+  3. installs the ML-IAP Python bridge into src/ML-IAP/
 
-do_e_mode=false
+Notes:
+  - Run this script from anywhere; it resolves paths relative to itself.
+  - This script is for manual, non-Spack builds.
+  - For reproducible Spack builds, prefer interface/spack/rebuild_curator_pytorch_patch.sh
+EOF
+}
 
-while getopts "he" option; do
-   case $option in
-      e)
-         do_e_mode=true;;
-      h) # display Help
-         echo "patch_lammps.sh [-e] /path/to/lammps/"
-         exit;;
-   esac
+use_symlink=false
+while getopts ":he" option; do
+  case "${option}" in
+    e) use_symlink=true ;;
+    h)
+      usage
+      exit 0
+      ;;
+    \?)
+      echo "unknown option: -${OPTARG}" >&2
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+shift $((OPTIND - 1))
+
+if [[ $# -ne 1 ]]; then
+  usage >&2
+  exit 1
+fi
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd)"
+INTERFACE_DIR="${SCRIPT_DIR}"
+MLIAP_INTERFACE_DIR="${INTERFACE_DIR}/ML-IAP"
+LAMMPS_DIR="$1"
+
+if [[ ! -d "${LAMMPS_DIR}" ]]; then
+  echo "LAMMPS source directory does not exist: ${LAMMPS_DIR}" >&2
+  exit 1
+fi
+
+if [[ ! -d "${LAMMPS_DIR}/cmake" || ! -d "${LAMMPS_DIR}/src" ]]; then
+  echo "Target does not look like a LAMMPS source tree: ${LAMMPS_DIR}" >&2
+  exit 1
+fi
+
+required_files=(
+  "${INTERFACE_DIR}/pair_curator.cpp"
+  "${INTERFACE_DIR}/pair_curator.h"
+  "${INTERFACE_DIR}/compute_uncertainty.cpp"
+  "${INTERFACE_DIR}/compute_uncertainty.h"
+  "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx"
+  "${LAMMPS_DIR}/cmake/CMakeLists.txt"
+)
+
+for f in "${required_files[@]}"; do
+  if [[ ! -e "${f}" ]]; then
+    echo "missing required file: ${f}" >&2
+    exit 1
+  fi
 done
 
-# https://stackoverflow.com/a/9472919
-shift $(($OPTIND - 1))
-lammps_dir=$1
-
-if [ "$lammps_dir" = "" ];
-then
-    echo "lammps_dir must be provided"
-    exit 1
-fi
-
-if [ ! -d "$lammps_dir" ]
-then
-    echo "$lammps_dir doesn't exist"
-    exit 1
-fi
-
-if [ ! -d "$lammps_dir/cmake" ]
-then
-    echo "$lammps_dir doesn't look like a LAMMPS source directory"
-    exit 1
-fi
-
-# Check if root directory is correct
-if [ ! -f pair_curator.cpp ]; then
-    echo "Please run `patch_lammps.sh` from the `pair_curator.cpp` root directory."
-    exit 1
-fi
-
-echo "Updating CMakeLists.txt..."
-# Check for double-patch
-if grep -q "PKG_CURATOR" $lammps_dir/cmake/CMakeLists.txt
-then
-    echo "This LAMMPS installation _seems_ to already have been patched. CMakeLists.txt file not modified."
+echo "Patching ${LAMMPS_DIR}/cmake/CMakeLists.txt ..."
+if grep -q "PKG_CURATOR" "${LAMMPS_DIR}/cmake/CMakeLists.txt"; then
+  echo "CMakeLists.txt already contains PKG_CURATOR; leaving it unchanged."
 else
-    # Update CMakeLists.txt
-    sed -i "s/set(CMAKE_CXX_STANDARD 11)/set(CMAKE_CXX_STANDARD 14)/" $lammps_dir/cmake/CMakeLists.txt
-
-    # Add PKG_CURATOR option + Torch linkage with proper source gating
-    python - << "PY"
+  python - "${LAMMPS_DIR}/cmake/CMakeLists.txt" <<'PY'
 from pathlib import Path
+import sys
 
-path = Path(r"$lammps_dir/cmake/CMakeLists.txt")
+path = Path(sys.argv[1])
 text = path.read_text()
+
+text = text.replace("set(CMAKE_CXX_STANDARD 11)", "set(CMAKE_CXX_STANDARD 14)")
 needle = "add_library(lammps ${ALL_SOURCES})"
 if needle not in text:
     raise SystemExit("add_library(lammps ${ALL_SOURCES}) not found in CMakeLists.txt")
@@ -97,26 +118,46 @@ endif()
 
 path.write_text(text.replace(needle, block, 1))
 PY
-
 fi
 
-# check if files need to be copied to lammps directory
-if [ ! -f $lammps_dir/src/pair_curator.cpp ]; then
-    if [ "$do_e_mode" = true ]
-    then
-        echo "Making source symlinks (-e)..."
-        for file in *.{cpp,h}; do
-            ln -s `realpath -s $file` $lammps_dir/src/$file
-        done
-    else
-        echo "Copying files..."
-        for file in *.{cpp,h}; do
-            cp $file $lammps_dir/src/$file
-        done
-    fi
+install_one() {
+  local src="$1"
+  local dst="$2"
+  mkdir -p "$(dirname "${dst}")"
+  if [[ "${use_symlink}" == true ]]; then
+    ln -sfn "$(realpath -s "${src}")" "${dst}"
+  else
+    cp -f "${src}" "${dst}"
+  fi
+}
+
+echo "Installing CURATOR interface files into ${LAMMPS_DIR}/src ..."
+install_one "${INTERFACE_DIR}/pair_curator.cpp" "${LAMMPS_DIR}/src/pair_curator.cpp"
+install_one "${INTERFACE_DIR}/pair_curator.h" "${LAMMPS_DIR}/src/pair_curator.h"
+install_one "${INTERFACE_DIR}/compute_uncertainty.cpp" "${LAMMPS_DIR}/src/compute_uncertainty.cpp"
+install_one "${INTERFACE_DIR}/compute_uncertainty.h" "${LAMMPS_DIR}/src/compute_uncertainty.h"
+install_one "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx" "${LAMMPS_DIR}/src/ML-IAP/mliap_unified_couple.pyx"
+
+if [[ "${use_symlink}" == true ]]; then
+  echo "Installed via symlinks."
 else
-    echo "pair_curator.cpp file already exists. No files copied."
+  echo "Installed via copies."
 fi
 
+cat <<EOF
+Done.
 
-echo "Done!"
+Next steps for a manual build:
+  1. configure LAMMPS with -D PKG_CURATOR=on
+  2. enable any other packages you need, for example:
+     -D PKG_PYTHON=on
+     -D PKG_ML-IAP=on
+     -D PKG_KOKKOS=on
+     -D PKG_PLUMED=on
+  3. point CMake to your Torch installation, for example with:
+     -D CMAKE_PREFIX_PATH="\$(python - <<'PY'
+import torch
+print(torch.utils.cmake_prefix_path)
+PY
+)"
+EOF

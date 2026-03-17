@@ -19,7 +19,7 @@ from curator.layer import (
 from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
 from curator.model.base import Representation
 
-from typing import OrderedDict, Dict, List, Optional, Union, Callable, Type
+from typing import OrderedDict, Dict, List, Optional, Union, Callable, Type, Any
 from functools import partial
 
 from e3nn.util.jit import compile_mode
@@ -167,7 +167,13 @@ class Nequip(Representation):
             use_e3nn=True,
         )
         
-    def forward(self, data: properties.Type) -> properties.Type:
+    def forward(
+        self,
+        data: properties.Type,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
+    ) -> properties.Type:
         # add mask for local interaction part
         edge_cache = self._apply_cutoff_mask(data, self.cutoff)
         for m in self.embeddings.values():
@@ -183,6 +189,9 @@ class Nequip(Representation):
                 data[properties.edge_idx], 
                 data[properties.edge_dist_embedding],
                 data[properties.edge_diff_embedding],
+                lammps_data=lammps_data,
+                n_local=n_local,
+                n_ghost=n_ghost,
             )
         
         data[properties.node_feat] = node_feat
