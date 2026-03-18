@@ -1,0 +1,11 @@
+defaults:
+  - simulator: auto_uncertainty
+
+simulator:
+  init_traj: ../../LiFePO4.traj
+  start_index: 0
+  run_kwargs:
+    steps: 1000
+
+dataset: ../../LiFePO4.traj
+model_path: ../../train/model_path/best_model_epoch=119_step=15240_val_total_loss=0.01.ckpt

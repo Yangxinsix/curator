@@ -314,14 +314,17 @@ class GlobalRescaleShift(nn.Module):
 
     # compatibility helpers for legacy access (single head) / return list for multi-head
     @property
+    @torch.jit.unused
     def scale_by(self) -> List[Any]:
         return [self._format_scalar(sc.scale) for sc in self.scales]
 
     @property
+    @torch.jit.unused
     def shift_by(self) -> List[Any]:
         return [self._format_scalar(sh.shift) if hasattr(sh, "shift") else 0.0 for sh in self.shifts]
 
     @property
+    @torch.jit.unused
     def atomic_energies(self) -> Optional[torch.Tensor]:
         # legacy name; values are per-species shift table
         for i, h in enumerate(self.heads):
@@ -330,6 +333,7 @@ class GlobalRescaleShift(nn.Module):
         return None
 
     @property
+    @torch.jit.unused
     def per_species_shifts(self) -> Dict[str, Dict[str, float]]:
         out: Dict[str, Dict[str, float]] = {}
         for shift in self.atomic_shifts:
@@ -347,6 +351,7 @@ class GlobalRescaleShift(nn.Module):
                 out[shift.key] = mapping
         return out
 
+    @torch.jit.unused
     def __repr__(self):
         scales = [float(f"{x:.3g}") if isinstance(x, (int, float)) else x for x in self.scale_by]
         shifts = [float(f"{x:.3g}") if isinstance(x, (int, float)) else x for x in self.shift_by]

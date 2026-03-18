@@ -4,6 +4,7 @@ from e3nn import o3
 from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
 from functools import partial
+from typing import Optional, Any
 
 from curator.layer import (
     OneHotAtomEncoding,
@@ -238,7 +239,13 @@ class MACE(Representation):
             MLP_irreps=self.MLP_irreps,
         )
             
-    def forward(self, data: properties.Type) -> properties.Type:
+    def forward(
+        self,
+        data: properties.Type,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
+    ) -> properties.Type:
         # add mask for local interaction part
         edge_cache = self._apply_cutoff_mask(data, self.cutoff)
         for m in self.embeddings.values():
@@ -258,6 +265,9 @@ class MACE(Representation):
                 data[properties.edge_idx], 
                 data[properties.edge_dist_embedding],
                 data[properties.edge_diff_embedding],
+                lammps_data=lammps_data,
+                n_local=n_local,
+                n_ghost=n_ghost,
             )
             node_feat = product(
                 node_feats=node_feat,

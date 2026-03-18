@@ -132,8 +132,10 @@ class AtomwiseNN(nn.Module):
         out = out.split(self.split_size, dim=1)
         output_dict: Dict[str, torch.Tensor] = {}
 
-        for i, head in enumerate(self.heads):
-            prop = out[i].squeeze(-1)
+        # Iterate over tensor-friendly lists for TorchScript compatibility.
+        for i in range(len(self.model_outputs)):
+            # Avoid inplace/view conflicts during TorchScript autograd in deploy models.
+            prop = out[i].squeeze(-1).clone()
             key = self.model_outputs[i]
             per_atom = self.per_atom_flags[i]
             aggregation_mode = self.aggregation_modes[i]
@@ -143,9 +145,15 @@ class AtomwiseNN(nn.Module):
                 output_dict[per_atom_key] = prop
 
             if aggregation_mode == 'sum':
-                output_dict[key] = scatter_add(prop, index, dim=0) if index is not None else torch.sum(prop, dim=0)
+                if index is not None and index.numel() > 0 and index.numel() == prop.shape[0]:
+                    output_dict[key] = scatter_add(prop, index, dim=0)
+                else:
+                    output_dict[key] = torch.sum(prop, dim=0)
             elif aggregation_mode == 'mean':
-                output_dict[key] = scatter_mean(prop, index, dim=0) if index is not None else torch.mean(prop, dim=0)
+                if index is not None and index.numel() > 0 and index.numel() == prop.shape[0]:
+                    output_dict[key] = scatter_mean(prop, index, dim=0)
+                else:
+                    output_dict[key] = torch.mean(prop, dim=0) if prop.numel() > 0 else torch.sum(prop, dim=0)
             elif aggregation_mode == 'none':
                 output_dict[key] = prop
 
@@ -304,7 +312,7 @@ class MultiDomainAtomwiseNN(nn.Module):
     def _split_domain_labels(
         self, data: properties.Type, n_atoms: int
     ) -> Optional[torch.Tensor]:
-        atom_domain = None
+        atom_domain: Optional[torch.Tensor] = None
         if properties.domain_atom in data:
             atom_domain = data[properties.domain_atom]
         elif properties.domain in data:
@@ -363,10 +371,23 @@ class MultiDomainAtomwiseNN(nn.Module):
             if key in per_atom_keys:
                 combined[key].index_copy_(0, atom_idx, val)
             else:
-                combined[key][: val.shape[0]].add_(val)
+                prefix = combined[key][: val.shape[0]]
+                combined[key][: val.shape[0]] = prefix + val
+
+    def _call_domain_module(self, dom: str, data: properties.Type) -> properties.Type:
+        for key, module in self.domain_modules.items():
+            if key == dom:
+                return module(data)
+        for _, module in self.domain_modules.items():
+            return module(data)
+        return data
 
     def forward(self, data: properties.Type) -> properties.Type:
         self._ensure_image_index(data)
+        if len(self.domain_modules) == 1:
+            for _, only_module in self.domain_modules.items():
+                return only_module(data)
+
         node_feat = data[properties.node_feat]
         index = data[properties.image_idx]
         n_atoms = node_feat.shape[0]
@@ -375,7 +396,7 @@ class MultiDomainAtomwiseNN(nn.Module):
         atom_domain = self._split_domain_labels(data, n_atoms)
         if atom_domain is None:
             dom = self._get_domain(data)
-            return self.domain_modules[dom](data)
+            return self._call_domain_module(dom, data)
 
         atom_domain = atom_domain.to(torch.long)
         combined = None
@@ -397,14 +418,17 @@ class MultiDomainAtomwiseNN(nn.Module):
 
         if combined is None:
             dom = self.domains[0]
-            return self.domain_modules[dom](data)
+            return self._call_domain_module(dom, data)
 
         remaining = ~matched
         if torch.any(remaining):
             atom_idx = remaining.nonzero(as_tuple=False).view(-1)
             fallback_dom = self.domains[0]
-            output, _ = self._compute_outputs_subset(self.domain_modules[fallback_dom], node_feat, index, atom_idx)
-            self._scatter_outputs(combined, output, self.domain_modules[fallback_dom], atom_idx)
+            for key, module in self.domain_modules.items():
+                if key == fallback_dom:
+                    output, _ = self._compute_outputs_subset(module, node_feat, index, atom_idx)
+                    self._scatter_outputs(combined, output, module, atom_idx)
+                    break
 
         data.update(combined)
         return data

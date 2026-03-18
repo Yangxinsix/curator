@@ -34,6 +34,7 @@ class PairCurator : public Pair {
   virtual void coeff(int, char **);
   virtual double init_one(int, int);
   virtual void init_style();
+  void *extract(const char *, int &) override;
   void allocate();
   double cutoff;
   torch::jit::script::Module model;
