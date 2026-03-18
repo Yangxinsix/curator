@@ -2,7 +2,7 @@ _target_: curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty  #
 interval: 1                                                                     # logging interval in steps
 variables: basic_energies                                                       # variables to record
 monitor: null                                                                   # which uncertainty metric to monitor (null = disabled)
-save_path: warning_struct.traj                                                  # file for saving uncertain structures
+save_path: ${outputs.uncertain_set}                                             # file for saving uncertain structures
 uncertain_count: null                                                           # stop after collecting this many uncertain frames
 uncertainty_backend:
   _target_: curator.simulate.uncertainty.auto.AutoUncertainty                   # backend computing uncertainty

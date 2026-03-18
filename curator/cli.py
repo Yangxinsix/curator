@@ -871,6 +871,8 @@ def simulate(config: DictConfig):
         normalize_config_sequences(config)
         prune_config_targets(config, logger=log)
     
+    Path(config.run_path).mkdir(parents=True, exist_ok=True)
+
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     

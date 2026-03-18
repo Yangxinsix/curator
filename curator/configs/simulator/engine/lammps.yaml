@@ -1,0 +1,8 @@
+_target_: curator.simulate.engines.lammps.engine.LammpsEngine   # shell-style LAMMPS backend
+model_path: ${model_path}                                 # checkpoint(s) or deployed artifact
+outputs: ${outputs}                                       # declared workflow artifacts
+command: lmp                                              # command used to launch LAMMPS; may include mpirun prefix
+input: null                                               # preferred: path to a user-owned LAMMPS input; null uses packaged default
+input_text: null                                          # inline override for quick experiments; normally leave null
+input_variables: {}                                       # optional extra placeholders injected into the template
+specorder: null                                           # element order used for type mapping and model export

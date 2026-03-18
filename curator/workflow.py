@@ -2,9 +2,10 @@
 from myqueue.workflow import run
 from myqueue.task import Task
 from typing import Optional, Dict, Tuple, Final, Union
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import DictConfig, ListConfig, OmegaConf
 from curator.utils import read_user_config, register_resolvers
 from pathlib import Path
+import warnings
 
 register_resolvers()
 
@@ -38,11 +39,109 @@ def resolve_paths(config: Union[DictConfig, dict], base_dir='.', path_set=path_s
             if isinstance(value, str):
                 abs_path = Path(base_dir) / value
                 config[key] = str(abs_path.resolve())
-            elif isinstance(value, list):
-                abs_paths = [str((Path(base_dir) / l).resolve()) for l in list]
+            elif isinstance(value, (list, ListConfig)):
+                abs_paths = [str((Path(base_dir) / item).resolve()) for item in value]
                 config[key] = abs_paths
         elif isinstance(value, (dict, DictConfig)):
             resolve_paths(value, base_dir, path_set)
+
+
+def _deprecated_output(path: str, replacement: str):
+    warnings.warn(
+        f"Simulation workflow hand-off via '{path}' is deprecated; declare '{replacement}' instead.",
+        DeprecationWarning,
+        stacklevel=3,
+    )
+
+
+def _select_simulation_output(cfg: DictConfig, candidates: list[tuple[str, bool]], fallback=None):
+    for path, deprecated in candidates:
+        value = OmegaConf.select(cfg, path, default=None)
+        if value is not None:
+            if deprecated:
+                replacement = path.replace("simulator.out_traj", "outputs.pool_set")
+                replacement = replacement.replace("simulator.uncertain_traj", "outputs.uncertain_set")
+                replacement = replacement.replace("simulator.uncertainty.save_uncertain_atoms", "outputs.uncertain_set")
+                replacement = replacement.replace("callbacks.thermo.save_path", "outputs.uncertain_set")
+                _deprecated_output(path, replacement)
+            return value
+    return fallback
+
+
+def _select_callback_output(cfg: DictConfig, *, target_suffixes: tuple[str, ...], field: str):
+    callbacks = OmegaConf.select(cfg, 'simulator.callbacks', default=None)
+    if not isinstance(callbacks, (list, tuple, ListConfig)):
+        return None
+    for cb in callbacks:
+        if not isinstance(cb, (dict, DictConfig)):
+            continue
+        target = cb.get('_target_', '')
+        if any(str(target).endswith(suffix) for suffix in target_suffixes):
+            value = cb.get(field)
+            if value is None:
+                continue
+            if field == 'path' and isinstance(value, str) and '{' in value:
+                continue
+            _deprecated_output(f"simulator.callbacks[*].{field}", f"outputs.{'pool_set' if field == 'path' else 'uncertain_set'}")
+            return value
+    return None
+
+
+def _resolve_iteration_reference(value, iteration: int):
+    if isinstance(value, str):
+        return value.replace(f'iter_{iteration}', f'iter_{iteration-1}')
+    if isinstance(value, (list, tuple, ListConfig)):
+        return [_resolve_iteration_reference(item, iteration) for item in value]
+    return value
+
+
+def _as_path_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, ListConfig)):
+        return [str(item) for item in value if item is not None]
+    return [str(value)]
+
+
+def _simulation_outputs(cfg: DictConfig) -> tuple[Union[str, list[str]], Optional[Union[str, list[str]]], Union[str, list[str]]]:
+    pool_set = _select_simulation_output(
+        cfg,
+        [
+            ('outputs.pool_set', False),
+            ('simulator.out_traj', True),
+        ],
+        fallback=_select_callback_output(
+            cfg,
+            target_suffixes=('TrajectoryWriter',),
+            field='path',
+        ),
+    )
+    if pool_set is None:
+        raise ValueError("Simulation config must declare outputs.pool_set or legacy simulator.out_traj.")
+
+    uncertain_set = _select_simulation_output(
+        cfg,
+        [
+            ('outputs.uncertain_set', False),
+            ('simulator.uncertain_traj', True),
+            ('simulator.uncertainty.save_uncertain_atoms', True),
+        ],
+        fallback=_select_callback_output(
+            cfg,
+            target_suffixes=('ThermoWithUncertainty', 'MDLogger', 'TorchSimThermoLogger'),
+            field='save_path',
+        ),
+    )
+    restart_source = _select_simulation_output(
+        cfg,
+        [
+            ('outputs.restart_source', False),
+            ('outputs.pool_set', False),
+            ('simulator.out_traj', True),
+        ],
+        fallback=pool_set,
+    )
+    return pool_set, uncertain_set, restart_source
 
 def train(
     deps: list[Task],
@@ -151,18 +250,17 @@ def simulate(
 
             # TODO: load old model, init_traj, load compiled model
             cfg.model_path = model_path
+            pool_output, uncertain_output, restart_source = _simulation_outputs(cfg)
             # load user specified arguments: read_traj, image_index
             if iteration > start_iteration:
-                init_traj = cfg.simulator.pop('read_traj', cfg.simulator.out_traj.replace(f'iter_{iteration}', f'iter_{iteration-1}'))   #use traj from last iteration if no new traj is specified
+                default_restart = _resolve_iteration_reference(restart_source, iteration)
+                init_traj = cfg.simulator.pop('read_traj', default_restart)   # use restart_source from last iteration if no override is specified
                 start_index = cfg.simulator.pop('image_index', -1)  # use last image if not specified
                 cfg.simulator.init_traj = init_traj
                 cfg.simulator.start_index = start_index
 
-            pool_path[name] = [cfg.simulator.out_traj]
-            try:
-                pool_path[name].append(cfg.simulator.uncertainty.save_uncertain_atoms)
-            except:
-                pass
+            pool_path[name] = _as_path_list(pool_output)
+            pool_path[name].extend(_as_path_list(uncertain_output))
 
             OmegaConf.save(cfg, run_path / 'simulate.yaml', resolve=False)
 
@@ -179,7 +277,7 @@ def simulate(
 def select(
     deps: Dict[str, Task],
     model_path: list[str],
-    pool_path: Dict[str, str],
+    pool_path: Dict[str, list[str]],
     config: DictConfig,
     iteration: Optional[int] = 0,
 ) -> Tuple[Dict[str, str], Dict[str, Task]]:

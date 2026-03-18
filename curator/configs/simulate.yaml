@@ -9,6 +9,12 @@ model_path: null          # trained model or compiled calculator path
 dataset: null             # reference dataset for uncertainty metrics
 device: cuda              # device for simulation calculator
 deploy: null              # deploy config or compiled model override
+outputs:
+  pool_set: ${run_path}/trajectory.traj        # trajectory used as the selection pool
+  uncertain_set: ${run_path}/warning_struct.traj  # optional trajectory of warning/outlier structures
+  restart_source: ${outputs.pool_set}          # source used to continue the next workflow iteration
+  thermo_log: ${run_path}/simulation.log       # human-readable simulation log
+  raw_dir: ${run_path}                         # backend-owned raw artifact directory
 
 # make calculator visible to callback interpolations
 calculator: ${model_path}  # expose calculator path for callbacks

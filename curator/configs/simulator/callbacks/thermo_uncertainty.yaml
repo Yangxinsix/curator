@@ -5,6 +5,7 @@ header: true                                                                    
 monitor: maha_dist                                                              # uncertainty metric to watch
 low: null                                                                       # lower alert threshold
 high: null                                                                      # upper alert threshold
+save_path: ${outputs.uncertain_set}                                             # file for saving uncertain structures
 uncertainty_backend:
   _target_: curator.simulate.uncertainty.auto.AutoUncertainty                   # backend computing uncertainty
   calculator: ${model_path}                                                     # model/calculator used
