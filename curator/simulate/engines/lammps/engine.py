@@ -4,6 +4,7 @@ import logging
 import shlex
 import shutil
 import subprocess
+import zipfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -109,75 +110,85 @@ class LammpsEngine(BaseEngine):
             "raw_dir": self._resolve_path(outputs.get("raw_dir")),
         }
 
-    def _coerce_model_paths(self) -> list[str]:
-        if self.model_path is None:
-            return []
-        if isinstance(self.model_path, (list, tuple, ListConfig)):
-            return [str(item) for item in self.model_path]
-        return [str(self.model_path)]
-
-    def _resolve_direct_model_file(self) -> Path:
-        paths = self._coerce_model_paths()
-        if len(paths) != 1:
-            raise ValueError("Direct LAMMPS model usage requires a single model_path.")
-        return self._resolve_path(paths[0])
-
-    def _is_exported_mliap_model(self, path: Path) -> bool:
-        try:
-            import torch
-
-            model = torch.load(path, map_location="cpu", weights_only=False)
-        except Exception:
-            return False
-        return (
-            model.__class__.__name__ == "LAMMPS_MLIAP"
-            and model.__class__.__module__.endswith("lammps_mliap_interface")
-        )
-
-    def _is_torchscript_model(self, path: Path) -> bool:
-        try:
-            import torch
-
-            torch.jit.load(path, map_location="cpu")
-        except Exception:
-            return False
-        return True
-
-    def _resolve_mliap_model_file(self) -> Path:
-        if not self._resolved_specorder:
-            raise ValueError("specorder is required for LAMMPS MLIAP inputs.")
-
-        direct_model = self._resolve_direct_model_file()
-        if self._is_exported_mliap_model(direct_model):
-            return direct_model
-        if self._is_torchscript_model(direct_model):
-            raise ValueError(
-                "LAMMPS input requests pair_style mliap*, but model_path points to a deployed TorchScript/pair model. "
-                "Provide an original training checkpoint for auto-export, or pass an already-exported LAMMPS MLIAP model."
-            )
-
-        target = self.deployed_model_path
-        from curator.cli import deploy as deploy_model
-
-        deploy_model(
-            self.model_path,
-            target_path=str(target),
-            lammps_mliap=True,
-            element_types=self._resolved_specorder,
-        )
-        return target
-
     def _resolve_model_file(self, lammps_input: str) -> Optional[Path]:
+        if self.model_path is None:
+            return None
+
         pair_style = detect_pair_style(lammps_input)
+        paths = self.model_path if isinstance(self.model_path, (list, tuple, ListConfig)) else [self.model_path]
+        resolved_paths = [self._resolve_path(path) for path in paths]
+        single_path = resolved_paths[0] if len(resolved_paths) == 1 else None
+
+        model_kind = "unknown"
+        if single_path is not None:
+            if zipfile.is_zipfile(single_path):
+                try:
+                    import torch
+
+                    torch.jit.load(single_path, map_location="cpu")
+                except Exception:
+                    pass
+                else:
+                    model_kind = "torchscript"
+            else:
+                try:
+                    import torch
+
+                    loaded = torch.load(single_path, map_location="cpu", weights_only=False)
+                except Exception:
+                    loaded = None
+                if (
+                    loaded is not None
+                    and loaded.__class__.__name__ == "LAMMPS_MLIAP"
+                    and loaded.__class__.__module__.endswith("lammps_mliap_interface")
+                ):
+                    model_kind = "mliap"
+
+        if pair_style == "curator":
+            if model_kind == "mliap":
+                raise ValueError(
+                    "LAMMPS input requests pair_style curator, but model_path points to an exported MLIAP model."
+                )
+            if model_kind == "torchscript":
+                return single_path
+            if single_path is None:
+                raise ValueError("pair_style curator currently requires a single model_path.")
+            from curator.cli import deploy as deploy_model
+
+            deploy_model(
+                single_path,
+                target_path=str(self.deployed_model_path),
+            )
+            return self.deployed_model_path
+
         if pair_style is None:
             self.log.warning("No pair_style found in LAMMPS input. Using model_path directly.")
-            return self._resolve_direct_model_file()
-        if pair_style == "curator":
-            return self._resolve_direct_model_file()
+            if single_path is None:
+                raise ValueError("Direct LAMMPS model usage requires a single model_path.")
+            return single_path
         if pair_style.startswith("mliap"):
-            return self._resolve_mliap_model_file()
+            if model_kind == "mliap":
+                return single_path
+            if model_kind == "torchscript":
+                raise ValueError(
+                    "LAMMPS input requests pair_style mliap*, but model_path points to a deployed TorchScript/pair model. "
+                    "Provide an original training checkpoint for auto-export, or pass an already-exported LAMMPS MLIAP model."
+                )
+            if not self._resolved_specorder:
+                raise ValueError("specorder is required for LAMMPS MLIAP inputs.")
+            from curator.cli import deploy as deploy_model
+
+            deploy_model(
+                self.model_path,
+                target_path=str(self.deployed_model_path),
+                lammps_mliap=True,
+                element_types=self._resolved_specorder,
+            )
+            return self.deployed_model_path
         self.log.warning("Unsupported pair_style '%s' for model auto-resolution. Using model_path directly.", pair_style)
-        return self._resolve_direct_model_file()
+        if single_path is None:
+            raise ValueError("Direct LAMMPS model usage requires a single model_path.")
+        return single_path
 
     def _build_template_variables(self, steps: int) -> dict[str, Any]:
         variables = dict(self.input_variables)
