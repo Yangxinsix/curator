@@ -39,6 +39,8 @@ These are the files the script treats as the source of truth:
 - `interface/pair_curator.h`
 - `interface/compute_uncertainty.cpp`
 - `interface/compute_uncertainty.h`
+- `interface/ML-IAP/mliap_data.cpp`
+- `interface/ML-IAP/mliap_data.h`
 - `interface/ML-IAP/mliap_unified_couple.pyx`
 
 Optional extra overrides can still live outside `interface/`, but the default user-facing workflow should start here.

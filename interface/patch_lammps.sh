@@ -13,7 +13,7 @@ Options:
 What this script does:
   1. updates LAMMPS CMakeLists.txt to add PKG_CURATOR and Torch linkage
   2. installs CURATOR interface files into the LAMMPS source tree
-  3. installs the ML-IAP Python bridge into src/ML-IAP/
+  3. installs the CURATOR ML-IAP bridge files into src/ML-IAP/
 
 Notes:
   - Run this script from anywhere; it resolves paths relative to itself.
@@ -64,6 +64,8 @@ required_files=(
   "${INTERFACE_DIR}/pair_curator.h"
   "${INTERFACE_DIR}/compute_uncertainty.cpp"
   "${INTERFACE_DIR}/compute_uncertainty.h"
+  "${MLIAP_INTERFACE_DIR}/mliap_data.cpp"
+  "${MLIAP_INTERFACE_DIR}/mliap_data.h"
   "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx"
   "${LAMMPS_DIR}/cmake/CMakeLists.txt"
 )
@@ -136,6 +138,8 @@ install_one "${INTERFACE_DIR}/pair_curator.cpp" "${LAMMPS_DIR}/src/pair_curator.
 install_one "${INTERFACE_DIR}/pair_curator.h" "${LAMMPS_DIR}/src/pair_curator.h"
 install_one "${INTERFACE_DIR}/compute_uncertainty.cpp" "${LAMMPS_DIR}/src/compute_uncertainty.cpp"
 install_one "${INTERFACE_DIR}/compute_uncertainty.h" "${LAMMPS_DIR}/src/compute_uncertainty.h"
+install_one "${MLIAP_INTERFACE_DIR}/mliap_data.cpp" "${LAMMPS_DIR}/src/ML-IAP/mliap_data.cpp"
+install_one "${MLIAP_INTERFACE_DIR}/mliap_data.h" "${LAMMPS_DIR}/src/ML-IAP/mliap_data.h"
 install_one "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx" "${LAMMPS_DIR}/src/ML-IAP/mliap_unified_couple.pyx"
 
 if [[ "${use_symlink}" == true ]]; then

@@ -4,6 +4,7 @@ This directory contains the CURATOR-owned files that are patched into LAMMPS:
 
 - `pair_curator.cpp/.h`: `pair_style curator`
 - `compute_uncertainty.cpp/.h`: `compute uncertainty <key>`
+- `ML-IAP/mliap_data.h/.cpp`: ML-IAP data plumbing needed by the CURATOR `mliap` bridge
 - `ML-IAP/mliap_unified_couple.pyx`: Python bridge for `pair_style mliap unified`
 
 The intended design is:
@@ -132,13 +133,17 @@ The generated patch injects these files:
 - `src/pair_curator.h`
 - `src/compute_uncertainty.cpp`
 - `src/compute_uncertainty.h`
+- `src/ML-IAP/mliap_data.cpp`
+- `src/ML-IAP/mliap_data.h`
 - `src/ML-IAP/mliap_unified_couple.pyx`
 
 The canonical CURATOR source for the ML-IAP bridge is:
 
+- `interface/ML-IAP/mliap_data.cpp`
+- `interface/ML-IAP/mliap_data.h`
 - `interface/ML-IAP/mliap_unified_couple.pyx`
 
-That file is intentionally stored under `interface/` so users can find and edit all CURATOR-owned LAMMPS-facing code in one place.
+These files are intentionally stored under `interface/` so users can find and edit all CURATOR-owned LAMMPS-facing code in one place.
 
 ## Install Without Spack
 
@@ -181,6 +186,8 @@ cp "${CURATOR_ROOT}/interface/pair_curator.h" "${LAMMPS_SRC}/src/"
 cp "${CURATOR_ROOT}/interface/compute_uncertainty.cpp" "${LAMMPS_SRC}/src/"
 cp "${CURATOR_ROOT}/interface/compute_uncertainty.h" "${LAMMPS_SRC}/src/"
 mkdir -p "${LAMMPS_SRC}/src/ML-IAP"
+cp "${CURATOR_ROOT}/interface/ML-IAP/mliap_data.cpp" "${LAMMPS_SRC}/src/ML-IAP/"
+cp "${CURATOR_ROOT}/interface/ML-IAP/mliap_data.h" "${LAMMPS_SRC}/src/ML-IAP/"
 cp "${CURATOR_ROOT}/interface/ML-IAP/mliap_unified_couple.pyx" "${LAMMPS_SRC}/src/ML-IAP/"
 ```
 
@@ -248,8 +255,27 @@ The `mliap` uncertainty path in this repo is intentionally kept minimal.
 It depends on:
 
 - `interface/compute_uncertainty.cpp/.h`
+- `interface/ML-IAP/mliap_data.h/.cpp`
 - `interface/ML-IAP/mliap_unified_couple.pyx`
 - `curator/simulate/lammps_mliap_interface.py`
+
+## Notes On `data.tags`
+
+The current `mliap` fallback path in `curator/simulate/lammps_mliap_interface.py` uses `data.tags` to map ghost neighbors back to locally owned atoms.
+
+That requires all three ML-IAP files to be patched together:
+
+- `interface/ML-IAP/mliap_data.h`
+- `interface/ML-IAP/mliap_data.cpp`
+- `interface/ML-IAP/mliap_unified_couple.pyx`
+
+What each file does:
+
+- `mliap_data.h`: declares the `tags` field in `MLIAPData`
+- `mliap_data.cpp`: fills that field from `atom->tag`
+- `mliap_unified_couple.pyx`: exposes the field to Python as `data.tags`
+
+If only the `.pyx` file is updated but `mliap_data.h/.cpp` are not, the install is incomplete and another machine will fail when the Python interface tries to access `data.tags`.
 
 Current design rule:
 
