@@ -117,7 +117,7 @@ class AtomwiseNN(nn.Module):
         self.model_outputs = [h.key for h in self.heads]
         self.per_atom_flags = [bool(h.write_atomwise) for h in self.heads]
         self.aggregation_modes: List[AggregationMode] = [
-            (h.reduction if h.reduction is not None else "sum")
+            (h.reduction if h.reduction is not None else "none")
             for h in self.heads
         ]
         self.per_atom_keys = [(h.atomwise_key or (h.key + "_pa")) for h in self.heads]
