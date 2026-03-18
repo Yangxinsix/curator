@@ -1142,6 +1142,54 @@ def update_config_from_datamodule(
         else:
             OmegaConf.update(cfg, keypath, heads, force_add=True)
 
+    def _has_configured_representation_readout(cfg: DictConfig) -> bool:
+        readout_cfg = OmegaConf.select(cfg, "model.representation.readout")
+        return isinstance(readout_cfg, DictConfig) and "_target_" in readout_cfg
+
+    def _readout_has_explicit_outputs(cfg: DictConfig) -> bool:
+        if not _has_configured_representation_readout(cfg):
+            return False
+
+        readout_heads = OmegaConf.select(cfg, "model.representation.readout.heads")
+        if isinstance(readout_heads, (ListConfig, list)) and len(readout_heads) > 0:
+            return True
+        if isinstance(readout_heads, str) and readout_heads.lower() != "auto":
+            return True
+
+        readout_heads_by_domain = OmegaConf.select(cfg, "model.representation.readout.heads_by_domain")
+        if isinstance(readout_heads_by_domain, (DictConfig, dict)) and len(readout_heads_by_domain) > 0:
+            return True
+
+        return False
+
+    def _update_representation_heads(cfg: DictConfig, heads: List) -> None:
+        if _has_configured_representation_readout(cfg):
+            OmegaConf.update(cfg, "model.representation.readout.heads", heads, force_add=True)
+        else:
+            OmegaConf.update(cfg, "model.representation.heads", heads, force_add=True)
+
+    def _update_representation_heads_by_domain(
+        cfg: DictConfig,
+        heads_by_domain: Dict[str, List],
+    ) -> None:
+        if _has_configured_representation_readout(cfg):
+            OmegaConf.update(cfg, "model.representation.readout.heads_by_domain", heads_by_domain, force_add=True)
+            OmegaConf.update(cfg, "model.representation.readout.domains", list(heads_by_domain.keys()), force_add=True)
+            return
+
+        merged_heads: List = []
+        for domain_heads in heads_by_domain.values():
+            for head in domain_heads:
+                if head not in merged_heads:
+                    merged_heads.append(head)
+        OmegaConf.update(cfg, "model.representation.heads", merged_heads or ["energy"], force_add=True)
+        if logger is not None and len(heads_by_domain) > 1:
+            logger.warning(
+                "Per-domain heads requested but model.representation.readout is not configurable; "
+                "falling back to merged representation heads %s.",
+                merged_heads or ["energy"],
+            )
+
     def _update_rescale_heads(cfg: DictConfig, heads: List) -> None:
         output_modules = OmegaConf.select(cfg, "model.output_modules")
         if isinstance(output_modules, (DictConfig, dict)) and "global_rescale_shift" in output_modules:
@@ -1179,8 +1227,12 @@ def update_config_from_datamodule(
     rescale_shift_heads = _ensure_list(rescale_shift_heads, default=[])
 
     readout_heads = OmegaConf.select(config, "model.representation.readout.heads")
-    should_update_heads = _is_auto(readout_heads) or (
-        isinstance(readout_heads, (ListConfig, list)) and list(readout_heads) == ["energy"]
+    should_update_heads = not _readout_has_explicit_outputs(config) and (
+        _is_auto(readout_heads)
+        or (
+            isinstance(readout_heads, (ListConfig, list))
+            and list(readout_heads) == ["energy"]
+        )
     )
     if should_update_heads:
         if isinstance(datapath, (DictConfig, dict)):
@@ -1204,8 +1256,7 @@ def update_config_from_datamodule(
                 heads_by_domain = {str(name): heads for name, heads in domain_heads.items()}
 
             domains = list(heads_by_domain.keys())
-            OmegaConf.update(config, "model.representation.readout.heads_by_domain", heads_by_domain, force_add=True)
-            OmegaConf.update(config, "model.representation.readout.domains", domains, force_add=True)
+            _update_representation_heads_by_domain(config, heads_by_domain)
 
             rescale_heads = [
                 {"key": key, "domains": [dom_id]}
@@ -1215,7 +1266,7 @@ def update_config_from_datamodule(
             _update_rescale_heads(config, rescale_heads)
         else:
             _update_heads_cfg(config, "model.heads", data_heads)
-            _update_heads_cfg(config, "model.representation.readout.heads", data_heads)
+            _update_representation_heads(config, data_heads)
             merged = list(dict.fromkeys(list(data_heads) + list(rescale_shift_heads)))
             rescale_heads = [{"key": key, "domains": ["0"]} for key in merged] or [{"key": "energy", "domains": ["0"]}]
             _update_rescale_heads(config, rescale_heads)

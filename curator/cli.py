@@ -27,6 +27,11 @@ class _ConsoleProgressFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return not getattr(record, "progress", False)
 
+
+def _prepare_run_path(run_path: Optional[Union[str, os.PathLike]]) -> None:
+    os.makedirs(os.fspath(run_path or "."), exist_ok=True)
+
+
 def _configure_cli_logger(
     logger: logging.Logger,
     log_path: str,
@@ -92,6 +97,14 @@ def train(config: DictConfig) -> None:
         update_model_domains,
     )
 
+    # Load the arguments 
+    if config.cfg is not None:
+        config = read_user_config(config.cfg, config_path="configs", config_name="train")
+
+    normalize_config_sequences(config)
+    prune_config_targets(config, logger=log)
+    _prepare_run_path(config.run_path)
+
     _configure_cli_logger(
         log,
         os.path.join(config.run_path, "training.log"),
@@ -99,13 +112,6 @@ def train(config: DictConfig) -> None:
         stream=True,
     )
     log_logo(log)
-    
-    # Load the arguments 
-    if config.cfg is not None:
-        config = read_user_config(config.cfg, config_path="configs", config_name="train")
-
-    normalize_config_sequences(config)
-    prune_config_targets(config, logger=log)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -241,13 +247,20 @@ def train(config: DictConfig) -> None:
     
     # Deploy model to a compiled model
     if config.deploy_model:
-        # Load the model
-        model_path, val_loss = find_best_model(run_path=config.run_path + '/model_path')
-        
-        # Compile the model
-        log.debug(f"Deploy trained model from {model_path} with validation loss of {val_loss:.3f}")
-        deploy(model_path, f"{config.run_path}/compiled_model.pt")
-        log.debug(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
+        best_model = find_best_model(run_path=config.run_path + '/model_path')
+        if best_model is None:
+            if getattr(trainer, "fast_dev_run", False):
+                log.warning("Skipping deploy because fast_dev_run does not write checkpoints.")
+            else:
+                log.warning("Skipping deploy because no checkpoint was written to <%s/model_path>.", config.run_path)
+        else:
+            model_path, val_loss = best_model
+            if val_loss is None:
+                log.debug(f"Deploy trained model from {model_path}")
+            else:
+                log.debug(f"Deploy trained model from {model_path} with validation loss of {val_loss:.3f}")
+            deploy(model_path, f"{config.run_path}/compiled_model.pt")
+            log.debug(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
 
 # Training without Pytorch Lightning
 @hydra.main(config_path="configs", config_name="train", version_base=None)
@@ -276,6 +289,7 @@ def tmp_train(config: DictConfig):
         config = read_user_config(config.cfg, config_path="configs", config_name="train")
 
     normalize_config_sequences(config)
+    _prepare_run_path(config.run_path)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -328,6 +342,9 @@ def tmp_train(config: DictConfig):
     if config.deploy_model:
         # Load the model
         model_path = [str(f) for f in Path(f"{config.run_path}").rglob("best_model.pth*")]
+        if not model_path:
+            log.warning("Skipping deploy because no best_model.pth checkpoint was written to <%s>.", config.run_path)
+            return
         if len(model_path) > 1:
             log.warning("Multiple best models found, using the last one.")
         model_path = model_path[-1]
@@ -661,6 +678,7 @@ def evaluate(config: DictConfig):
     prune_config_targets(config, logger=log)
     if config.model_path is None or config.datapath is None:
         raise RuntimeError("Both model_path and datapath are required for evaluation.")
+    _prepare_run_path(config.run_path)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -870,6 +888,7 @@ def simulate(config: DictConfig):
     else:
         normalize_config_sequences(config)
         prune_config_targets(config, logger=log)
+    _prepare_run_path(config.run_path)
     
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -916,6 +935,7 @@ def select(config: DictConfig):
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="select")
+    _prepare_run_path(config.run_path)
 
     _configure_cli_logger(
         log,
@@ -1036,6 +1056,7 @@ def label(config: DictConfig):
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="label")
+    _prepare_run_path(config.run_path)
 
     _configure_cli_logger(
         log,

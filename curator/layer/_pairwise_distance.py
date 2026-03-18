@@ -2,7 +2,6 @@ import torch
 from curator.data import properties, BatchNeighborList
 from typing import Optional
 
-@torch.jit.script
 def get_pair_distance(data: properties.Type, force_process: bool=False) -> properties.Type:
     if properties.edge_dist not in data or force_process:
         pos = data[properties.positions]

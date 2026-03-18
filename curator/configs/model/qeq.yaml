@@ -8,17 +8,16 @@ representation:
     _target_: curator.layer.AtomwiseNN              # MLP readout over atom embeddings
     in_features: ${..num_features}                  # embedding size from representation
     out_features: 2                                 # predict energy and atomic charge
-    output_keys:
-    - key: energy                                   # total energy prediction
-      per_atom: False                               # sum after aggregation
-      aggregation_mode: sum                         # aggregate over atoms
+    heads:
+    - energy                                        # total energy prediction
     - key: atomic_charge                            # per-atom charge output
-      per_atom: false                               # keep atomwise
-      aggregation_mode: null                        # no aggregation
+      reduction: null                               # keep atomwise values
+      write_atomwise: false
 input_modules:
   - _target_: curator.layer.PairwiseDistance        # build pairwise distance graph
-    compute_neighbor_list: False                    # assume neighbor list provided
+    compute_neighbor_list: True                     # build neighbor list when dataset does not provide one
     compute_distance_from_R: True                   # compute distances from positions
+    cutoff: ${data.cutoff}                          # use the data cutoff for neighbor finding
 output_modules:
   - _target_: curator.layer.GradientOutput          # derive forces/stresses from energy
     grad_on_positions: True                         # backprop on atomic positions
