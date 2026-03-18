@@ -2186,7 +2186,10 @@ def upgrade_checkpoint(
     output_path = Path(output_path)
 
     _register_legacy_outputspec()
-    obj = torch.load(ckpt_path, map_location=device)
+    try:
+        obj = torch.load(ckpt_path, map_location=device, weights_only=False)
+    except TypeError:
+        obj = torch.load(ckpt_path, map_location=device)
 
     if isinstance(obj, torch.nn.Module):
         upgraded_model = update_model(obj)
