@@ -3,6 +3,7 @@
 
 import pickle
 import numpy as np
+cimport numpy as np
 import lammps.mliap
 
 cimport cython
@@ -30,6 +31,10 @@ cdef extern from "pair_mliap.h" namespace "LAMMPS_NS":
 cdef extern from "compute_uncertainty.h" namespace "LAMMPS_NS":
     void clear_pair_uncertainties(Pair *)
     void set_pair_uncertainty(Pair *, const string &, double)
+
+cdef extern from "compute_uncertainty_atom.h" namespace "LAMMPS_NS":
+    void clear_pair_uncertainty_arrays(Pair *)
+    void set_pair_uncertainty_array(Pair *, const string &, const double *, int)
 
 
 cdef extern from "mliap_data.h" namespace "LAMMPS_NS":
@@ -77,6 +82,8 @@ cdef extern from "mliap_data.h" namespace "LAMMPS_NS":
         int * iatoms            # index of each atom
         int * pair_i            # index of each i atom for each ij pair
         int * ielems            # element of each atom
+        int * itypes            # LAMMPS type of each atom
+        int * tags              # atom tags for owned and ghost atoms
         int nneigh_max          # number of ij neighbors allocated
         int npairs              # number of ij neighbor pairs
         int * jatoms            # index of each neighbor
@@ -146,12 +153,31 @@ cdef class MLIAPDataPy:
             return
         clear_pair_uncertainties(<Pair *> self.data.pairmliap)
 
+    def clear_uncertainty_arrays(self):
+        if self.data.pairmliap is NULL:
+            return
+        clear_pair_uncertainty_arrays(<Pair *> self.data.pairmliap)
+
     def set_uncertainty(self, key, value):
         cdef string c_key
         if self.data.pairmliap is NULL:
             return
         c_key = key.encode("utf-8")
         set_pair_uncertainty(<Pair *> self.data.pairmliap, c_key, <double>value)
+
+    def set_uncertainty_array(self, key, values):
+        cdef string c_key
+        cdef np.ndarray[np.float64_t, ndim=1, mode="c"] values_arr
+        if self.data.pairmliap is NULL:
+            return
+        values_arr = np.ascontiguousarray(values, dtype=np.float64).reshape(-1)
+        c_key = key.encode("utf-8")
+        set_pair_uncertainty_array(
+            <Pair *> self.data.pairmliap,
+            c_key,
+            <const double *> values_arr.data,
+            <int> values_arr.shape[0],
+        )
 
     @property
     def f(self):
@@ -283,6 +309,18 @@ cdef class MLIAPDataPy:
         if self.data.ielems is NULL:
             return None
         return np.asarray(<int[:self.natomneigh]> &self.data.ielems[0])
+
+    @property
+    def itypes(self):
+        if self.data.itypes is NULL:
+            return None
+        return np.asarray(<int[:self.natomneigh]> &self.data.itypes[0])
+
+    @property
+    def tags(self):
+        if self.data.tags is NULL:
+            return None
+        return np.asarray(<int[:self.ntotal]> &self.data.tags[0])
 
     @property
     def npairs(self):

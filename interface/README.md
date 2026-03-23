@@ -4,6 +4,7 @@ This directory contains the CURATOR-owned files that are patched into LAMMPS:
 
 - `pair_curator.cpp/.h`: `pair_style curator`
 - `compute_uncertainty.cpp/.h`: `compute uncertainty <key>`
+- `compute_uncertainty_atom.cpp/.h`: `compute uncertainty/atom <key>`
 - `ML-IAP/mliap_data.h/.cpp`: ML-IAP data plumbing needed by the CURATOR `mliap` bridge
 - `ML-IAP/mliap_unified_couple.pyx`: Python bridge for `pair_style mliap unified`
 
@@ -12,6 +13,41 @@ The intended design is:
 - keep CURATOR-specific LAMMPS code here
 - prefer patching these files instead of editing official LAMMPS source files
 - keep the `mliap` uncertainty path as a CURATOR-side interface change, not a `pair_mliap_kokkos.cpp` fork
+
+## Deploy Uncertainty Maintenance Rule
+
+Deploy-time uncertainty must stay centralized on the CURATOR Python side.
+
+- use `curator.simulate.uncertainty._deploy` as the single deploy uncertainty entrypoint
+- keep method semantics inside the method modules under `curator.simulate.uncertainty`
+- do not add one-off deploy-only files such as `latent_*` or method-specific uncertainty shims
+- prefer generic output-key plumbing in LAMMPS-facing code; LAMMPS should consume keys, not methods
+
+This is a long-term maintainability rule for the curator pipeline: new uncertainty methods
+should extend the registry/builder in `curator.simulate.uncertainty` instead of scattering
+deploy logic across unrelated modules.
+
+The deploy config contract is:
+
+```yaml
+deploy:
+  uncertainty:
+    method: none | ensemble | mahalanobis
+    dataset: null
+    output_keys: null
+    maha:
+      kernel: local-full-g
+      max_structures: null
+      regularization: 1e-6
+      streaming: false
+```
+
+Additional maintenance constraints:
+
+- `method: mahalanobis` must reuse the existing `FeatureCalculator` semantics from `curator.layer._feature`
+- covariance / precision fitting belongs to deploy preparation, not to LAMMPS C++
+- do not add a deploy-only fallback such as `_latent_mahalanobis.py` just to satisfy one runtime
+- if TorchScript support for hook-based Mahalanobis needs more work, fix the shared feature path itself instead of adding a second Mahalanobis implementation
 
 ## Variables Used Below
 
@@ -133,6 +169,8 @@ The generated patch injects these files:
 - `src/pair_curator.h`
 - `src/compute_uncertainty.cpp`
 - `src/compute_uncertainty.h`
+- `src/compute_uncertainty_atom.cpp`
+- `src/compute_uncertainty_atom.h`
 - `src/ML-IAP/mliap_data.cpp`
 - `src/ML-IAP/mliap_data.h`
 - `src/ML-IAP/mliap_unified_couple.pyx`
@@ -185,6 +223,8 @@ cp "${CURATOR_ROOT}/interface/pair_curator.cpp" "${LAMMPS_SRC}/src/"
 cp "${CURATOR_ROOT}/interface/pair_curator.h" "${LAMMPS_SRC}/src/"
 cp "${CURATOR_ROOT}/interface/compute_uncertainty.cpp" "${LAMMPS_SRC}/src/"
 cp "${CURATOR_ROOT}/interface/compute_uncertainty.h" "${LAMMPS_SRC}/src/"
+cp "${CURATOR_ROOT}/interface/compute_uncertainty_atom.cpp" "${LAMMPS_SRC}/src/"
+cp "${CURATOR_ROOT}/interface/compute_uncertainty_atom.h" "${LAMMPS_SRC}/src/"
 mkdir -p "${LAMMPS_SRC}/src/ML-IAP"
 cp "${CURATOR_ROOT}/interface/ML-IAP/mliap_data.cpp" "${LAMMPS_SRC}/src/ML-IAP/"
 cp "${CURATOR_ROOT}/interface/ML-IAP/mliap_data.h" "${LAMMPS_SRC}/src/ML-IAP/"
@@ -247,6 +287,241 @@ Then run a minimal input using:
 
 - `pair_style curator`
 - or `pair_style mliap unified ...`
+
+## Runtime Usage In LAMMPS
+
+The two CURATOR-backed LAMMPS paths are:
+
+- `pair_style curator`: loads a TorchScript model saved by normal CURATOR deploy
+- `pair_style mliap unified`: loads the Python-backed `LAMMPS_MLIAP` object saved by `--mliap` deploy
+
+The uncertainty rule is simple:
+
+- LAMMPS can only read uncertainty keys that are already present in the exported model
+- scalar uncertainty is read with `compute uncertainty <key>`
+- per-atom uncertainty is read with `compute uncertainty/atom <key>`
+
+### 1. Export Models
+
+`pair_style curator` uses a normal TorchScript export:
+
+```bash
+python "${CURATOR_ROOT}/curator/deploy.py" \
+  "${CKPT_OR_CKPTS}" \
+  --target_path compiled_model.pt
+```
+
+`pair_style mliap unified` uses the LAMMPS-specific export:
+
+```bash
+python "${CURATOR_ROOT}/curator/deploy.py" \
+  "${CKPT_OR_CKPTS}" \
+  --target_path mliap_model.pt \
+  --mliap \
+  --element-types Fe Li O P
+```
+
+Convenient uncertainty presets:
+
+```bash
+# ensemble deploy without a config file
+python "${CURATOR_ROOT}/curator/deploy.py" \
+  ckpt1.ckpt ckpt2.ckpt ckpt3.ckpt \
+  --uncertainty ensemble \
+  --target_path compiled_ensemble.pt
+
+# Mahalanobis deploy for pair_style curator
+python "${CURATOR_ROOT}/curator/deploy.py" \
+  model.ckpt \
+  --uncertainty mahalanobis \
+  --dataset reference.traj \
+  --target_path compiled_maha.pt
+
+# Mahalanobis deploy for mliap
+python "${CURATOR_ROOT}/curator/deploy.py" \
+  model.ckpt \
+  --mliap \
+  --element-types Fe Li O P \
+  --uncertainty mahalanobis \
+  --dataset reference.traj \
+  --target_path mliap_model.pt
+```
+
+Notes:
+
+- pass multiple checkpoints if you want an `EnsembleModel`
+- `--uncertainty ensemble` and `--uncertainty mahalanobis` are the only convenience presets exposed on the CLI
+- `deploy.uncertainty` in the config controls whether the exported model carries uncertainty outputs
+- CLI only exposes `method` and `dataset`; advanced settings such as `output_keys`, `maha.kernel`, `max_structures`, `regularization`, and `streaming` belong in `cfg_path`
+- `pair_style curator` Mahalanobis is TorchScript-safe only for `kernel: gnn` or `kernel: local-gnn`
+- `pair_style mliap unified` can also use hook-based Mahalanobis kernels such as `full-g` and `local-full-g`
+- `max_structures: null` means use the full reference dataset; set an integer only if you explicitly want to cap fitting cost
+- ensemble deploy normally does not need a config file; use `cfg_path` only if you want to customize exported uncertainty keys or other advanced deploy settings
+
+Advanced Mahalanobis tuning stays in `cfg_path`, for example:
+
+```yaml
+deploy:
+  uncertainty:
+    method: mahalanobis
+    dataset: reference.traj
+    output_keys:
+      - maha_dist
+      - maha_dist_per_atom
+    maha:
+      kernel: local-full-g
+      max_structures: null
+      regularization: 1e-6
+      streaming: false
+```
+
+### 2. Use `pair_style curator`
+
+`pair_style curator` requires `newton off`, and `pair_coeff` expects atomic numbers in LAMMPS type order.
+
+Minimal example:
+
+```lammps
+units metal
+atom_style atomic
+atom_modify map yes
+boundary p p p
+newton off
+read_data system.data
+
+mass 1 55.845
+mass 2 6.94
+mass 3 15.999
+mass 4 30.973761998
+
+pair_style curator
+pair_coeff * * compiled_model.pt 26 3 8 15
+
+neighbor 2.0 bin
+neigh_modify every 1 delay 0 check yes
+
+thermo_style custom step pe
+thermo 1
+run 0
+```
+
+If you want uncertainty from `pair_style curator`, the requested keys must be listed on the `pair_style` line:
+
+```lammps
+pair_style curator uncertainty force_sd force_sd_per_atom
+pair_coeff * * compiled_model.pt 26 3 8 15
+
+compute fsd all uncertainty force_sd
+compute fsd_atom all uncertainty/atom force_sd_per_atom
+
+thermo_style custom step pe c_fsd
+dump d1 all custom 1 dump.curator id type x y z fx fy fz c_fsd_atom
+run 0
+```
+
+For Mahalanobis on `pair_style curator`:
+
+```lammps
+pair_style curator uncertainty maha_dist maha_dist_per_atom
+pair_coeff * * compiled_model.pt 26 3 8 15
+
+compute umaha all uncertainty maha_dist
+compute umaha_atom all uncertainty/atom maha_dist_per_atom
+```
+
+Use `maha_dist_per_atom` only if the exported Mahalanobis kernel is local, for example `local-gnn`.
+
+### 3. Use `pair_style mliap unified`
+
+`pair_style mliap unified` loads a Python object, so LAMMPS must be able to import both the LAMMPS Python package and CURATOR:
+
+```bash
+export PYTHONPATH="/path/to/lammps-install/lib/pythonX.Y/site-packages:${CURATOR_ROOT}:${PYTHONPATH}"
+```
+
+Minimal example:
+
+```lammps
+units metal
+atom_style atomic
+boundary p p p
+newton on
+read_data system.data
+
+mass 1 55.845
+mass 2 6.94
+mass 3 15.999
+mass 4 30.973761998
+
+pair_style mliap unified mliap_model.pt 0
+pair_coeff * * Fe Li O P
+
+neighbor 2.0 bin
+neigh_modify every 1 delay 0 check yes
+
+thermo_style custom step pe
+thermo 1
+run 0
+```
+
+Unlike `pair_style curator`, `mliap unified` does not take uncertainty keys on the `pair_style` line. It exposes whatever keys are already carried by the exported model.
+
+Scalar uncertainty example:
+
+```lammps
+compute esd all uncertainty energy_sd
+compute fsd all uncertainty force_sd
+thermo_style custom step pe c_esd c_fsd
+```
+
+Per-atom uncertainty example:
+
+```lammps
+compute fsd_atom all uncertainty/atom force_sd_per_atom
+compute aesd_atom all uncertainty/atom atomic_energy_sd
+dump d1 all custom 1 dump.mliap id type x y z fx fy fz c_fsd_atom c_aesd_atom
+```
+
+Mahalanobis example:
+
+```lammps
+compute umaha all uncertainty maha_dist
+compute umaha_atom all uncertainty/atom maha_dist_per_atom
+```
+
+Use `maha_dist_per_atom` only when the exported Mahalanobis kernel is local, for example `local-full-g`, `local-ll-g`, or `local-gnn`.
+
+### 4. Supported Uncertainty Keys
+
+Current exported-model behavior is:
+
+| Deploy method | `pair_style curator` | `pair_style mliap unified` |
+| --- | --- | --- |
+| `none` | energy and forces only | atomic energy and edge forces are written back as total energy and forces |
+| `ensemble` | scalar: `energy_max`, `energy_min`, `energy_var`, `energy_sd`, `force_var`, `force_sd`; per-atom: `force_sd_per_atom` | scalar: `energy_max`, `energy_min`, `energy_var`, `energy_sd`, `force_var`, `force_sd`; per-atom: `force_sd_per_atom`, `atomic_energy_sd` |
+| `mahalanobis` | scalar: `maha_dist`; per-atom: `maha_dist_per_atom` only for local TorchScript-safe kernels such as `local-gnn` | scalar: `maha_dist`; per-atom: `maha_dist_per_atom` for local kernels |
+
+Practical rules:
+
+- only request keys that are actually present in the exported model
+- use `compute uncertainty <key>` for scalar outputs
+- use `compute uncertainty/atom <key>` for per-atom outputs
+- per-atom outputs can be sent to `dump custom` exactly like any other per-atom compute
+
+### 5. Kokkos / `mliap/kk`
+
+The same exported `mliap_model.pt` is used for `mliap/kk`.
+
+Typical launch pattern:
+
+```bash
+lmp -k on g 1 -sf kk -pk kokkos neigh half newton on -in in.mliap
+```
+
+If `mliap/kk` is used, keep the same uncertainty commands:
+
+- `compute uncertainty <key>`
+- `compute uncertainty/atom <key>`
 
 ## Notes On mliap Uncertainty
 

@@ -19,7 +19,7 @@ class MahalanobisUncertainty(BaseUncertainty):
         low_threshold: float = 0.95,
         calculator: Optional[Calculator] = None,
         dataset: Union[str, None] = None,
-        max_structures: Optional[int] = 128,
+        max_structures: Optional[int] = None,
         kernel: str = "local-full-g",
     ) -> None:
         from curator.layer import FeatureCalculator
@@ -47,14 +47,10 @@ class MahalanobisUncertainty(BaseUncertainty):
                     break
 
             if self.feature_calculator is None:
-                # pre-define a feature calculator, then add this module into model's output modules.
-                self.feature_calculator = FeatureCalculator(
-                    dataset=dataset,
-                    compute_maha_dist=True,
-                    max_dataset_size=max_structures,
-                    kernel=kernel,
+                raise RuntimeError(
+                    "MahalanobisUncertainty requires the model/calculator to already expose maha_dist. "
+                    "Attach/configure FeatureCalculator during deploy or model setup."
                 )
-                self.calc.model.output_modules.append(self.feature_calculator)
 
             if not hasattr(self.feature_calculator, "maha_dist"):
                 raise RuntimeError("FeatureCalculator must be initialized with mahalanobis statistics.")

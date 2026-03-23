@@ -1,6 +1,7 @@
 from .painn import Painn
 from .nequip import Nequip
 from .mace import MACE
+from curator.data._uncertainty import UncertaintyModule, collect_uncertainty_outputs
 from .base import (
     NeuralNetworkPotential,
     LitNNP,

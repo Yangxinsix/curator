@@ -13,6 +13,7 @@ from torch import nn
 from torch.utils.data import DataLoader, Subset
 
 from curator.data import AseDataset, properties
+from curator.data._uncertainty import UncertaintyModule
 from .utils import find_layer_by_name_recursive
 try:
     from torch_scatter import scatter_add, scatter_mean
@@ -26,6 +27,13 @@ except ImportError:
     logging_redirect_tqdm = None
 
 logger = logging.getLogger(__name__)
+
+
+def _assign_non_module_attr(module: nn.Module, name: str, value) -> None:
+    # Keep runtime callback handles out of nn.Module child registration.
+    if name in getattr(module, "_modules", {}):
+        del module._modules[name]
+    object.__setattr__(module, name, value)
 
 _DEFAULT_KERNEL = 'full-g'
 _DEFAULT_N_RANDOM_FEATURES = 500
@@ -47,7 +55,7 @@ KernelName = Literal[
 Reduction = Literal["mean", "sum"]
 
 
-def normalize_kernel(kernel: KernelName) -> str:
+def normalize_kernel(kernel: str) -> str:
     aliases = {
         'full-g': 'full-gradient',
         'll-g': 'll-gradient',
@@ -76,7 +84,7 @@ class FeatureExtractor(nn.Module):
             repr_callback: pytorch nn.Module
         """
         super().__init__()
-        self.repr_callback = repr_callback
+        _assign_non_module_attr(self, "repr_callback", repr_callback)
         self._features = []
         self._grads = []
         self.hooks = []
@@ -106,12 +114,12 @@ class FeatureExtractor(nn.Module):
     def attach(self, repr_callback: nn.Module) -> None:
         if self.hooks:
             self.unhook()
-        self.repr_callback = repr_callback
+        _assign_non_module_attr(self, "repr_callback", repr_callback)
         self.add_hooks()
 
     def detach(self) -> None:
         self.unhook()
-        self.repr_callback = None
+        _assign_non_module_attr(self, "repr_callback", None)
 
     def register_repr_callback(self, repr_callback: nn.Module) -> None:
         self.attach(repr_callback)
@@ -145,6 +153,8 @@ class FeatureExtractor(nn.Module):
             self.hooks.append(child.register_backward_hook(self.save_grads_hook))
 
     def forward(self, data: properties.Type, predict: bool = False) -> properties.Type:
+        if torch.jit.is_scripting():
+            return data
         # repr_callback may modify the original data in place, so we need to make a copy of the data
         new_data = data.copy()
         if predict:
@@ -263,7 +273,7 @@ class RandomProjections(FeatureProjector):
 class FeatureKernel:
     """Compute features from (feat, grad) tuples using a fixed kernel/projector."""
 
-    def __init__(self, kernel: KernelName, projector: FeatureProjector) -> None:
+    def __init__(self, kernel: str, projector: FeatureProjector) -> None:
         self.kernel = self._normalize_kernel(kernel)
         self.projector = projector
 
@@ -279,6 +289,8 @@ class FeatureKernel:
             # Sum over all layers: (feat @ in_proj) * (grad @ out_proj)
             if self.projector.num_features == 0:
                 raise ValueError("full-gradient requires random projections.")
+            if not grads:
+                raise RuntimeError("full-gradient requires gradient features.")
             atomic = torch.zeros(
                 (image_idx.shape[0], self.projector.num_features),
                 device=image_idx.device,
@@ -293,6 +305,8 @@ class FeatureKernel:
         elif kernel == 'll-gradient':
             # Last layer only.
             if self.projector.num_features != 0:
+                if not grads:
+                    raise RuntimeError("ll-gradient requires gradient features.")
                 atomic = (feats[-1] @ self.projector.in_feat_proj[-1]) * (
                     grads[-1] @ self.projector.out_grad_proj[-1]
                 )
@@ -301,6 +315,8 @@ class FeatureKernel:
         elif kernel == 'gnn':
             # First layer only.
             if self.projector.num_features != 0:
+                if not grads:
+                    raise RuntimeError("gnn with random projections requires gradient features.")
                 atomic = (feats[0] @ self.projector.in_feat_proj[0]) * (
                     grads[0] @ self.projector.out_grad_proj[0]
                 )
@@ -314,11 +330,11 @@ class FeatureKernel:
         return scatter_add(atomic, image_idx, dim=0)
 
     @staticmethod
-    def _normalize_kernel(kernel: KernelName) -> str:
+    def _normalize_kernel(kernel: str) -> str:
         return normalize_kernel(kernel)
 
 
-class FeatureCalculator(nn.Module):
+class FeatureCalculator(UncertaintyModule):
     """Thin orchestrator for feature extraction and kernel computation."""
 
     def __init__(
@@ -331,7 +347,7 @@ class FeatureCalculator(nn.Module):
         output_features: bool = True,
         compute_maha_dist: bool = False,
         dataset: Optional[Union[torch.utils.data.Dataset, str, Path]] = None,
-        distance_kernel: Optional[KernelName] = None,
+        distance_kernel: Optional[str] = None,
         max_dataset_size: Optional[int] = None,
         streaming: bool = False,
         regularization: float = 1e-6,
@@ -358,27 +374,29 @@ class FeatureCalculator(nn.Module):
                 target_layer=self.extractor.target_layer,
                 target_domain=self.extractor.target_domain,
             )
-        self.repr_callback: Optional[nn.Module] = None
+        _assign_non_module_attr(self, "repr_callback", None)
         self.output_features = output_features
         self.model_outputs = [properties.feature] if self.output_features else []
         self.compute_maha_dist = compute_maha_dist
         self.dataset = dataset
-        self._resolved_distance_kernel: Optional[KernelName] = None
-        self._distance_kernel: Optional[KernelName] = None
+        self._resolved_distance_kernel = ""
+        self._distance_kernel = ""
         self.distance_kernel = distance_kernel
+        self.use_node_features_direct = self._can_use_node_features_direct()
         self.max_dataset_size = max_dataset_size
         self.streaming = streaming
         self.regularization = regularization
         # Prevent recursive forward when compute(predict=True) calls the model.
         self._skip_forward = False
-        if self.compute_maha_dist and properties.maha_dist not in self.model_outputs:
-            self.model_outputs.append(properties.maha_dist)
+        self.update_uncertainty_outputs()
 
     def extract(
         self,
         data: properties.Type,
         predict: bool = False,
     ) -> Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
+        if self.use_node_features_direct:
+            return self._extract_from_node_features(data, predict=predict)
         image_idx = data[properties.image_idx]
         feature_data = self.extractor(data, predict=predict)
         feats = feature_data[properties.feature]
@@ -386,17 +404,36 @@ class FeatureCalculator(nn.Module):
         return image_idx, feats, grads
 
     def register_repr_callback(self, repr_callback: nn.Module) -> None:
-        self.repr_callback = repr_callback
-        self.extractor.attach(repr_callback)
+        _assign_non_module_attr(self, "repr_callback", repr_callback)
         self.kernels = self._build_kernels(
             self.kernels,
             repr_callback=repr_callback,
             target_layer=self.extractor.target_layer,
             target_domain=self.extractor.target_domain,
         )
-        self._resolved_distance_kernel = None
+        self.use_node_features_direct = self._can_use_node_features_direct()
+        if self.use_node_features_direct:
+            self.extractor.detach()
+        else:
+            self.extractor.attach(repr_callback)
+        self._resolved_distance_kernel = ""
         if self.compute_maha_dist and self.dataset is not None:
             self.fit_distance(self.dataset, kernel=self.distance_kernel)
+
+    def update_uncertainty_outputs(self) -> None:
+        scalar_uncertainty_keys = [properties.maha_dist] if self.compute_maha_dist else []
+        per_atom_uncertainty_keys = []
+        if self.compute_maha_dist and self._resolve_distance_kernel().startswith("local_"):
+            per_atom_uncertainty_keys = [properties.maha_dist_per_atom]
+        self.set_uncertainty_outputs(
+            scalar_keys=scalar_uncertainty_keys,
+            per_atom_keys=per_atom_uncertainty_keys,
+        )
+        managed_outputs = {properties.maha_dist, properties.maha_dist_per_atom}
+        self.model_outputs = [key for key in self.model_outputs if key not in managed_outputs]
+        for key in [*self.uncertainty_keys, *self.per_atom_uncertainty_keys]:
+            if key not in self.model_outputs:
+                self.model_outputs.append(key)
 
     def compute(
         self,
@@ -406,26 +443,60 @@ class FeatureCalculator(nn.Module):
         if predict:
             # Avoid re-entrancy when repr_callback routes back into this module.
             self._skip_forward = True
-        try:
             feat_grad = self.extract(data, predict=predict)
-            if not self.kernels:
-                raise RuntimeError("FeatureCalculator kernels are not initialized.")
-            if any(not isinstance(kc, FeatureKernel) for kc in self.kernels):
-                raise RuntimeError(
-                    "FeatureCalculator kernels require initialized projectors; "
-                    "call register_repr_callback or pass FeatureProjector."
-                )
-            if len(self.kernels) == 1:
-                return self.kernels[0].compute(feat_grad)
-            return {
-                kc.kernel: kc.compute(feat_grad)
-                for kc in self.kernels
-            }
-        finally:
-            if predict:
-                self._skip_forward = False
+            self._skip_forward = False
+        else:
+            feat_grad = self.extract(data, predict=predict)
+        if not self.kernels:
+            raise RuntimeError("FeatureCalculator kernels are not initialized.")
+        if any(not isinstance(kc, FeatureKernel) for kc in self.kernels):
+            raise RuntimeError(
+                "FeatureCalculator kernels require initialized projectors; "
+                "call register_repr_callback or pass FeatureProjector."
+            )
+        if len(self.kernels) == 1:
+            return self.kernels[0].compute(feat_grad)
+        return {
+            kc.kernel: kc.compute(feat_grad)
+            for kc in self.kernels
+        }
 
     def forward(self, data: properties.Type, predict: bool = False) -> properties.Type:
+        if torch.jit.is_scripting():
+            if self.use_node_features_direct:
+                if properties.node_feat not in data:
+                    raise RuntimeError("Node features are not available in model data.")
+                if properties.image_idx in data:
+                    image_idx = data[properties.image_idx]
+                else:
+                    image_idx = torch.zeros(
+                        data[properties.node_feat].shape[0],
+                        dtype=torch.long,
+                        device=data[properties.node_feat].device,
+                    )
+                computed = data[properties.node_feat]
+                kernel = normalize_kernel(self.distance_kernel if self.distance_kernel else "gnn")
+                if not kernel.startswith("local_"):
+                    computed = scatter_add(computed, image_idx, dim=0)
+                if self.output_features:
+                    data[properties.feature] = computed
+                if self.compute_maha_dist:
+                    if not hasattr(self, "precision") or not hasattr(self, "feature_mean"):
+                        raise RuntimeError("Mahalanobis statistics are not initialized.")
+                    feats = (computed - self.feature_mean) / self.feature_std
+                    dist_sq = torch.einsum("bi,ij,bj->b", feats, self.precision, feats)
+                    distances = torch.sqrt(torch.clamp(dist_sq, min=0.0))
+                    if kernel.startswith("local_"):
+                        data[properties.maha_dist_per_atom] = distances
+                        data[properties.maha_dist] = scatter_mean(distances, image_idx, dim=0)
+                    else:
+                        data[properties.maha_dist] = distances
+                return data
+            raise RuntimeError("Hook-based FeatureCalculator runtime is not TorchScript-safe.")
+        return self._forward_python(data, predict=predict)
+
+    @torch.jit.unused
+    def _forward_python(self, data, predict=False):
         if self._skip_forward:
             return data
         computed = self.compute(data, predict=predict)
@@ -445,15 +516,17 @@ class FeatureCalculator(nn.Module):
             dist_sq = torch.einsum("bi,ij,bj->b", feats, self.precision, feats)
             distances = torch.sqrt(torch.clamp(dist_sq, min=0.0))
             if kernel.startswith("local_"):
-                distances = scatter_mean(distances, data[properties.image_idx], dim=0)
-            data[properties.maha_dist] = distances
+                data[properties.maha_dist_per_atom] = distances
+                data[properties.maha_dist] = scatter_mean(distances, data[properties.image_idx], dim=0)
+            else:
+                data[properties.maha_dist] = distances
         return data
 
     # function to fit the covariance matrix for computing the Mahalanobis distance
     def fit_distance(
         self,
         dataset: Optional[Union[torch.utils.data.Dataset, str, Path]] = None,
-        kernel: Optional[KernelName] = None,
+        kernel: Optional[str] = None,
     ) -> None:
         if dataset is None:
             dataset = self.dataset
@@ -478,11 +551,14 @@ class FeatureCalculator(nn.Module):
         if kernel.startswith("local_"):
             image_idx = self._build_image_idx(dataset)
             reduction = "mean"
+        stats_batch_size = 8
+        if hasattr(dataset, "__len__"):
+            stats_batch_size = max(1, min(len(dataset), stats_batch_size))
         stats = FeatureStatistics(
             models=[self.repr_callback],
             dataset=dataset,
             calculators=[self],
-            batch_size=self.max_dataset_size or 1,
+            batch_size=stats_batch_size,
             device=str(next(self.repr_callback.parameters()).device),
         )
         metrics = DistanceMetrics(regularization=self.regularization)
@@ -502,6 +578,58 @@ class FeatureCalculator(nn.Module):
         self.register_buffer("maha_dist", metrics.reference_distances.to(device))
         self.distance_kernel = kernel
 
+    def _extract_from_node_features(
+        self,
+        data: properties.Type,
+        predict: bool = False,
+    ) -> Tuple[torch.Tensor, List[torch.Tensor], List[torch.Tensor]]:
+        feature_data = data.copy()
+        if predict:
+            if self.repr_callback is None:
+                raise ValueError("repr_callback must be set before computing features.")
+            if hasattr(self.repr_callback, "input_modules") and hasattr(self.repr_callback, "representation"):
+                for module in self.repr_callback.input_modules:
+                    feature_data = module(feature_data)
+                feature_data = self.repr_callback.representation(feature_data)
+            else:
+                feature_data = self.repr_callback(feature_data)
+        if properties.node_feat not in feature_data:
+            raise RuntimeError("Node features are not available in model data.")
+        node_feat = feature_data[properties.node_feat]
+        if properties.image_idx in feature_data:
+            image_idx = feature_data[properties.image_idx]
+        else:
+            image_idx = torch.zeros(
+                node_feat.shape[0],
+                dtype=torch.long,
+                device=node_feat.device,
+            )
+        bias = torch.ones(
+            (node_feat.shape[0], 1),
+            dtype=node_feat.dtype,
+            device=node_feat.device,
+        )
+        return image_idx, [torch.cat((node_feat, bias), dim=-1)], []
+
+    def _can_use_node_features_direct(self) -> bool:
+        if not self.kernels:
+            return False
+        for kernel in self.kernels:
+            if isinstance(kernel, FeatureKernel):
+                if kernel.kernel not in {"gnn", "local_gnn"}:
+                    return False
+                if kernel.projector.num_features != 0:
+                    return False
+                continue
+            if not isinstance(kernel, tuple) or len(kernel) != 2:
+                return False
+            kernel_name, projector = kernel
+            if FeatureKernel._normalize_kernel(str(kernel_name)) not in {"gnn", "local_gnn"}:
+                return False
+            if not isinstance(projector, int) or projector != 0:
+                return False
+        return True
+
     @staticmethod
     def _build_image_idx(dataset: torch.utils.data.Dataset) -> torch.Tensor:
         counts: List[int] = []
@@ -516,15 +644,15 @@ class FeatureCalculator(nn.Module):
             return torch.cat([torch.full((n,), i, dtype=torch.long) for i, n in enumerate(counts)])
         return torch.empty((0,), dtype=torch.long)
 
-    def _resolve_distance_kernel(self, kernel: Optional[KernelName] = None) -> KernelName:
-        if kernel is None and self._resolved_distance_kernel is not None:
+    def _resolve_distance_kernel(self, kernel: Optional[str] = None) -> str:
+        if kernel is None and self._resolved_distance_kernel:
             return self._resolved_distance_kernel
         if kernel is not None:
-            kernel = FeatureKernel._normalize_kernel(str(kernel))
+            kernel = normalize_kernel(str(kernel))
             logger.info("Distance kernel override: %s", kernel)
         if kernel is None:
-            if self.distance_kernel is not None:
-                kernel = FeatureKernel._normalize_kernel(str(self.distance_kernel))
+            if self.distance_kernel:
+                kernel = normalize_kernel(str(self.distance_kernel))
                 logger.info("Distance kernel from config: %s", kernel)
             elif self.kernels:
                 first = self.kernels[0]
@@ -533,17 +661,17 @@ class FeatureCalculator(nn.Module):
             else:
                 kernel = _DEFAULT_KERNEL
                 logger.info("Distance kernel fallback: %s", kernel)
-        self._resolved_distance_kernel = FeatureKernel._normalize_kernel(str(kernel))
+        self._resolved_distance_kernel = normalize_kernel(str(kernel))
         return self._resolved_distance_kernel
 
     @property
-    def distance_kernel(self) -> Optional[KernelName]:
+    def distance_kernel(self) -> str:
         return self._distance_kernel
 
     @distance_kernel.setter
-    def distance_kernel(self, kernel: Optional[KernelName]) -> None:
-        self._distance_kernel = kernel
-        self._resolved_distance_kernel = None
+    def distance_kernel(self, kernel: Optional[str]) -> None:
+        self._distance_kernel = "" if kernel is None else str(kernel)
+        self._resolved_distance_kernel = ""
 
     def _resolve_dataset(
         self,

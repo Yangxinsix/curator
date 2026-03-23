@@ -91,8 +91,12 @@ PACKAGE_FILE="${SPACK_PACKAGE_DIR}/package.py"
 required_files=(
   "${INTERFACE_DIR}/compute_uncertainty.cpp"
   "${INTERFACE_DIR}/compute_uncertainty.h"
+  "${INTERFACE_DIR}/compute_uncertainty_atom.cpp"
+  "${INTERFACE_DIR}/compute_uncertainty_atom.h"
   "${INTERFACE_DIR}/pair_curator.cpp"
   "${INTERFACE_DIR}/pair_curator.h"
+  "${MLIAP_INTERFACE_DIR}/mliap_data.cpp"
+  "${MLIAP_INTERFACE_DIR}/mliap_data.h"
   "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx"
   "${LAMMPS_TARBALL}"
   "${PACKAGE_FILE}"
@@ -133,9 +137,13 @@ fi
 
 cp "${INTERFACE_DIR}/compute_uncertainty.cpp" "${mod}/src/compute_uncertainty.cpp"
 cp "${INTERFACE_DIR}/compute_uncertainty.h" "${mod}/src/compute_uncertainty.h"
+cp "${INTERFACE_DIR}/compute_uncertainty_atom.cpp" "${mod}/src/compute_uncertainty_atom.cpp"
+cp "${INTERFACE_DIR}/compute_uncertainty_atom.h" "${mod}/src/compute_uncertainty_atom.h"
 cp "${INTERFACE_DIR}/pair_curator.cpp" "${mod}/src/pair_curator.cpp"
 cp "${INTERFACE_DIR}/pair_curator.h" "${mod}/src/pair_curator.h"
 mkdir -p "${mod}/src/ML-IAP"
+cp "${MLIAP_INTERFACE_DIR}/mliap_data.cpp" "${mod}/src/ML-IAP/mliap_data.cpp"
+cp "${MLIAP_INTERFACE_DIR}/mliap_data.h" "${mod}/src/ML-IAP/mliap_data.h"
 cp "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx" "${mod}/src/ML-IAP/mliap_unified_couple.pyx"
 
 override_targets=()
@@ -155,8 +163,12 @@ targets=(
   "cmake/CMakeLists.txt"
   "src/compute_uncertainty.cpp"
   "src/compute_uncertainty.h"
+  "src/compute_uncertainty_atom.cpp"
+  "src/compute_uncertainty_atom.h"
   "src/pair_curator.cpp"
   "src/pair_curator.h"
+  "src/ML-IAP/mliap_data.cpp"
+  "src/ML-IAP/mliap_data.h"
   "src/ML-IAP/mliap_unified_couple.pyx"
 )
 targets+=("${override_targets[@]}")

@@ -19,6 +19,7 @@ from .datamodule import AtomsDataModule
 from ._type_mapper import TypeMapper
 from ._transform import Transform, UnitTransform
 from .utils import read_trajectory
+from ._uncertainty import UncertaintyModule, collect_uncertainty_outputs
 from .properties import (
     _DEFAULT_EDGE_FIELDS,
     _DEFAULT_INDEX_FIELDS,
@@ -52,6 +53,8 @@ __all__ = [
     Transform,
     UnitTransform,
     AtomsDataModule,
+    UncertaintyModule,
+    collect_uncertainty_outputs,
     _DEFAULT_EDGE_FIELDS,
     _DEFAULT_INDEX_FIELDS,
     _DEFAULT_GRAPH_FIELDS,

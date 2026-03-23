@@ -64,6 +64,8 @@ required_files=(
   "${INTERFACE_DIR}/pair_curator.h"
   "${INTERFACE_DIR}/compute_uncertainty.cpp"
   "${INTERFACE_DIR}/compute_uncertainty.h"
+  "${INTERFACE_DIR}/compute_uncertainty_atom.cpp"
+  "${INTERFACE_DIR}/compute_uncertainty_atom.h"
   "${MLIAP_INTERFACE_DIR}/mliap_data.cpp"
   "${MLIAP_INTERFACE_DIR}/mliap_data.h"
   "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx"
@@ -97,6 +99,7 @@ block = '''option(PKG_CURATOR "Enable CURATOR package" OFF)
 set(CURATOR_SOURCES
   ${LAMMPS_SOURCE_DIR}/pair_curator.cpp
   ${LAMMPS_SOURCE_DIR}/compute_uncertainty.cpp
+  ${LAMMPS_SOURCE_DIR}/compute_uncertainty_atom.cpp
 )
 if(NOT PKG_CURATOR)
   list(REMOVE_ITEM ALL_SOURCES ${CURATOR_SOURCES})
@@ -138,6 +141,8 @@ install_one "${INTERFACE_DIR}/pair_curator.cpp" "${LAMMPS_DIR}/src/pair_curator.
 install_one "${INTERFACE_DIR}/pair_curator.h" "${LAMMPS_DIR}/src/pair_curator.h"
 install_one "${INTERFACE_DIR}/compute_uncertainty.cpp" "${LAMMPS_DIR}/src/compute_uncertainty.cpp"
 install_one "${INTERFACE_DIR}/compute_uncertainty.h" "${LAMMPS_DIR}/src/compute_uncertainty.h"
+install_one "${INTERFACE_DIR}/compute_uncertainty_atom.cpp" "${LAMMPS_DIR}/src/compute_uncertainty_atom.cpp"
+install_one "${INTERFACE_DIR}/compute_uncertainty_atom.h" "${LAMMPS_DIR}/src/compute_uncertainty_atom.h"
 install_one "${MLIAP_INTERFACE_DIR}/mliap_data.cpp" "${LAMMPS_DIR}/src/ML-IAP/mliap_data.cpp"
 install_one "${MLIAP_INTERFACE_DIR}/mliap_data.h" "${LAMMPS_DIR}/src/ML-IAP/mliap_data.h"
 install_one "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx" "${LAMMPS_DIR}/src/ML-IAP/mliap_unified_couple.pyx"

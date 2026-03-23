@@ -12,7 +12,7 @@ uncertainty_backend:
     kernel: local-full-g                                                        # kernel for Mahalanobis distance
     low_threshold: 0.9                                                          # Mahalanobis low threshold
     high_threshold: 0.99                                                        # Mahalanobis high threshold
-    max_structures: 128                                                         # maximum reference structures stored
+    max_structures: null                                                        # null = use the full reference dataset
   ensemble_kwargs:
     uncertainty_keys:
       - force_sd                                                                # ensemble spread metric for forces

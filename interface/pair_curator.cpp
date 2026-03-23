@@ -7,6 +7,7 @@ References:
 ------------------------------------------------------------------------- */
 
 #include <pair_curator.h>
+#include "compute_uncertainty_atom.h"
 #include "atom.h"
 #include "comm.h"
 #include "domain.h"
@@ -344,12 +345,28 @@ void PairCurator::compute(int eflag, int vflag){
 
   // Get uncertainties
   if (compute_uncertainty) {
+    clear_pair_uncertainty_arrays(this);
     for (auto& pair : uncertainties) {
       const std::string &name = pair.first;
       auto it = output.find(name);
       if (it != output.end()) {
         torch::Tensor uncertainty_tensor = output.at(name).toTensor().cpu();
-        pair.second = uncertainty_tensor.item<float>(); // Update the uncertainty value
+        if (uncertainty_tensor.numel() == 1) {
+          pair.second = uncertainty_tensor.item<float>();
+        } else if (uncertainty_tensor.numel() == nlocal) {
+          torch::Tensor uncertainty_flat =
+              uncertainty_tensor.reshape({nlocal}).to(torch::kFloat64).contiguous();
+          set_pair_uncertainty_array(
+            this,
+            name,
+            uncertainty_flat.data_ptr<double>(),
+            nlocal
+          );
+        } else {
+          std::string error_msg =
+            "Uncertainty key '" + name + "' must be scalar or have length nlocal.";
+          error->all(FLERR, error_msg.c_str());
+        }
       } else {
         std::string error_msg = "Uncertainty key '" + name + "' not found in model output.";
         error->all(FLERR, error_msg.c_str());
@@ -377,6 +394,12 @@ void PairCurator::compute(int eflag, int vflag){
 }
 
 double PairCurator::get_uncertainty(const std::string &name) const {
+  int nvalues = 0;
+  if (get_pair_uncertainty_array_ptr(const_cast<PairCurator *>(this), name, nvalues) != nullptr) {
+    std::string error_msg =
+      "Uncertainty '" + name + "' is per-atom; use compute uncertainty/atom instead.";
+    error->all(FLERR, error_msg.c_str());
+  }
   auto it = uncertainties.find(name);
   if (it != uncertainties.end()) {
     return it->second;
@@ -390,6 +413,8 @@ double PairCurator::get_uncertainty(const std::string &name) const {
 void *PairCurator::extract(const char *name, int &dim)
 {
   dim = 0;
+  int nvalues = 0;
+  if (get_pair_uncertainty_array_ptr(this, std::string(name), nvalues) != nullptr) return nullptr;
   auto it = uncertainties.find(std::string(name));
   if (it == uncertainties.end()) return nullptr;
   return static_cast<void *>(&it->second);

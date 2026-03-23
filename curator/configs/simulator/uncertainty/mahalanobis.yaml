@@ -3,4 +3,4 @@ high_threshold: 1.1                                             # upper confiden
 low_threshold: 0.95                                             # lower confidence threshold
 dataset: null                                                   # reference dataset for covariance
 kernel: local-full-g                                            # kernel used for embedding
-max_structures: 128                                             # cap on stored reference structures
+max_structures: null                                            # null = use the full reference dataset

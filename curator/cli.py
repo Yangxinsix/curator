@@ -11,7 +11,7 @@ except ImportError:  # pragma: no cover
 import logging
 import socket
 import contextlib
-from typing import Optional, Union, Dict, List
+from typing import Optional, Union, Dict, List, Any, Mapping
 
 # very ugly solution for solving pytorch lighting and myqueue conflictions
 if "SLURM_NTASKS" in os.environ:
@@ -68,6 +68,109 @@ def _ensure_resolvers():
 
     register_resolvers()
     _resolvers_registered = True
+
+
+def _plain_uncertainty_spec(spec: Optional[Any]) -> Optional[dict]:
+    if spec is None:
+        return None
+    if isinstance(spec, DictConfig):
+        spec = OmegaConf.to_container(spec, resolve=False)
+    if not isinstance(spec, Mapping):
+        raise TypeError(f"deploy.uncertainty must be a mapping, got {type(spec)}")
+    return dict(spec)
+
+
+def _default_uncertainty_spec(method: str, *, lammps_mliap: bool) -> dict:
+    method = str(method).strip().lower()
+    if method in ("", "none", "null"):
+        return {"method": "none"}
+    if method == "ensemble":
+        return {"method": "ensemble", "output_keys": None}
+    if method == "mahalanobis":
+        # TorchScript pair_curator needs a scriptable kernel by default.
+        default_kernel = "local-full-g" if lammps_mliap else "local-gnn"
+        return {
+            "method": "mahalanobis",
+            "dataset": None,
+            "output_keys": None,
+            "maha": {
+                "kernel": default_kernel,
+                "max_structures": None,
+                "regularization": 1e-6,
+                "streaming": False,
+            },
+        }
+    raise ValueError(f"Unknown uncertainty preset '{method}'.")
+
+
+def _merge_uncertainty_specs(base: Optional[Any], override: Optional[Any]) -> Optional[dict]:
+    base_plain = _plain_uncertainty_spec(base) or {}
+    override_plain = _plain_uncertainty_spec(override) or {}
+    if not base_plain and not override_plain:
+        return None
+    if str(override_plain.get("method", "")).strip().lower() in ("none", "null"):
+        return {"method": "none"}
+
+    merged = dict(base_plain)
+    for key, value in override_plain.items():
+        if value is None:
+            continue
+        if isinstance(value, Mapping) and isinstance(merged.get(key), Mapping):
+            nested = dict(merged[key])
+            for nested_key, nested_value in value.items():
+                if nested_value is not None:
+                    nested[nested_key] = nested_value
+            merged[key] = nested
+        else:
+            merged[key] = value
+    return merged
+
+
+def _build_deploy_uncertainty_spec(
+    *,
+    method: Optional[str] = None,
+    dataset: Optional[str] = None,
+    lammps_mliap: bool = False,
+    allow_partial: bool = False,
+) -> Optional[dict]:
+    if method is None:
+        if dataset is None:
+            return None
+        if not allow_partial:
+            raise ValueError(
+                "--dataset requires --uncertainty mahalanobis "
+                "or deploy.uncertainty.method=mahalanobis in cfg."
+            )
+        return {"dataset": dataset}
+
+    cli_method = str(method).strip().lower()
+    if cli_method in ("", "none", "null"):
+        return {"method": "none"}
+
+    spec = _default_uncertainty_spec(cli_method, lammps_mliap=lammps_mliap)
+
+    spec["method"] = str(spec.get("method", "none")).strip().lower()
+
+    if dataset is not None:
+        spec["dataset"] = dataset
+
+    if spec["method"] == "mahalanobis" and spec.get("dataset") in (None, "", "none", "null"):
+        raise ValueError(
+            "Mahalanobis deploy needs a reference dataset. "
+            "Pass --dataset or set deploy.uncertainty.dataset in cfg."
+        )
+
+    return spec
+
+
+def _resolve_default_deploy_target_path(
+    target_path: str,
+    *,
+    lammps_mliap: bool,
+) -> str:
+    if lammps_mliap and target_path == "compiled_model.pt":
+        return "mliap_model.pt"
+    return target_path
 
 # Trainining with Pytorch Lightning (only with weights and biasses)
 @hydra.main(config_path="configs", config_name="train", version_base=None)
@@ -259,7 +362,11 @@ def train(config: DictConfig) -> None:
                 log.debug(f"Deploy trained model from {model_path}")
             else:
                 log.debug(f"Deploy trained model from {model_path} with validation loss of {val_loss:.3f}")
-            deploy(model_path, f"{config.run_path}/compiled_model.pt")
+            deploy(
+                model_path,
+                f"{config.run_path}/compiled_model.pt",
+                uncertainty_spec=OmegaConf.select(config, "deploy.uncertainty", default=None),
+            )
             log.debug(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
 
 # Training without Pytorch Lightning
@@ -348,17 +455,45 @@ def tmp_train(config: DictConfig):
         if len(model_path) > 1:
             log.warning("Multiple best models found, using the last one.")
         model_path = model_path[-1]
-        
-        # Compile the model
-        model = torch.load(model_path, map_location=torch.device(config.device))
-        model_compiled = script(model)
-        metadata = {"cutoff": str(model_compiled.representation.cutoff).encode("ascii")}
-        model_compiled.save(f"{config.run_path}/compiled_model.pt", _extra_files=metadata)
+
+        deploy(
+            model_path,
+            f"{config.run_path}/compiled_model.pt",
+            uncertainty_spec=OmegaConf.select(config, "deploy.uncertainty", default=None),
+        )
         log.debug(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
 
 def _deploy_parse_args(argv: Optional[List[str]] = None):
     parser = argparse.ArgumentParser(
-        description="Script for deploy curator models",
+        description=(
+            "Deploy CURATOR checkpoint(s) to either a TorchScript model for "
+            "pair_style curator or a Python-backed model for pair_style mliap unified."
+        ),
+        epilog=(
+            "Examples:\n"
+            "  pair_style curator:\n"
+            "    python curator/deploy.py model.ckpt --target_path compiled_model.pt\n"
+            "\n"
+            "  mliap:\n"
+            "    python curator/deploy.py model.ckpt --mliap \\\n"
+            "      --element-types Fe Li O P --target_path mliap_model.pt\n"
+            "\n"
+            "  mliap + mahalanobis:\n"
+            "    python curator/deploy.py model.ckpt --mliap \\\n"
+            "      --element-types Fe Li O P --uncertainty mahalanobis \\\n"
+            "      --dataset reference.traj --target_path mliap_model.pt\n"
+            "\n"
+            "  ensemble:\n"
+            "    python curator/deploy.py ckpt1.ckpt ckpt2.ckpt ckpt3.ckpt \\\n"
+            "      --uncertainty ensemble --target_path compiled_ensemble.pt\n"
+            "\n"
+            "Notes:\n"
+            "  - passing multiple INPUT_FILE values creates an EnsembleModel\n"
+            "  - --mliap requires --element-types\n"
+            "  - --dataset is only needed for Mahalanobis\n"
+            "  - use --cfg_path for advanced deploy.uncertainty settings"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
         fromfile_prefix_chars="+",
     )
     parser.add_argument(
@@ -366,35 +501,48 @@ def _deploy_parse_args(argv: Optional[List[str]] = None):
         metavar="INPUT_FILE",
         type=str,
         nargs="+",
-        help="Path(s) to model to be compiled",
+        help="One or more checkpoint/model paths to export",
     )
     parser.add_argument(
         "--target_path",
         type=str,
         default="compiled_model.pt",
-        help="Path to save compiled model",
+        help="Output path for the exported model; if left unchanged, --mliap rewrites compiled_model.pt to mliap_model.pt",
     )
     parser.add_argument(
         "--load_weights_only",
         action="store_true",
-        help="Load trained weights while initializing the model",
+        help="Rebuild the model from config/checkpoint metadata and load weights only",
     )
     parser.add_argument(
         "--cfg_path",
         type=str,
-        help="Configuration file that defines model parameters (optional)",
+        help="Optional config file; use deploy.uncertainty there for detailed deploy tuning",
     )
     parser.add_argument(
-        "--lammps",
+        "--uncertainty",
+        type=str,
+        choices=["none", "ensemble", "mahalanobis"],
+        default=None,
+        help="Convenience uncertainty preset; keep detailed tuning in cfg_path",
+    )
+    parser.add_argument(
+        "--dataset",
+        type=str,
+        default=None,
+        help="Reference dataset for Mahalanobis fitting; not needed for ensemble",
+    )
+    parser.add_argument(
+        "--mliap",
         action="store_true",
-        help="Export a LAMMPS MLIAP-ready model instead of torchscript",
+        help="Export an mliap unified model instead of TorchScript pair_style curator output",
     )
     parser.add_argument(
         "--element-types",
         type=str,
         nargs="+",
         default=None,
-        help="Element symbols ordered as in the LAMMPS pair_style; required when --lammps-mliap is set",
+        help="Element symbols in LAMMPS type order; required when --mliap is set",
     )
     if argcomplete:
         argcomplete.autocomplete(parser)
@@ -402,15 +550,29 @@ def _deploy_parse_args(argv: Optional[List[str]] = None):
 
 def deploy_main(argv: Optional[List[str]] = None):
     args = _deploy_parse_args(argv)
-    return deploy(
+    target_path = _resolve_default_deploy_target_path(
+        args.target_path,
+        lammps_mliap=args.mliap,
+    )
+    uncertainty_spec = _build_deploy_uncertainty_spec(
+        method=args.uncertainty,
+        dataset=args.dataset,
+        lammps_mliap=args.mliap,
+        allow_partial=bool(args.cfg_path),
+    )
+    model = deploy(
         model_path=args.model_path,
-        target_path=args.target_path,
+        target_path=target_path,
         load_weights_only=args.load_weights_only,
         cfg_path=args.cfg_path,
         return_model=False,
-        lammps_mliap=args.lammps,
+        lammps_mliap=args.mliap,
         element_types=args.element_types,
+        uncertainty_spec=uncertainty_spec,
     )
+    export_kind = "mliap" if args.mliap else "torchscript"
+    print(f"Deploy succeeded: type={export_kind} output={target_path}")
+    return model
 
 def _convert_parse_args(argv: Optional[List[str]] = None):
     parser = argparse.ArgumentParser(
@@ -570,6 +732,7 @@ def deploy(
         return_model: bool = False,
         lammps_mliap: bool = False,
         element_types: Optional[List[str]] = None,
+        uncertainty_spec: Optional[dict] = None,
     ):
     """ Deploy the model and save a compiled model.
 
@@ -584,6 +747,7 @@ def deploy(
     from e3nn.util.jit import script
     from curator.model import EnsembleModel
     from curator.layer import PairwiseDistance
+    from curator.simulate.uncertainty._deploy import prepare_deploy_uncertainty
     from curator.layer.utils import find_layer_by_name_recursive
     from .utils import read_user_config, normalize_config_sequences, load_models
 
@@ -598,10 +762,17 @@ def deploy(
                 disabled += 1
         return disabled
 
+    target_path = _resolve_default_deploy_target_path(
+        target_path,
+        lammps_mliap=lammps_mliap,
+    )
+
     cfg = None
     if cfg_path is not None:
         cfg = read_user_config(cfg_path, config_path="configs", config_name="train")
         normalize_config_sequences(cfg)
+        cfg_uncertainty_spec = OmegaConf.select(cfg, "deploy.uncertainty", default=None)
+        uncertainty_spec = _merge_uncertainty_specs(cfg_uncertainty_spec, uncertainty_spec)
 
     # Load model(s)
     models = load_models(
@@ -611,20 +782,31 @@ def deploy(
         load_weights_only=load_weights_only,
         cfg=cfg,
     )
+    uncertainty_method = "none"
+    if uncertainty_spec is not None and hasattr(uncertainty_spec, "get"):
+        uncertainty_method = str(uncertainty_spec.get("method", "none")).strip().lower()
     if len(models) > 1:
-        model = EnsembleModel(models)
+        model = EnsembleModel(
+            models,
+            per_atom_uncertainty=bool(lammps_mliap or uncertainty_method == "ensemble"),
+        )
     else:
         model = models[0]
+    if uncertainty_spec is not None and str(uncertainty_spec.get("method", "none")).strip().lower() not in ("none", "", "null"):
+        log.info("Preparing deploy uncertainty via unified registry: %s", uncertainty_spec.get("method"))
 
     disabled_neighborlist_modules = disable_internal_neighborlist(model)
 
     if lammps_mliap:
+        prepare_deploy_uncertainty(
+            model,
+            uncertainty_spec,
+            lammps_mliap=True,
+        )
         if not element_types:
             raise ValueError("element_types must be provided when exporting LAMMPS MLIAP models.")
         from curator.simulate.lammps_mliap_interface import LAMMPS_MLIAP
         lmp_model = LAMMPS_MLIAP(model, element_types)
-        if target_path == 'compiled_model.pt':
-            target_path = 'lmp_model.pt'
         torch.save(lmp_model, target_path)
         if disabled_neighborlist_modules:
             log.info(
@@ -654,6 +836,12 @@ def deploy(
             "Disabled internal PairwiseDistance neighbor-list construction in %d module(s) before deploy.",
             disabled_neighborlist_modules,
         )
+
+    prepare_deploy_uncertainty(
+        model,
+        uncertainty_spec,
+        lammps_mliap=False,
+    )
 
     # Compile the model
     model_compiled = script(model)
@@ -709,6 +897,7 @@ def evaluate(config: DictConfig):
         model = deploy(
             config.model_path, 
             load_weights_only=config.deploy.load_weights_only,
+            uncertainty_spec=OmegaConf.select(config, "deploy.uncertainty", default=None),
             return_model=True,
         )
     else:

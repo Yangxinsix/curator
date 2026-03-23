@@ -40,6 +40,7 @@ atomic_charge: Final[str] = "atomic_charge"
 dipole: Final[str] = "dipole"
 total_magmom: Final[str] = "total_magmom"
 atomic_energy: Final[str] = "atomic_energy"
+atomic_energy_sd: Final[str] = "atomic_energy_sd"
 fermi_level: Final[str] = "fermi_level"
 ewald_energy: Final[str] = "ewald_energy"
 ewald_forces: Final[str] = "ewald_forces"
@@ -55,6 +56,7 @@ e_se: Final[str] = "energy_se"        # energy standard error
 
 f_var: Final[str] = "force_var"      # forces variance
 f_sd: Final[str] = "force_sd"        # forces standard deviation
+force_sd_per_atom: Final[str] = "force_sd_per_atom"
 f_max: Final[str] = "force_max"      # forces maximum
 f_min: Final[str] = "force_min"      # forces minimum
 f_ae: Final[str] = "force_ae"        # forces absolute error
@@ -80,6 +82,7 @@ sc: Final[str] = "_skip_connection"
 feature: Final[str] = "feature"
 gradient: Final[str] = "gradient"
 maha_dist: Final[str] = "maha_dist"         # mahalanobis distance
+maha_dist_per_atom: Final[str] = "maha_dist_per_atom"  # per-atom mahalanobis distance
 
 _DEFAULT_INDEX_FIELDS: Set[str] = {
     image_idx,
@@ -95,7 +98,10 @@ _DEFAULT_NODE_FIELDS: Set[str] = {
     atomic_numbers,
     atomic_types,
     atomic_energy,
+    atomic_energy_sd,
     forces,
+    force_sd_per_atom,
+    maha_dist_per_atom,
     image_idx,
 }
 

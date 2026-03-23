@@ -6,9 +6,10 @@ import os
 import sys
 import time
 from contextlib import contextmanager
-from typing import Dict, Tuple, Optional, List, Union
+from typing import Dict, Optional, List, Union
 import numpy as np
 from curator.data import properties
+from curator.data._uncertainty import collect_uncertainty_outputs
 from curator.layer import GradientOutput, GlobalRescaleShift, PairwiseDistance
 from curator.model.base import NeuralNetworkPotential, LitNNP
 from curator.model.ensemble import EnsembleModel
@@ -80,12 +81,16 @@ class LAMMPS_MLIAP(MLIAPUnified):
         self.device = "cpu"
         self.initialized = False
         self.step = 0
-
-        self.compute_uncertainty = isinstance(base_model, EnsembleModel) and len(base_model.models) > 1
-        self.models = list(base_model.models) if isinstance(base_model, EnsembleModel) else [base_model]
-        for submodel in self.models:
+        models_to_convert = list(base_model.models) if isinstance(base_model, EnsembleModel) else [base_model]
+        for submodel in models_to_convert:
             self._convert_model(submodel)
+        if isinstance(base_model, EnsembleModel):
+            base_model.refresh_model_outputs()
         self.model = base_model
+        (
+            self.scalar_uncertainty_output_keys,
+            self.per_atom_uncertainty_output_keys,
+        ) = collect_uncertainty_outputs(base_model)
         # LAMMPS MLIAP provides integer element types (0..N-1 or 1..N) rather than atomic numbers.
         # Keep a type -> atomic-number table from pair_coeff element order.
         self._elem_type_to_z = torch.tensor(
@@ -195,7 +200,17 @@ class LAMMPS_MLIAP(MLIAPUnified):
 
     @staticmethod
     def _convert_model(model):
-        model.model_outputs = [properties.atomic_energy, properties.edge_forces]
+        keep_outputs = [
+            key
+            for key in getattr(model, "model_outputs", [])
+            if key not in {
+                properties.energy,
+                properties.forces,
+                properties.atomic_energy,
+                properties.edge_forces,
+            }
+        ]
+        model.model_outputs = [properties.atomic_energy, properties.edge_forces] + keep_outputs
 
         # output atomic energy
         readout = model.representation.readout
@@ -267,9 +282,7 @@ class LAMMPS_MLIAP(MLIAPUnified):
             device = torch.device("cpu")
 
         self.device = device
-        self.models = [model.to(device) for model in self.models]
-        if len(self.models) == 1:
-            self.model = self.models[0]
+        self.model = self.model.to(device)
         logging.info(f"CURATOR model initialized on device: {device}")
         self.initialized = True
 
@@ -294,7 +307,7 @@ class LAMMPS_MLIAP(MLIAPUnified):
                 batch = self._prepare_batch(data, use_ghost_exchange)
 
             with timer("model_forward", enabled=self.config.debug_time):
-                out, uncertainties = self._forward_models(
+                out = self._forward_model(
                     batch=batch,
                     data=data,
                     natoms=natoms,
@@ -313,7 +326,8 @@ class LAMMPS_MLIAP(MLIAPUnified):
                         "atomic_energy_shape": list(atom_energies.shape),
                         "edge_forces_shape": list(pair_forces.shape),
                         "local_energy_sum": float(torch.sum(atom_energies[:natoms]).item()),
-                        "uncertainties": uncertainties,
+                        "scalar_uncertainty_keys": list(self.scalar_uncertainty_output_keys),
+                        "per_atom_uncertainty_keys": list(self.per_atom_uncertainty_output_keys),
                     },
                     arrays={
                         "atomic_energy": atom_energies.detach().cpu().numpy(),
@@ -322,7 +336,8 @@ class LAMMPS_MLIAP(MLIAPUnified):
                 )
 
             with timer("update_lammps", enabled=self.config.debug_time):
-                self._update_lammps_data(data, atom_energies, pair_forces, natoms, uncertainties)
+                self._write_core_outputs(data, out, natoms)
+                self._write_uncertainties(data, out, natoms)
 
     def _call_model(self, model, batch, data, natoms: int, n_ghost: int, use_ghost_exchange: bool):
         if use_ghost_exchange:
@@ -334,58 +349,18 @@ class LAMMPS_MLIAP(MLIAPUnified):
             )
         return model(batch)
 
-    def _forward_models(self, batch, data, natoms: int, n_ghost: int, use_ghost_exchange: bool):
-        outputs = [
-            self._call_model(model, batch, data, natoms, n_ghost, use_ghost_exchange)
-            for model in self.models
-        ]
-        if len(outputs) == 1:
-            return outputs[0], {}
-        return self._aggregate_ensemble_outputs(outputs, batch, natoms)
+    def _forward_model(self, batch, data, natoms: int, n_ghost: int, use_ghost_exchange: bool):
+        return self._call_model(self.model, batch, data, natoms, n_ghost, use_ghost_exchange)
 
     @staticmethod
-    def _reconstruct_local_forces(edge_index: torch.Tensor, edge_forces: torch.Tensor, natoms: int) -> torch.Tensor:
-        forces = torch.zeros((natoms, 3), dtype=edge_forces.dtype, device=edge_forces.device)
-        if edge_forces.numel() == 0:
-            return forces
-
-        forces.index_add_(0, edge_index[:, 0], edge_forces)
-        j = edge_index[:, 1]
-        local_j = j < natoms
-        if bool(local_j.any()):
-            forces.index_add_(0, j[local_j], -edge_forces[local_j])
-        return forces
-
-    def _aggregate_ensemble_outputs(self, outputs, batch, natoms: int):
-        atomic_energy_stack = torch.stack([out[properties.atomic_energy] for out in outputs], dim=0)
-        edge_forces_stack = torch.stack([out[properties.edge_forces] for out in outputs], dim=0)
-        mean_output = {
-            properties.atomic_energy: atomic_energy_stack.mean(dim=0),
-            properties.edge_forces: edge_forces_stack.mean(dim=0),
-        }
-
-        edge_index = batch[properties.edge_idx]
-        local_forces_stack = torch.stack(
-            [
-                self._reconstruct_local_forces(edge_index, edge_forces_stack[i], natoms)
-                for i in range(edge_forces_stack.shape[0])
-            ],
-            dim=0,
-        )
-
-        energy_per_model = atomic_energy_stack[:, :natoms].reshape(atomic_energy_stack.shape[0], -1).sum(dim=1)
-        force_var_per_atom = torch.var(local_forces_stack, dim=0).mean(dim=1)
-        force_var = force_var_per_atom.mean()
-
-        uncertainties = {
-            properties.e_max: float(torch.max(energy_per_model).item()),
-            properties.e_min: float(torch.min(energy_per_model).item()),
-            properties.e_var: float(torch.var(energy_per_model).item()),
-            properties.e_sd: float(torch.std(energy_per_model).item()),
-            properties.f_var: float(force_var.item()),
-            properties.f_sd: float(force_var.sqrt().item()),
-        }
-        return mean_output, uncertainties
+    def _to_scalar_uncertainty(value) -> Optional[float]:
+        if torch.is_tensor(value):
+            if value.numel() != 1:
+                return None
+            return float(value.detach().reshape(-1)[0].item())
+        if isinstance(value, (float, int)):
+            return float(value)
+        return None
 
     def _prepare_batch(self, data, use_ghost_exchange: bool):
         """Prepare the input batch for the CURATOR model."""
@@ -459,8 +434,10 @@ class LAMMPS_MLIAP(MLIAPUnified):
             "atomic_numbers": elems,
         }
 
-    def _update_lammps_data(self, data, atom_energies, pair_forces, natoms, uncertainties):
-        """Update LAMMPS data structures with computed energies and forces."""
+    def _write_core_outputs(self, data, output, natoms):
+        """Write energies and forces back to the MLIAP data object."""
+        atom_energies = output[properties.atomic_energy]
+        pair_forces = output[properties.edge_forces]
         if self.dtype == torch.float32:
             pair_forces = pair_forces.double()
 
@@ -480,10 +457,28 @@ class LAMMPS_MLIAP(MLIAPUnified):
 
         data.energy = float(torch.sum(atom_energies[:natoms]).item())
         data.update_pair_forces(pair_forces_out)
+
+    def _write_uncertainties(self, data, output, natoms):
         if hasattr(data, "clear_uncertainties"):
             data.clear_uncertainties()
-            for key, value in uncertainties.items():
-                data.set_uncertainty(key, float(value))
+            for key in self.scalar_uncertainty_output_keys:
+                if key not in output:
+                    continue
+                value = self._to_scalar_uncertainty(output[key])
+                if value is not None:
+                    data.set_uncertainty(key, value)
+        if hasattr(data, "clear_uncertainty_arrays"):
+            data.clear_uncertainty_arrays()
+            for key in self.per_atom_uncertainty_output_keys:
+                if key not in output:
+                    continue
+                value = output[key]
+                if not torch.is_tensor(value):
+                    continue
+                data.set_uncertainty_array(
+                    key,
+                    value[:natoms].detach().cpu().double().numpy(),
+                )
 
     def _manage_profiling(self):
         if not self.config.debug_profile:
