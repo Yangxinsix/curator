@@ -75,9 +75,18 @@ select: # Active learning selection parameters
   train_set: init_dataset.traj #<MANUALLY INSERT>
   pool_set: null # The data for which the AL algorthm will pick samples from. Will be defined automatically in the workflow
   batch_size: 10 # Number of samples to be label
-  kernel: full-g # What kernal to use for the AL algorithm
   method: lcmd_greedy # What AL algorithm to use
-  n_random_features: 500 # Number of random features to use for the kernel
+  selection_feature: full-gradient
+  feature_specs:
+    - name: full-gradient
+      raw_feature: full-gradient
+      mapping: gaussian_sketch
+      num_features: 500
+      layer_combine: concat
+      layer_norm: none
+      pooling: sum
+      sigma: 1.0
+      seed: 123
   device: cuda
   nodename: <MANUALLY INSERT>
   cores: <MANUALLY INSERT>
@@ -127,4 +136,3 @@ systems: # Define the systems to be simulated. if system is not given the main p
       print_step: 1 # logging frequency
       MD:
         small_MD: False # if a small MD should be performed after the NEB for each image 
-

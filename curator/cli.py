@@ -12,6 +12,7 @@ import logging
 import socket
 import contextlib
 from typing import Optional, Union, Dict, List
+import re
 
 # very ugly solution for solving pytorch lighting and myqueue conflictions
 if "SLURM_NTASKS" in os.environ:
@@ -63,6 +64,16 @@ def _ensure_resolvers():
 
     register_resolvers()
     _resolvers_registered = True
+
+
+def _resolve_checkpoint_mode(task_cfg: DictConfig) -> str:
+    mode = str(task_cfg.checkpoint_mode).strip().lower()
+    if mode not in {"weights", "model", "resume"}:
+        raise ValueError(
+            f"Unknown task.checkpoint_mode={mode!r}; expected one of "
+            f"['weights', 'model', 'resume']."
+        )
+    return mode
 
 # Trainining with Pytorch Lightning (only with weights and biasses)
 @hydra.main(config_path="configs", config_name="train", version_base=None)
@@ -158,8 +169,10 @@ def train(config: DictConfig) -> None:
 
     if config.model_path is not None:
         config.model_path = find_best_model(config.model_path)[0]
+        checkpoint_mode = _resolve_checkpoint_mode(config.task)
         log.debug(f"Loading trained model from {config.model_path}")
-        if config.task.load_entire_model:
+        log.debug("Checkpoint loading mode: %s", checkpoint_mode)
+        if checkpoint_mode == "model":
             state_dict = torch.load(config.model_path)
             if isinstance(state_dict, torch.nn.Module):
                 model = state_dict
@@ -171,7 +184,7 @@ def train(config: DictConfig) -> None:
                 raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
         else:
             model = instantiate(config.model)
-            if config.task.load_weights_only:
+            if checkpoint_mode == "weights":
                 from collections import OrderedDict
                 state_dict = torch.load(config.model_path)
                 if isinstance(state_dict, torch.nn.Module):
@@ -397,7 +410,7 @@ def deploy_main(argv: Optional[List[str]] = None):
 
 def _convert_parse_args(argv: Optional[List[str]] = None):
     parser = argparse.ArgumentParser(
-        description="Convert original MACE checkpoints to Curator format or upgrade Curator checkpoints",
+        description="Convert MACE or official NequIP checkpoints to Curator format, or upgrade Curator checkpoints",
         fromfile_prefix_chars="+",
     )
     parser.add_argument(
@@ -444,10 +457,26 @@ def _convert_parse_args(argv: Optional[List[str]] = None):
         action="store_true",
         help="Convert a Curator MACE checkpoint back to an original MACE checkpoint.",
     )
+    parser.add_argument(
+        "--nequip-to-curator",
+        action="store_true",
+        help="Convert an official NequIP package/checkpoint (including nequip.net model refs) to a Curator checkpoint.",
+    )
     if argcomplete:
         argcomplete.autocomplete(parser)
 
     return parser.parse_args(argv)
+
+
+def _default_nequip_output_path(raw_input: str) -> Path:
+    if raw_input.endswith(".nequip.zip"):
+        input_path = Path(raw_input)
+        base_name = input_path.name[:-len(".nequip.zip")]
+        return input_path.with_name(f"{base_name}_curator.pth")
+    safe_name = re.sub(r"[^A-Za-z0-9._-]+", "_", raw_input).strip("._")
+    if not safe_name:
+        safe_name = "nequip_model"
+    return Path.cwd() / f"{safe_name}_curator.pth"
 
 def convert_main(argv: Optional[List[str]] = None):
     args = _convert_parse_args(argv)
@@ -506,6 +535,16 @@ def convert_main(argv: Optional[List[str]] = None):
             output_path = ckpt_path.with_name(f"{ckpt_path.stem}{suffix}{ckpt_path.suffix}")
         torch.save(converted, output_path)
         target = output_path
+    elif args.nequip_to_curator:
+        import torch
+        from curator.utils import convert_nequip_to_curator
+
+        output_path = Path(args.output) if args.output is not None else _default_nequip_output_path(args.ckpt_path)
+        target = convert_nequip_to_curator(
+            nequip_path=args.ckpt_path,
+            output_path=output_path,
+            device=torch.device(device),
+        )
     elif args.mace_to_curator or args.curator_to_mace:
         import torch
         from curator.utils import convert_mace_to_curator, convert_curator_to_mace
@@ -888,6 +927,16 @@ def select(config: DictConfig):
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     log.debug("Running on host: " + str(socket.gethostname()))
 
+    legacy_fields = []
+    for field in ("kernel", "export_kernels", "n_random_features"):
+        if field in config:
+            legacy_fields.append(field)
+    if legacy_fields:
+        raise RuntimeError(
+            "The projector/kernel selection interface has been removed. "
+            f"Replace {legacy_fields} with 'feature_specs' and optional 'selection_feature'."
+        )
+
     # Set up the seed
     if "seed" in config:
         log.debug(f"Seed with <{config.seed}>")
@@ -917,6 +966,14 @@ def select(config: DictConfig):
     if pool_source is None:
         raise RuntimeError("pool_set or data_url is required for selection.")
 
+    feature_specs = OmegaConf.select(config, "feature_specs")
+    if not feature_specs:
+        raise RuntimeError("feature_specs must be provided for selection.")
+    feature_specs = OmegaConf.to_container(feature_specs, resolve=True)
+    if not isinstance(feature_specs, list):
+        raise RuntimeError("feature_specs must be a list of feature spec mappings.")
+    selection_feature = OmegaConf.select(config, "selection_feature")
+
     select_batch_size = OmegaConf.select(config, "select_batch_size") or OmegaConf.select(config, "batch_size") or 100
     data_batch_size = OmegaConf.select(config, "data_batch_size") or select_batch_size
     save_features = None
@@ -941,10 +998,9 @@ def select(config: DictConfig):
     # Select structures based on the active learning method
     al = GeneralActiveLearning(
         models=models,
-        kernel=config.kernel, 
-        kernels=OmegaConf.select(config, "export_kernels"),
-        selection=config.method, 
-        n_random_features=config.n_random_features,
+        feature_specs=feature_specs,
+        selection_feature=selection_feature,
+        selection=config.method,
         target_layer=OmegaConf.select(config, "target_layer", default="readout_mlp"),
         batch_size=data_batch_size,
         device=config.device,

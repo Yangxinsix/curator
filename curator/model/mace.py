@@ -3,6 +3,7 @@ from torch import nn
 from e3nn import o3
 from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
+from collections import OrderedDict
 from functools import partial
 
 from curator.layer import (
@@ -27,7 +28,7 @@ from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
 from curator.data import properties
 from typing import List, Optional, Dict, Union, Callable, Type, Literal
 from ase.data import atomic_numbers
-from curator.model.base import Representation
+from curator.model.base import ParameterGroup, Representation, collect_unique_parameters
 
 activation_fn = {
     "silu": torch.nn.SiLU(),
@@ -275,3 +276,49 @@ class MACE(Representation):
         # restore neighbor list
         self._restore_cutoff_mask(data, edge_cache)
         return data
+
+    def module_groups(self):
+        return OrderedDict(
+            (
+                ("embeddings", [self.embeddings]),
+                ("interactions", [self.interactions]),
+                ("products", [self.products]),
+                ("readout", [self.readout]),
+            )
+        )
+
+    def parameter_groups(self) -> List[ParameterGroup]:
+        groups: List[ParameterGroup] = []
+        seen: set[int] = set()
+
+        embeddings = collect_unique_parameters([self.embeddings], seen=seen)
+        if embeddings:
+            groups.append(ParameterGroup(name="embeddings", params=embeddings))
+
+        interactions_decay = []
+        interactions_no_decay = []
+        for name, param in self.interactions.named_parameters():
+            if not isinstance(param, nn.Parameter):
+                continue
+            param_id = id(param)
+            if param_id in seen:
+                continue
+            seen.add(param_id)
+            if "linear.weight" in name or "skip_tp_full.weight" in name:
+                interactions_decay.append(param)
+            else:
+                interactions_no_decay.append(param)
+        if interactions_decay:
+            groups.append(ParameterGroup(name="interactions_decay", params=interactions_decay))
+        if interactions_no_decay:
+            groups.append(ParameterGroup(name="interactions_no_decay", params=interactions_no_decay))
+
+        products = collect_unique_parameters([self.products], seen=seen)
+        if products:
+            groups.append(ParameterGroup(name="products", params=products))
+
+        readout = collect_unique_parameters([self.readout], seen=seen)
+        if readout:
+            groups.append(ParameterGroup(name="readout", params=readout))
+
+        return groups

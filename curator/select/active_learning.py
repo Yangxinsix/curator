@@ -16,8 +16,10 @@ from curator.data import AseDataset, properties, read_trajectory
 from curator.layer._feature import (
     FeatureCalculator,
     FeatureExtractor,
+    FeatureSpec,
     FeatureStatistics,
     H5Feature,
+    feature_spec_from_object,
     normalize_kernel,
 )
 from curator.select.filter import Filter
@@ -37,8 +39,6 @@ from curator.select.select import (
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_KERNEL = 'full-g'
-_DEFAULT_N_RANDOM_FEATURES = 500
 KernelName = Literal[
     "full-g",
     "ll-g",
@@ -70,10 +70,9 @@ class GeneralActiveLearning:
     def __init__(
         self,
         models: List[nn.Module],
-        kernel: KernelName = _DEFAULT_KERNEL,
-        n_random_features: int = _DEFAULT_N_RANDOM_FEATURES,
         selection: SelectionName = "max_diag",
-        kernels: Optional[Sequence[Union[KernelName, Tuple[KernelName, int]]]] = None,
+        feature_specs: Optional[Sequence[Union[FeatureSpec, dict]]] = None,
+        selection_feature: Optional[str] = None,
         target_layer: str = "readout_mlp",
         batch_size: int = 8,
         device: Optional[str] = None,
@@ -85,10 +84,19 @@ class GeneralActiveLearning:
         target_domain: Optional[Union[str, int]] = None,
     ) -> None:
         self.models = models
-        self.kernel = kernel
         self.selection = selection
-        self.kernels = kernels
-        self.n_random_features = n_random_features
+        self.feature_specs = [feature_spec_from_object(spec) for spec in feature_specs] if feature_specs else []
+        if not self.feature_specs:
+            raise ValueError("feature_specs must contain at least one feature spec.")
+        available = [spec.kernel_name for spec in self.feature_specs]
+        if len(set(available)) != len(available):
+            raise ValueError(f"feature_specs contain duplicate output names: {available}")
+        self.feature_spec_map = {spec.kernel_name: spec for spec in self.feature_specs}
+        self.selection_feature = normalize_kernel(selection_feature) if selection_feature else available[0]  # type: ignore[arg-type]
+        if self.selection_feature not in available:
+            raise ValueError(
+                f"selection_feature '{self.selection_feature}' not found in feature_specs: {available}"
+            )
         self.target_layer = target_layer
         self.batch_size = batch_size
         self.device = device or next(models[0].parameters()).device
@@ -101,12 +109,7 @@ class GeneralActiveLearning:
         self.checkpoint_interval = max(int(checkpoint_interval), 0)
         self.structure_filter = structure_filter
         self.target_domain = target_domain
-        self._resolved_kernels = self._resolve_kernels()
-        self._calculators = (
-            self._build_calculators(self.models, self._resolved_kernels)
-            if self._resolved_kernels
-            else None
-        )
+        self._calculators = self._build_calculators(self.models, self.feature_specs)
 
     def select(
         self,
@@ -119,12 +122,6 @@ class GeneralActiveLearning:
         normalize_features: bool = True,
         compute_features_only: bool = False,
     ) -> List[int]:
-        kernels = self._merge_kernels(self._resolved_kernels, self.kernel)
-        if compute_features_only and not kernels:
-            raise ValueError(
-                "compute_features_only=True requires at least one feature kernel "
-                "(e.g., local-gnn/full-g) via kernel or export_kernels."
-            )
         if compute_features_only:
             logger.info(
                 "compute_features_only=True: features will be computed/exported and structure selection is skipped."
@@ -142,22 +139,20 @@ class GeneralActiveLearning:
         pool_stats = self._stats(
             self.models,
             filtered_pool,
-            kernels,
+            self.feature_specs,
             None,
             self._calculators,
             enable_store=True,
             store_path=pool_store,
         )
-        pool_features: Dict[str, torch.Tensor] = {}
-        if kernels:
-            pool_features = pool_stats.get_features(
-                normalize=normalize_features,
-                save=False,
-            )
+        pool_features = pool_stats.get_features(
+            normalize=normalize_features,
+            save=False,
+        )
 
         train_stats = None
         train_features: Optional[Dict[str, torch.Tensor]] = None
-        if train_dataset is not None and kernels:
+        if train_dataset is not None:
             train_store = None
             if pool_store is not None:
                 path = Path(pool_store)
@@ -165,7 +160,7 @@ class GeneralActiveLearning:
             train_stats = self._stats(
                 self.models,
                 train_dataset,
-                kernels,
+                self.feature_specs,
                 None,
                 self._calculators,
                 enable_store=True,
@@ -190,7 +185,7 @@ class GeneralActiveLearning:
                 save_path = Path(save_json)
                 save_path.parent.mkdir(parents=True, exist_ok=True)
                 payload = {
-                    "kernel": self.kernel,
+                    "kernel": self.selection_feature,
                     "selection": None,
                     "compute_features_only": True,
                     "dataset": {
@@ -259,7 +254,7 @@ class GeneralActiveLearning:
             save_path = Path(save_json)
             save_path.parent.mkdir(parents=True, exist_ok=True)
             payload = {
-                "kernel": self.kernel,
+                "kernel": self.selection_feature,
                 "selection": self.selection,
                 "dataset": {
                     "pool": str(pool_set),
@@ -295,7 +290,7 @@ class GeneralActiveLearning:
         self,
         models: List[nn.Module],
         dataset: torch.utils.data.Dataset,
-        kernels: List[Union[str, Tuple[str, int]]],
+        feature_specs: List[FeatureSpec],
         save_path: Optional[Path],
         calculators: Optional[List[FeatureCalculator]] = None,
         enable_store: bool = True,
@@ -307,9 +302,8 @@ class GeneralActiveLearning:
         return FeatureStatistics(
             models=models,
             dataset=dataset,
-            kernels=kernels if kernels else None,
+            kernels=feature_specs if feature_specs else None,
             calculators=calculators,
-            n_random_features=self.n_random_features,
             target_layer=self.target_layer,
             batch_size=self.batch_size,
             device=self.device,
@@ -327,9 +321,10 @@ class GeneralActiveLearning:
         train_features: Optional[Dict[str, torch.Tensor]] = None,
         train_set: Optional[torch.utils.data.Dataset] = None,
     ) -> Tuple[KernelMatrix, Optional[torch.Tensor], int]:
-        kernel = normalize_kernel(self.kernel)
+        kernel = self.selection_feature
 
-        if kernel in {"full-gradient", "ll-gradient", "gnn", "local_full-gradient", "local_ll-gradient", "local_gnn"}:
+        if kernel in self.feature_spec_map:
+            spec = self.feature_spec_map[kernel]
             if kernel not in pool_features:
                 raise ValueError(f"Features for kernel '{kernel}' are not available.")
             pool_feats = pool_features[kernel]
@@ -341,11 +336,11 @@ class GeneralActiveLearning:
                     raise ValueError(f"Features for kernel '{kernel}' are not available.")
                 train_feats = train_features[kernel]
                 feats.append(train_feats)
-                if kernel.startswith("local_"):
+                if spec.local:
                     n_train = int(self._num_atoms(train_set).sum().item())
                 else:
                     n_train = len(train_set)
-            if kernel.startswith("local_"):
+            if spec.local:
                 if train_stats is not None and train_set is not None:
                     num_atoms = torch.cat(
                         [self._num_atoms(pool_set), self._num_atoms(train_set)]
@@ -375,14 +370,8 @@ class GeneralActiveLearning:
     def _build_calculators(
         self,
         models: List[nn.Module],
-        kernels: List[Union[str, Tuple[str, int]]],
+        feature_specs: List[FeatureSpec],
     ) -> List[FeatureCalculator]:
-        specs: List[Tuple[str, int]] = []
-        for item in kernels:
-            if isinstance(item, str):
-                specs.append((item, self.n_random_features))
-            else:
-                specs.append((str(item[0]), int(item[1])))
         calculators: List[FeatureCalculator] = []
         for model in models:
             extractor = FeatureExtractor(
@@ -393,7 +382,7 @@ class GeneralActiveLearning:
             calculators.append(
                 FeatureCalculator(
                     extractor=extractor,
-                    kernels=specs,
+                    kernels=feature_specs,
                     target_domain=self.target_domain,
                 )
             )
@@ -518,59 +507,6 @@ class GeneralActiveLearning:
                     mapped.append(pos[idx])
                 return mapped
         return list(filtered.indices)
-
-    def _resolve_kernels(self) -> List[Union[str, Tuple[str, int]]]:
-        if self.kernels is not None:
-            resolved: List[Union[str, Tuple[str, int]]] = []
-            for item in self.kernels:
-                if isinstance(item, str):
-                    resolved.append(normalize_kernel(item))
-                else:
-                    kernel, n_features = item
-                    resolved.append((normalize_kernel(str(kernel)), int(n_features)))
-            return resolved
-        kernel = normalize_kernel(self.kernel)
-        if kernel in {
-            "full-gradient",
-            "ll-gradient",
-            "gnn",
-            "local_full-gradient",
-            "local_ll-gradient",
-            "local_gnn",
-        }:
-            return [kernel]
-        return []
-
-    @staticmethod
-    def _merge_kernels(
-        export_kernels: Optional[List[Union[str, Tuple[str, int]]]],
-        selection_kernel: Optional[str],
-    ) -> List[Union[str, Tuple[str, int]]]:
-        feature_kernels = {
-            "full-gradient",
-            "ll-gradient",
-            "gnn",
-            "local_full-gradient",
-            "local_ll-gradient",
-            "local_gnn",
-        }
-        merged: List[Union[str, Tuple[str, int]]] = []
-        if export_kernels:
-            merged.extend(export_kernels)
-        if selection_kernel:
-            normalized = normalize_kernel(selection_kernel)
-            if normalized in feature_kernels:
-                merged.append(normalized)
-        seen = set()
-        deduped: List[Union[str, Tuple[str, int]]] = []
-        for item in merged:
-            raw = item[0] if isinstance(item, tuple) else item
-            key = normalize_kernel(str(raw))
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(item)
-        return deduped
 
     @staticmethod
     def _num_atoms(dataset: torch.utils.data.Dataset) -> torch.Tensor:

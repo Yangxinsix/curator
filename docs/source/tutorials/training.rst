@@ -51,6 +51,20 @@ This employs CURATOR's default settings, using the PaiNN_ model architecture. If
 
       curator-train model/representation=nequip
 
+  CURATOR's NequIP representation now follows the NequIP 0.17 model layout while
+  keeping CURATOR's config names. In practice this means:
+
+  - ``num_interactions`` maps to NequIP's ``num_layers``
+  - ``lmax`` maps to ``l_max``
+  - ``num_basis`` maps to ``num_bessels``
+  - ``power`` maps to ``polynomial_cutoff_p``
+  - ``num_features`` can be either a single integer or a list of length ``lmax + 1``
+
+  The current CURATOR NequIP defaults are closer to the upstream NequIP 0.17 baseline:
+  ``num_interactions=4``, ``lmax=1``, ``radial_mlp_width=128``. Optional
+  ``type_embed_num_features`` and readout MLP settings are also exposed directly in
+  ``model.representation``.
+
 - Or specify them in a separate YAML configuration file:
 This employs CURATOR's default settings, using the PaiNN_ model architecture. If you want to customize hyperparameters, you can either:
 

@@ -1,0 +1,13 @@
+_target_: curator.model.ESENRepresentation      # trainable eSEN backbone wrapper using CURATOR readout/gradient heads
+backbone: null                                  # override with an eSEN/FairChem backbone config or an instantiated module
+cutoff: null                                    # inferred from backbone cutoff when null
+pretrained_path: null                           # optional external checkpoint for backbone initialization
+strict_load: True                               # load checkpoint strictly by default
+feature_dim: 128                                # scalar feature width passed to CURATOR readout
+feature_layer: energy_block                     # capture the tensor entering eSEN's energy block by default
+feature_hook: input                             # use the input to energy_block as the trainable latent
+dataset_name: train                             # dataset/task tag written into native FairChem-style batches
+max_neighbors: 300                              # reserved for upstream backbone configs that enforce neighbor caps
+readout:
+  _target_: curator.layer.AtomwiseNN            # CURATOR atomwise energy head
+  _partial_: true

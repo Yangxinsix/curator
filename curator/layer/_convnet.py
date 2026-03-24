@@ -1,4 +1,5 @@
 import torch
+import math
 from typing import Optional, Dict, Callable, Any
 from curator.data import properties
 from ._interaction import Interaction
@@ -9,13 +10,67 @@ from ._cuequivariance_wrapper import (
 )
 
 from e3nn import o3
-from e3nn.nn import FullyConnectedNet
 
 try:
     from torch_scatter import scatter_add
 except ImportError:
     from curator.utils import scatter_add
 from .nonlinearities import ShiftedSoftPlus
+
+
+class _ScalarLinearLayer(torch.nn.Module):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        alpha: float = 1.0,
+    ) -> None:
+        super().__init__()
+        self.register_buffer("alpha", torch.tensor(alpha), persistent=False)
+        self.weight = torch.nn.Parameter(torch.empty((in_features, out_features)))
+        torch.nn.init.uniform_(self.weight, -math.sqrt(3.0), math.sqrt(3.0))
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        return torch.mm(inputs, self.weight * self.alpha)
+
+
+class _ConvNetRadialMLP(torch.nn.Module):
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int,
+        hidden_layers_depth: int,
+        hidden_layers_width: int,
+        nonlinearity: str,
+    ) -> None:
+        super().__init__()
+        dims = [input_dim] + hidden_layers_depth * [hidden_layers_width] + [output_dim]
+        act = {
+            "ssp": ShiftedSoftPlus,
+            "silu": torch.nn.functional.silu,
+        }[nonlinearity]
+        num_layers = len(dims) - 1
+        self.num_layers = num_layers
+        self.activation = act
+        for layer_idx, (h_in, h_out) in enumerate(zip(dims, dims[1:])):
+            gain = 1.0 if layer_idx == 0 else math.sqrt(2.0)
+            alpha = gain / math.sqrt(h_in)
+            self.add_module(
+                f"layer{layer_idx}",
+                _ScalarLinearLayer(
+                    in_features=h_in,
+                    out_features=h_out,
+                    alpha=alpha,
+                ),
+            )
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        x = inputs
+        for layer_idx in range(self.num_layers):
+            x = getattr(self, f"layer{layer_idx}")(x)
+            if layer_idx != self.num_layers - 1:
+                x = self.activation(x)
+        return x
 
 class ConvNetLayer(Interaction):
     use_sc: bool
@@ -24,10 +79,14 @@ class ConvNetLayer(Interaction):
         self,
         irreps_in,
         irreps_out,
-        invariant_layers: int=1,
-        invariant_neurons: int=8,
-        avg_num_neighbors: Optional[float]=None,
-        use_sc: bool=True,
+        invariant_layers: Optional[int] = None,
+        invariant_neurons: Optional[int] = None,
+        radial_mlp_depth: Optional[int] = None,
+        radial_mlp_width: Optional[int] = None,
+        avg_num_neighbors: Optional[float] = None,
+        use_sc: bool = True,
+        is_first_layer: bool = False,
+        self_connection_field: str = properties.node_attr,
         nonlinearity_scalars: Optional[Dict[int, Callable]] = None,
     ) -> None:
         """
@@ -46,6 +105,11 @@ class ConvNetLayer(Interaction):
         if nonlinearity_scalars is None:
             nonlinearity_scalars = {"e": "ssp"}
 
+        if radial_mlp_depth is None:
+            radial_mlp_depth = invariant_layers if invariant_layers is not None else 1
+        if radial_mlp_width is None:
+            radial_mlp_width = invariant_neurons if invariant_neurons is not None else 128
+
         if avg_num_neighbors is not None:
             self._initialized = True
             avg_num_neigh = torch.tensor([avg_num_neighbors])
@@ -57,6 +121,10 @@ class ConvNetLayer(Interaction):
         # avg_num_neighbors = torch.ones((1,)) if avg_num_neighbors is None else torch.tensor([avg_num_neighbors])
         self.register_buffer("avg_num_neighbors", avg_num_neigh)
         self.use_sc = use_sc
+        self.is_first_layer = is_first_layer
+        self.self_connection_field = self_connection_field
+        self.radial_mlp_depth = int(radial_mlp_depth)
+        self.radial_mlp_width = int(radial_mlp_width)
 
         feature_irreps_in = irreps_in[properties.node_feat]
         feature_irreps_out = irreps_out
@@ -103,14 +171,12 @@ class ConvNetLayer(Interaction):
         )
 
         # init_irreps already confirmed that the edge embeddding is all invariant scalars
-        self.fc = FullyConnectedNet(
-            [edge_dist_irreps.num_irreps]
-            + invariant_layers * [invariant_neurons]
-            + [tp.weight_numel],
-            {
-                "ssp": ShiftedSoftPlus,
-                "silu": torch.nn.functional.silu,
-            }[nonlinearity_scalars["e"]],
+        self.fc = _ConvNetRadialMLP(
+            input_dim=edge_dist_irreps.num_irreps,
+            output_dim=tp.weight_numel,
+            hidden_layers_depth=self.radial_mlp_depth,
+            hidden_layers_width=self.radial_mlp_width,
+            nonlinearity=nonlinearity_scalars["e"],
         )
 
         self.tp = tp
@@ -130,7 +196,7 @@ class ConvNetLayer(Interaction):
         if self.use_sc:
             self.sc = FullyConnectedTensorProduct(
                 feature_irreps_in,
-                irreps_in[properties.node_attr],
+                irreps_in[self.self_connection_field],
                 feature_irreps_out,
             )
 
@@ -138,6 +204,7 @@ class ConvNetLayer(Interaction):
         self,
         node_feat,
         node_attr,
+        sc_attr,
         edge_idx,
         edge_dist_embedding,
         edge_diff_embedding,
@@ -160,7 +227,7 @@ class ConvNetLayer(Interaction):
         weight = self.fc(edge_dist_embedding)
 
         if self.sc is not None:
-            sc = self.sc(node_feat, node_attr)
+            sc = self.sc(node_feat, sc_attr)
 
         node_feat = self.linear_1(node_feat)
         node_feat = self.exchange_info(node_feat, lammps_data, n_ghost)

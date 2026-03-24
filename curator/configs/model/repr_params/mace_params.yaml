@@ -3,7 +3,24 @@ task:
   optimizer:
     amsgrad: True          # use AMSGrad optimizer variant
     lr: 0.005              # suggested learning rate for MACE
-    weight_decay: 0.0      # disable weight decay by default
+    weight_decay: 5.0e-7   # official MACE default for decay-applied groups
+  optimizer_groups:
+    # Match official MACE semantics: learned embeddings are trainable, but they
+    # stay on zero weight decay with the global optimizer learning rate.
+    input_modules:
+      weight_decay: 0.0
+    embeddings:
+      weight_decay: 0.0
+    interactions_decay:
+      weight_decay: ${task.optimizer.weight_decay}
+    interactions_no_decay:
+      weight_decay: 0.0
+    products:
+      weight_decay: ${task.optimizer.weight_decay}
+    readout:
+      weight_decay: 0.0
+    output_modules:
+      weight_decay: 0.0
   
 data:
   batch_size: 5            # batch size tuned for MACE memory/throughput

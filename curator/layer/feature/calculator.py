@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple, Union
+from typing import Dict, List, Optional, Sequence, Union
 
 import torch
 from torch import nn
@@ -12,14 +12,14 @@ from curator.data import AseDataset, properties
 from ..utils import find_layer_by_name_recursive
 from .common import (
     _DEFAULT_KERNEL,
-    _DEFAULT_N_RANDOM_FEATURES,
     ExtractedFeatures,
+    FeatureSpec,
     KernelName,
+    feature_spec_from_object,
     normalize_kernel,
 )
 from .extractor import FeatureExtractor
 from .kernel import FeatureKernel
-from .projector import FeatureProjector, RandomProjections
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class FeatureCalculator(nn.Module):
     def __init__(
         self,
         extractor: Optional[FeatureExtractor] = None,
-        kernels: Optional[Sequence[Union[FeatureKernel, Tuple, List]]] = None,
+        kernels: Optional[Sequence[Union[FeatureKernel, FeatureSpec, dict]]] = None,
         kernel_calculators: Optional[List[FeatureKernel]] = None,
         output_features: bool = True,
         compute_maha_dist: bool = False,
@@ -57,10 +57,7 @@ class FeatureCalculator(nn.Module):
             self.kernels = list(kernel_calculators)
         else:
             self.kernels = self._build_kernels(
-                kernels,
-                repr_callback=self.extractor.repr_callback,
-                target_layer=self.extractor.target_layer,
-                target_domain=self.extractor.target_domain,
+                kernels
             )
         self.repr_callback: Optional[nn.Module] = None
         self.output_features = output_features
@@ -90,12 +87,6 @@ class FeatureCalculator(nn.Module):
     def register_repr_callback(self, repr_callback: nn.Module) -> None:
         self.repr_callback = repr_callback
         self.extractor.attach(repr_callback)
-        self.kernels = self._build_kernels(
-            self.kernels,
-            repr_callback=repr_callback,
-            target_layer=self.extractor.target_layer,
-            target_domain=self.extractor.target_domain,
-        )
         self._resolved_distance_kernel = None
         if self.compute_maha_dist and self.dataset is not None:
             self.fit_distance(self.dataset, kernel=self.distance_kernel)
@@ -107,11 +98,6 @@ class FeatureCalculator(nn.Module):
             extracted = self.extract(data, predict=predict)
             if not self.kernels:
                 raise RuntimeError("FeatureCalculator kernels are not initialized.")
-            if any(not isinstance(kc, FeatureKernel) for kc in self.kernels):
-                raise RuntimeError(
-                    "FeatureCalculator kernels require initialized projectors; "
-                    "call register_repr_callback or pass FeatureProjector."
-                )
             if len(self.kernels) == 1:
                 return self.kernels[0].compute(extracted)
             return {kc.kernel: kc.compute(extracted) for kc in self.kernels}
@@ -156,11 +142,6 @@ class FeatureCalculator(nn.Module):
             raise ValueError("Dataset is required to compute Mahalanobis statistics.")
         if self.repr_callback is None:
             raise ValueError("repr_callback must be set before computing Mahalanobis statistics.")
-        if any(not isinstance(kc, FeatureKernel) for kc in self.kernels):
-            raise RuntimeError(
-                "FeatureCalculator kernels require initialized projectors; "
-                "call register_repr_callback first."
-            )
         dataset = self._resolve_dataset(dataset)
         if self.max_dataset_size is not None and hasattr(dataset, "__len__"):
             max_n = min(int(self.max_dataset_size), len(dataset))
@@ -211,10 +192,7 @@ class FeatureCalculator(nn.Module):
                 logger.info("Distance kernel from config: %s", kernel)
             elif self.kernels:
                 first = self.kernels[0]
-                if isinstance(first, FeatureKernel):
-                    kernel = first.kernel
-                else:
-                    kernel = normalize_kernel(str(first[0]))
+                kernel = first.kernel
                 logger.info("Distance kernel from first kernel: %s", kernel)
             else:
                 kernel = _DEFAULT_KERNEL
@@ -239,48 +217,26 @@ class FeatureCalculator(nn.Module):
 
     @staticmethod
     def _build_kernels(
-        kernels: Optional[Sequence[Union[FeatureKernel, Tuple, List]]],
-        repr_callback: Optional[nn.Module],
-        target_layer: str = "readout_mlp",
-        target_domain: Optional[Union[str, int]] = None,
-    ) -> List[Union[FeatureKernel, Tuple]]:
+        kernels: Optional[Sequence[Union[FeatureKernel, FeatureSpec, dict]]],
+    ) -> List[FeatureKernel]:
         if kernels is None:
-            kernels = [(_DEFAULT_KERNEL, _DEFAULT_N_RANDOM_FEATURES)]
-        built: List[Union[FeatureKernel, Tuple]] = []
+            kernels = [
+                {
+                    "name": _DEFAULT_KERNEL,
+                    "raw_feature": normalize_kernel(_DEFAULT_KERNEL),
+                    "mapping": "gaussian_sketch",
+                    "num_features": 500,
+                    "layer_combine": "concat",
+                    "layer_norm": "none",
+                    "pooling": "sum",
+                    "sigma": 1.0,
+                    "seed": 0,
+                }
+            ]
+        built: List[FeatureKernel] = []
         for item in kernels:
             if isinstance(item, FeatureKernel):
                 built.append(item)
                 continue
-            if not isinstance(item, (tuple, list)) or len(item) not in {2, 3}:
-                raise ValueError(
-                    "kernels must be FeatureKernel, (kernel, projector/n_random_features), "
-                    "or (kernel, projector/n_random_features, aggregator)."
-                )
-            kernel, projector = item[:2]
-            aggregator = item[2] if len(item) == 3 else None
-            if isinstance(projector, FeatureProjector):
-                built.append(FeatureKernel(kernel, projector, aggregator=aggregator))
-            elif isinstance(projector, int):
-                if repr_callback is None:
-                    built.append((kernel, projector, aggregator) if aggregator is not None else (kernel, projector))
-                else:
-                    module = repr_callback
-                    if target_domain is not None:
-                        readout = find_layer_by_name_recursive(repr_callback, "readout")
-                        domain_modules = getattr(readout, "domain_modules", None)
-                        if domain_modules is None:
-                            raise ValueError("target_domain is set but model has no domain_modules.")
-                        dom = str(target_domain)
-                        if dom not in domain_modules:
-                            raise ValueError(f"target_domain '{dom}' not found in model domain_modules.")
-                        module = domain_modules[dom]
-                    built.append(
-                        FeatureKernel(
-                            kernel,
-                            RandomProjections(module, projector, target_layer=target_layer),
-                            aggregator=aggregator,
-                        )
-                    )
-            else:
-                raise ValueError("kernels projector must be FeatureProjector or int.")
+            built.append(FeatureKernel(feature_spec_from_object(item)))
         return built

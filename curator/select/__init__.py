@@ -14,9 +14,10 @@ from .select import (
 )
 from curator.layer._feature import (
     FeatureExtractor,
+    FeatureSpec,
     FeatureStatistics,
-    RandomProjections,
     DistanceMetrics,
+    feature_spec_from_object,
 )
 from .active_learning import GeneralActiveLearning
 from .filter import (

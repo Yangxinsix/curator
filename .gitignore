@@ -5,7 +5,9 @@ __pycache__/
 *.egg-info/
 dist/
 build/
-test/
+test/*
+!test/test_external_adapters.py
+!test/test_external_training_representations.py
 scripts/
 
 # model files

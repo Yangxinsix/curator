@@ -114,6 +114,17 @@ class FeatureExtractor(nn.Module):
 
             types.append(o3.Linear)
         try:
+            has_nequip = util.find_spec("nequip") is not None
+        except ModuleNotFoundError:
+            has_nequip = False
+        if has_nequip:
+            try:
+                from nequip.nn.mlp import ScalarLinearLayer
+
+                types.append(ScalarLinearLayer)
+            except Exception:
+                pass
+        try:
             from curator.layer._cuequivariance_wrapper import Linear as CueqLinear
 
             types.append(CueqLinear)

@@ -17,9 +17,8 @@ except ImportError:
     logging_redirect_tqdm = None
 
 from .calculator import FeatureCalculator
-from .common import _DEFAULT_KERNEL, KernelName, normalize_kernel
+from .common import _DEFAULT_KERNEL, FeatureSpec, KernelName, feature_spec_from_object, normalize_kernel
 from .extractor import FeatureExtractor
-from .kernel import FeatureKernel
 from .store import H5Feature
 
 logger = logging.getLogger(__name__)
@@ -32,9 +31,8 @@ class FeatureStatistics:
         self,
         models: List[nn.Module],
         dataset: torch.utils.data.Dataset,
-        kernels: Optional[Sequence[Union[KernelName, Tuple]]] = None,
+        kernels: Optional[Sequence[Union[KernelName, FeatureSpec, dict]]] = None,
         calculators: Optional[List[FeatureCalculator]] = None,
-        n_random_features: int = 500,
         target_layer: str = "readout_mlp",
         batch_size: int = 8,
         device: Optional[str] = None,
@@ -46,7 +44,6 @@ class FeatureStatistics:
         self.dataset = dataset
         self.kernels = kernels
         self.calculators = calculators
-        self.n_random_features = n_random_features
         self.target_layer = target_layer
         self.batch_size = batch_size
         self.device = device or next(models[0].parameters()).device
@@ -108,7 +105,7 @@ class FeatureStatistics:
         for model in self.models:
             extractor = FeatureExtractor(repr_callback=model, target_layer=self.target_layer)
             calculators.append(FeatureCalculator(extractor=extractor, kernels=kernel_specs))
-        kernel_names = [normalize_kernel(str(spec[0])) for spec in kernel_specs]
+        kernel_names = [spec.kernel_name for spec in kernel_specs]
         return calculators, kernel_names
 
     def iter_kernel_features(self, kernel: KernelName):
@@ -130,35 +127,42 @@ class FeatureStatistics:
                     per_model.append(results[norm_kernel])
                 yield per_model[0] if len(per_model) == 1 else torch.stack(per_model).mean(dim=0)
 
-    def _resolve_kernel_specs(self) -> List[Tuple]:
-        kernels = list(self.kernels) if self.kernels is not None else [_DEFAULT_KERNEL]
-        specs: List[Tuple] = []
+    def _resolve_kernel_specs(self) -> List[FeatureSpec]:
+        kernels = list(self.kernels) if self.kernels is not None else [
+            {
+                "name": _DEFAULT_KERNEL,
+                "raw_feature": normalize_kernel(_DEFAULT_KERNEL),
+                "mapping": "gaussian_sketch",
+                "num_features": 500,
+                "layer_combine": "concat",
+                "layer_norm": "none",
+                "pooling": "sum",
+                "sigma": 1.0,
+                "seed": 0,
+            }
+        ]
+        specs: List[FeatureSpec] = []
         seen: set[str] = set()
         for item in kernels:
-            if isinstance(item, tuple):
-                if len(item) not in {2, 3} or not isinstance(item[1], int):
-                    raise ValueError(
-                        "kernels tuple must be (kernel, n_random_features) "
-                        "or (kernel, n_random_features, aggregator)."
-                    )
-                kernel, n_features = item[:2]
-                aggregator = item[2] if len(item) == 3 else None
-            else:
-                kernel, n_features = item, self.n_random_features
-                aggregator = None
-            norm = normalize_kernel(str(kernel))
+            if isinstance(item, str):
+                raise ValueError(
+                    "String kernel names are no longer supported directly. "
+                    "Pass a feature spec dict or FeatureSpec instead."
+                )
+            spec = feature_spec_from_object(item)
+            norm = spec.kernel_name
             if norm in seen:
                 raise ValueError(f"Duplicate kernel '{norm}'.")
             seen.add(norm)
-            specs.append((str(kernel), int(n_features), aggregator) if aggregator is not None else (str(kernel), int(n_features)))
+            specs.append(spec)
         return specs
 
     @staticmethod
     def _kernel_names_from_calculators(calculators: List[FeatureCalculator]) -> List[str]:
         kernels = calculators[0].kernels
-        names = [kc.kernel if isinstance(kc, FeatureKernel) else normalize_kernel(str(kc[0])) for kc in kernels]
+        names = [kc.kernel for kc in kernels]
         for calc in calculators[1:]:
-            other = [kc.kernel if isinstance(kc, FeatureKernel) else normalize_kernel(str(kc[0])) for kc in calc.kernels]
+            other = [kc.kernel for kc in calc.kernels]
             if other != names:
                 raise ValueError("All calculators must share the same kernels.")
         return names

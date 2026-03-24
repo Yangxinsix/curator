@@ -353,6 +353,340 @@ def _load_state_dict_by_shape(module: torch.nn.Module, state_dict: Dict[str, tor
     module.load_state_dict(filtered, strict=False)
 
 
+def _load_official_nequip_saved_model(
+    model_ref: Union[str, Path],
+    compile_mode: str = "eager",
+):
+    import sys
+
+    nequip_src = Path.home() / "local" / "src" / "nequip"
+    if nequip_src.exists():
+        nequip_src_str = str(nequip_src)
+        if nequip_src_str not in sys.path:
+            sys.path.insert(0, nequip_src_str)
+
+    torch_serialization.add_safe_globals([slice])
+    from nequip.model.saved_models.load_utils import load_saved_model
+
+    return load_saved_model(str(model_ref), compile_mode=compile_mode)
+
+
+def _unwrap_official_nequip_model(nequip_model):
+    graph_model = nequip_model
+    func = getattr(getattr(graph_model, "model", None), "func", None)
+    if func is None:
+        func = getattr(graph_model, "func", None)
+    if func is None:
+        raise TypeError(
+            "Unsupported NequIP model object. Expected a GraphModel loaded from a saved model/package."
+        )
+    return graph_model, func
+
+
+def _get_official_nequip_conv_layers(func) -> List[Any]:
+    layers: List[Tuple[int, Any]] = []
+    for name, module in func._modules.items():
+        match = re.fullmatch(r"layer(\d+)_convnet", name)
+        if match is not None:
+            layers.append((int(match.group(1)), module))
+    layers.sort(key=lambda item: item[0])
+    return [module for _, module in layers]
+
+
+def _infer_nequip_parity(hidden_irreps) -> bool:
+    from e3nn import o3
+
+    irreps = o3.Irreps(hidden_irreps)
+    for l in sorted(set(irreps.ls)):
+        parities = {ir.p for _, ir in irreps if ir.l == l}
+        if len(parities) > 1:
+            return True
+    return False
+
+
+def _infer_nequip_num_features(hidden_irreps, lmax: int) -> List[int]:
+    from e3nn import o3
+
+    irreps = o3.Irreps(hidden_irreps)
+    return [
+        max(int(mul) for mul, ir in irreps if ir.l == l)
+        for l in range(lmax + 1)
+    ]
+
+
+def _infer_nequip_readout_nonlinearity(readout_module) -> Optional[str]:
+    mlp = getattr(getattr(readout_module, "mlp_module", None), "mlp", None)
+    if mlp is None:
+        return None
+    for module in mlp:
+        cls_name = module.__class__.__name__
+        if cls_name == "SiLU":
+            return "silu"
+        if cls_name == "Mish":
+            return "mish"
+        if cls_name == "GELU":
+            return "gelu"
+        if cls_name == "Tanh":
+            return "tanh"
+        if cls_name in {"Identity", "ScalarLinearLayer"}:
+            continue
+        if cls_name == "ShiftedSoftplus":
+            return "ssp"
+    return None
+
+
+def _build_species_value_dict(
+    species: List[str],
+    values: Optional[torch.Tensor],
+) -> Optional[Dict[str, float]]:
+    if values is None:
+        return None
+    flat = values.detach().cpu().reshape(-1)
+    if flat.numel() != len(species):
+        return None
+    return {species[i]: float(flat[i].item()) for i in range(len(species))}
+
+
+def _scalar_to_int(value: Any, default: int) -> int:
+    if value is None:
+        return int(default)
+    if torch.is_tensor(value):
+        return int(value.item())
+    return int(value)
+
+
+def _map_official_nequip_state_dict(nequip_model, curator_model: torch.nn.Module) -> Dict[str, torch.Tensor]:
+    graph_model, func = _unwrap_official_nequip_model(nequip_model)
+    official_sd = {
+        k.replace("model.func.", "", 1).replace("func.", "", 1): v.detach().cpu()
+        for k, v in graph_model.state_dict().items()
+    }
+
+    mapped: Dict[str, torch.Tensor] = {}
+    pair_module_index = next(
+        (
+            idx
+            for idx, module in enumerate(getattr(curator_model, "output_modules", []))
+            if module.__class__.__name__ == "NequIPZBLPairEnergy"
+        ),
+        None,
+    )
+
+    species = list(func.per_type_energy_scale_shift.type_names)
+    output_modules = list(getattr(curator_model, "output_modules", []))
+    if output_modules and output_modules[0].__class__.__name__ == "PerSpeciesRescaleShift":
+        per_species_module = output_modules[0]
+        scales = torch.ones_like(per_species_module.scales)
+        shifts = torch.zeros_like(per_species_module.shifts)
+        official_scales = getattr(func.per_type_energy_scale_shift, "scales", None)
+        official_shifts = getattr(func.per_type_energy_scale_shift, "shifts", None)
+        if official_scales is not None:
+            official_scales = official_scales.detach().cpu().reshape(-1)
+            for idx, symbol in enumerate(species):
+                z = chemical_symbols.index(symbol)
+                scales[z] = official_scales[idx]
+        if official_shifts is not None:
+            official_shifts = official_shifts.detach().cpu().reshape(-1)
+            for idx, symbol in enumerate(species):
+                z = chemical_symbols.index(symbol)
+                shifts[z] = official_shifts[idx]
+        mapped["output_modules.0.scales"] = scales
+        mapped["output_modules.0.shifts"] = shifts
+
+    for key, value in official_sd.items():
+        if key in {"_empty"}:
+            continue
+        if key == "bessel_encode.bessel_weights":
+            mapped["representation.embeddings.radial_basis.basis.bessel_weights"] = (
+                value.reshape(-1) * (torch.pi / float(func.edge_norm.r_max))
+            )
+            continue
+        if key == "type_embed.embed_module.weight":
+            mapped["representation.embeddings.chemical_embedding.linear.weight"] = (
+                value.reshape(-1) * (float(value.shape[0]) ** 0.5)
+            )
+            continue
+        if key.startswith("layer") and "_convnet." in key:
+            match = re.match(r"layer(\d+)_convnet\.(.+)", key)
+            if match is None:
+                continue
+            layer_idx = int(match.group(1))
+            rest = match.group(2)
+            if rest.startswith("conv.edge_mlp.mlp."):
+                parts = rest.split(".")
+                mlp_idx = int(parts[3])
+                if mlp_idx % 2 == 1:
+                    continue
+                dense_idx = mlp_idx // 2
+                rest = f"conv.fc.layer{dense_idx}.{parts[4]}"
+            else:
+                rest = rest.replace("conv.tp_scatter.", "conv.")
+            mapped[f"representation.interactions.{layer_idx}.{rest}"] = value
+            continue
+        if key.startswith("per_atom_energy_readout.mlp_module.mlp."):
+            parts = key.split(".")
+            mlp_idx = int(parts[3])
+            if mlp_idx % 2 == 1:
+                continue
+            dense_idx = mlp_idx // 2
+            attr = parts[4]
+            mapped_key = f"representation.readout.readout_mlp.{dense_idx}.linear.{attr}"
+            mapped[mapped_key] = value.reshape(-1) if attr == "weight" else value
+            continue
+        if pair_module_index is not None and key.startswith("pair_potential."):
+            suffix = key.split(".", 1)[1]
+            if suffix in {"atomic_numbers", "_qqr2exesquare"}:
+                suffix = suffix.lstrip("_")
+                mapped[f"output_modules.{pair_module_index}.{suffix}"] = value
+            continue
+
+    return mapped
+
+
+def create_model_from_nequip(nequip_model) -> torch.nn.Module:
+    from functools import partial
+    from curator.data.properties import HeadConfig
+    from curator.layer import (
+        AtomwiseNN,
+        AtomwiseReduce,
+        GradientOutput,
+        NequIPZBLPairEnergy,
+        PairwiseDistance,
+        PerSpeciesRescaleShift,
+    )
+    from curator.model import NeuralNetworkPotential, Nequip
+
+    graph_model, func = _unwrap_official_nequip_model(nequip_model)
+    conv_layers = _get_official_nequip_conv_layers(func)
+    if not conv_layers:
+        raise ValueError("Could not find NequIP convnet layers in the official model.")
+
+    lmax = max(conv_layers[0].feature_irreps_hidden.ls)
+    parity = _infer_nequip_parity(conv_layers[0].feature_irreps_hidden)
+    num_features = _infer_nequip_num_features(conv_layers[0].feature_irreps_hidden, lmax=lmax)
+
+    radial_depths = []
+    radial_widths = []
+    avg_num_neighbors = None
+    for layer in conv_layers:
+        dims = list(layer.conv.edge_mlp.dims)
+        radial_depths.append(max(0, len(dims) - 2))
+        radial_widths.append(int(dims[1]) if len(dims) > 2 else 0)
+        if avg_num_neighbors is None:
+            norm_const = None
+            avg_num_neighbors_norm = getattr(layer.conv, "avg_num_neighbors_norm", None)
+            if avg_num_neighbors_norm is not None:
+                norm_const = getattr(avg_num_neighbors_norm, "norm_const", None)
+            if norm_const is not None and norm_const.numel() == 1:
+                avg_num_neighbors = float(norm_const.reshape(-1)[0].item() ** -2)
+            else:
+                scatter_norm_factor = getattr(layer.conv, "scatter_norm_factor", None)
+                if scatter_norm_factor is not None:
+                    avg_num_neighbors = float(float(scatter_norm_factor) ** -2)
+
+    if len(set(radial_depths)) != 1 or len(set(radial_widths)) != 1:
+        raise ValueError(
+            "Curator NequIP converter currently supports official NequIP packages with uniform radial MLP depth/width across layers."
+        )
+
+    readout_dims = list(func.per_atom_energy_readout.mlp_module.dims)
+    readout_depth = max(0, len(readout_dims) - 2)
+    readout_width = int(readout_dims[1]) if readout_depth > 0 else None
+    readout_nonlinearity = _infer_nequip_readout_nonlinearity(func.per_atom_energy_readout)
+
+    readout_head = HeadConfig(
+        key=properties.atomic_energy,
+        is_atomwise=True,
+        reduction="none",
+        dim=1,
+    )
+    readout = partial(AtomwiseNN, heads=[readout_head])
+
+    power = _scalar_to_int(getattr(func.bessel_encode.cutoff, "p", None), 6)
+    representation = Nequip(
+        cutoff=float(func.edge_norm.r_max),
+        num_interactions=len(conv_layers),
+        species=list(func.per_type_energy_scale_shift.type_names),
+        lmax=lmax,
+        parity=parity,
+        num_features=num_features,
+        type_embed_num_features=int(func.type_embed.embed_module.embedding_dim),
+        num_basis=int(func.bessel_encode.bessel_weights.shape[-1]),
+        power=power,
+        radial_mlp_depth=radial_depths[0],
+        radial_mlp_width=radial_widths[0],
+        readout_mlp_hidden_layers_depth=readout_depth,
+        readout_mlp_hidden_layers_width=readout_width,
+        readout_mlp_nonlinearity=readout_nonlinearity,
+        convolution_kwargs={"avg_num_neighbors": avg_num_neighbors} if avg_num_neighbors is not None else None,
+        readout=readout,
+        heads=[readout_head],
+    )
+
+    output_modules: List[torch.nn.Module] = []
+    per_species_scales = _build_species_value_dict(
+        list(func.per_type_energy_scale_shift.type_names),
+        getattr(func.per_type_energy_scale_shift, "scales", None),
+    )
+    per_species_shifts = _build_species_value_dict(
+        list(func.per_type_energy_scale_shift.type_names),
+        getattr(func.per_type_energy_scale_shift, "shifts", None),
+    )
+    output_modules.append(
+        PerSpeciesRescaleShift(
+            scales=per_species_scales,
+            shifts=per_species_shifts,
+            scales_keys=[properties.atomic_energy],
+            shifts_keys=[properties.atomic_energy],
+        )
+    )
+    output_modules.append(AtomwiseReduce(output_key=properties.energy, aggregation_mode="sum"))
+
+    pair_potential = getattr(func, "pair_potential", None)
+    if pair_potential is not None:
+        pair_cutoff = getattr(pair_potential, "cutoff", None)
+        pair_power = _scalar_to_int(getattr(pair_cutoff, "p", None), power)
+        output_modules.append(
+            NequIPZBLPairEnergy(
+                atomic_numbers=pair_potential.atomic_numbers.detach().cpu(),
+                cutoff=float(func.edge_norm.r_max),
+                power=pair_power,
+                qqr2exesquare=float(pair_potential._qqr2exesquare.item()),
+            )
+        )
+
+    output_modules.append(GradientOutput(model_outputs=[properties.forces]))
+
+    curator_model = NeuralNetworkPotential(
+        representation=representation,
+        input_modules=[PairwiseDistance()],
+        output_modules=output_modules,
+        model_outputs=[properties.energy, properties.forces],
+    )
+    _load_state_dict_by_shape(
+        curator_model,
+        _map_official_nequip_state_dict(graph_model, curator_model),
+    )
+    curator_model.model_outputs = [properties.energy, properties.forces]
+    curator_model.eval()
+    return curator_model
+
+
+def convert_nequip_to_curator(
+    nequip_path: Union[str, Path],
+    output_path: Union[str, Path],
+    device: Optional[torch.device] = None,
+) -> Path:
+    if device is None:
+        device = torch.device("cpu")
+    official_model = _load_official_nequip_saved_model(nequip_path, compile_mode="eager")
+    curator_model = create_model_from_nequip(official_model)
+    curator_model.to(torch.device(device))
+    output_path = Path(output_path)
+    torch.save(curator_model.cpu(), output_path)
+    return output_path
+
+
 def convert_mace_to_curator(
     mace_path: Union[str, Path],
     output_path: Union[str, Path],
@@ -1690,13 +2024,20 @@ def get_representation_config(model):
                 readout_kwargs["heads_by_domain"] = heads_by_domain
             rep_config["readout"] = partial(MultiDomainMACEAtomwiseNN, **readout_kwargs)
     elif model.representation.__class__.__name__ == 'Nequip':
-        species = list(rep.embeddings.onehot_embedding.type_mapper.symbol_to_type.keys())
+        mapper = getattr(rep.embeddings.onehot_embedding, "type_mapper", None)
+        if mapper is not None:
+            species = list(mapper.symbol_to_type.keys())
+        else:
+            species = list(rep.species or [])
+        num_elements = getattr(rep.embeddings.onehot_embedding, "num_elements", len(species))
 
         rep_config = {
             "cutoff": rep.cutoff,
             "num_interactions": len(rep.interactions),
-            "species": list(rep.embeddings.onehot_embedding.type_mapper.symbol_to_type.keys()),
-            "num_elements": len(species),
+            "species": species,
+            "num_elements": num_elements,
+            "num_features": rep.num_features,
+            "type_embed_num_features": rep.type_embed_num_features,
             "hidden_irreps": rep.hidden_irreps,
             "edge_sh_irreps": rep.edge_sh_irreps,
             "node_irreps": rep.node_irreps,
@@ -1706,8 +2047,28 @@ def get_representation_config(model):
             "nonlinearity_type": rep.nonlinearity_type,
             "nonlinearity_scalars": rep.nonlinearity_scalars,
             "nonlinearity_gates": rep.nonlinearity_gates,
+            "radial_mlp_depth": rep.radial_mlp_depth,
+            "radial_mlp_width": rep.radial_mlp_width,
+            "readout_mlp_hidden_layers_depth": rep.readout_mlp_hidden_layers_depth,
+            "readout_mlp_hidden_layers_width": rep.readout_mlp_hidden_layers_width,
+            "readout_mlp_nonlinearity": rep.readout_mlp_nonlinearity,
             "convolution_kwargs": rep.convolution_kwargs,
         }
+        readout = getattr(rep, "readout", None)
+        domain_modules = getattr(readout, "domain_modules", None)
+        if domain_modules:
+            from curator.layer import MultiDomainAtomwiseNN
+
+            domains = getattr(readout, "domains", None) or list(domain_modules.keys())
+            heads_by_domain = {
+                str(dom): list(module.heads)
+                for dom, module in domain_modules.items()
+                if hasattr(module, "heads")
+            }
+            readout_kwargs = {"domains": [str(d) for d in domains]}
+            if heads_by_domain:
+                readout_kwargs["heads_by_domain"] = heads_by_domain
+            rep_config["readout"] = partial(MultiDomainAtomwiseNN, **readout_kwargs)
     elif model.representation.__class__.__name__ == 'Painn':
         rep_config = {
             "cutoff": rep.cutoff,
@@ -2186,7 +2547,10 @@ def upgrade_checkpoint(
     output_path = Path(output_path)
 
     _register_legacy_outputspec()
-    obj = torch.load(ckpt_path, map_location=device)
+    try:
+        obj = torch.load(ckpt_path, map_location=device, weights_only=False)
+    except TypeError:
+        obj = torch.load(ckpt_path, map_location=device)
 
     if isinstance(obj, torch.nn.Module):
         upgraded_model = update_model(obj)

@@ -119,3 +119,74 @@ class PairRepulsionEnergy(nn.Module):
         else:
             data[properties.energy] = pair_energy
         return data
+
+
+class NequIPZBLPairEnergy(nn.Module):
+    """Official NequIP-style ZBL pair potential added to total energy."""
+
+    def __init__(
+        self,
+        atomic_numbers: torch.Tensor,
+        cutoff: float,
+        power: int = 6,
+        qqr2exesquare: float = 14.399645 * 0.5,
+    ):
+        super().__init__()
+        self.register_buffer(
+            "atomic_numbers",
+            torch.as_tensor(atomic_numbers, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
+            "cutoff",
+            torch.as_tensor(float(cutoff), dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer("power", torch.tensor(int(power), dtype=torch.int))
+        self.register_buffer(
+            "qqr2exesquare",
+            torch.as_tensor(float(qqr2exesquare), dtype=torch.float64),
+        )
+
+    def forward(self, data: properties.Type) -> properties.Type:
+        if properties.edge_dist not in data or properties.edge_idx not in data:
+            return data
+        if properties.atomic_types not in data:
+            return data
+        if properties.image_idx not in data:
+            data[properties.image_idx] = torch.zeros(
+                data[properties.n_atoms].item(),
+                dtype=data[properties.edge_idx].dtype,
+                device=data[properties.edge_idx].device,
+            )
+
+        edge_idx = data[properties.edge_idx]
+        edge_center = edge_idx[:, 0]
+        edge_neighbor = edge_idx[:, 1]
+        atom_types = data[properties.atomic_types]
+        edge_dist = data[properties.edge_dist].reshape(-1, 1)
+
+        Zi = self.atomic_numbers[atom_types[edge_center]].reshape(-1, 1).to(edge_dist.dtype)
+        Zj = self.atomic_numbers[atom_types[edge_neighbor]].reshape(-1, 1).to(edge_dist.dtype)
+
+        x = ((torch.pow(Zi, 0.23) + torch.pow(Zj, 0.23)) * edge_dist) / 0.46850
+        psi = (
+            0.02817 * torch.exp(-0.20162 * x)
+            + 0.28022 * torch.exp(-0.40290 * x)
+            + 0.50986 * torch.exp(-0.94229 * x)
+            + 0.18175 * torch.exp(-3.19980 * x)
+        )
+        edge_energy = self.qqr2exesquare.to(edge_dist.dtype) * ((Zi * Zj) / edge_dist) * psi
+        edge_energy = edge_energy * _poly_envelope(edge_dist, self.cutoff, self.power)
+        edge_energy = edge_energy.squeeze(-1)
+
+        pair_node_energy = scatter_add(
+            edge_energy,
+            edge_center,
+            dim=0,
+            dim_size=atom_types.size(0),
+        )
+        pair_energy = scatter_add(pair_node_energy, data[properties.image_idx], dim=0)
+        if properties.energy in data:
+            data[properties.energy] = data[properties.energy] + pair_energy
+        else:
+            data[properties.energy] = pair_energy
+        return data

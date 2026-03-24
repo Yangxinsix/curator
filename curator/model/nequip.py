@@ -1,11 +1,10 @@
 import torch
-import warnings
+from collections import OrderedDict
 from torch import nn
 from e3nn import o3
 from e3nn.util.jit import compile_mode
 
 from curator.data import properties
-
 from curator.layer import (
     OneHotAtomEncoding,
     AtomwiseLinear,
@@ -16,15 +15,56 @@ from curator.layer import (
     SphericalHarmonicEdgeAttrs,
     InteractionLayer,
 )
-from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
-from curator.model.base import Representation
+from curator.model.base import ParameterGroup, Representation
 
-from typing import OrderedDict, Dict, List, Optional, Union, Callable, Type
+from typing import Dict, List, Optional, Sequence, Union, Callable, Type
 from functools import partial
 
-from e3nn.util.jit import compile_mode
+
+def _as_irreps(value: Union[o3.Irreps, str, None]) -> Optional[o3.Irreps]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return o3.Irreps(value)
+    return value
+
+
+def _normalize_num_features(
+    num_features: Union[int, Sequence[int], None],
+    lmax: int,
+) -> List[int]:
+    if num_features is None:
+        num_features = 32
+    if isinstance(num_features, int):
+        return [num_features] * (lmax + 1)
+    num_features = list(num_features)
+    if len(num_features) != lmax + 1:
+        raise ValueError(
+            f"`num_features` should have length `lmax + 1` ({lmax + 1}), got {num_features}."
+        )
+    return [int(n) for n in num_features]
+
+
+def _build_hidden_irreps(
+    num_features: Sequence[int],
+    lmax: int,
+    parity: bool,
+) -> o3.Irreps:
+    return o3.Irreps(
+        [
+            (num_features[l], (l, p))
+            for l in range(lmax + 1)
+            for p in (
+                (1, -1) if parity else ((1,) if l % 2 == 0 else (-1,))
+            )
+        ]
+    )
+
+
+@compile_mode("script")
 class Nequip(Representation):
-    """Nequip model."""
+    """NequIP-style representation aligned with NequIP 0.17 defaults."""
+
     def __init__(
         self,
         cutoff: float,
@@ -34,159 +74,188 @@ class Nequip(Representation):
         hidden_irreps: Union[o3.Irreps, str, None] = None,
         edge_sh_irreps: Union[o3.Irreps, str, None] = None,
         node_irreps: Union[o3.Irreps, str, None] = None,
-        lmax: int = 2,
+        lmax: int = 1,
         parity: bool = True,
-        num_features: Optional[int] = None,
+        num_features: Union[int, Sequence[int], None] = 32,
+        type_embed_num_features: Optional[int] = None,
         num_basis: int = 8,
         power: int = 6,
-        # parameters for interaction blocks and convnet
         resnet: bool = False,
         nonlinearity_type: str = "gate",
         nonlinearity_scalars: Optional[Dict[int, Callable]] = None,
         nonlinearity_gates: Optional[Dict[int, Callable]] = None,
+        radial_mlp_depth: int = 1,
+        radial_mlp_width: int = 128,
+        readout_mlp_hidden_layers_depth: int = 0,
+        readout_mlp_hidden_layers_width: Optional[int] = None,
+        readout_mlp_nonlinearity: Optional[Union[str, Callable]] = "silu",
         convolution_kwargs: Optional[dict] = None,
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
         use_cueq: bool = False,
         heads: Optional[list] = None,
         **kwargs,
     ) -> None:
-        """Nequip model.
-
-        Args:
-            cutoff (float): Cutoff radius
-            num_interactions (int): Number of interaction blocks
-            species (List[str]): List of species
-            num_elements (Optional[int], optional): Number of elements. Defaults to None.
-            hidden_irreps (Union[o3.Irreps, str, None], optional): Hidden irreps. Defaults to None.
-            edge_sh_irreps (Union[o3.Irreps, str, None], optional): Edge irreps. Defaults to None.
-            node_irreps (Union[o3.Irreps, str, None], optional): Node irreps. Defaults to None.
-            MLP_irreps (Union[o3.Irreps, str, None], optional): MLP irreps. Defaults to None.
-            lmax (int, optional): Maximum l value for spherical harmonics. Defaults to 2.
-            parity (bool, optional): Parity. Defaults to True.
-            num_features (Optional[int], optional): Number of features. Defaults to None.
-            num_basis (int, optional): Number of basis. Defaults to 8.
-            power (int, optional): Power of radial basis. Defaults to 6.
-            resnet (bool, optional): ResNet. Defaults to False.
-            nonlinearity_type (str, optional): Type of nonlinearity. Defaults to "gate".
-            nonlinearity_scalars (Dict[int, Callable], optional): Nonlinearity for scalars. Defaults to {"e": "ssp", "o": "tanh"}.
-            nonlinearity_gates (Dict[int, Callable], optional): Nonlinearity for gates. Defaults to {"e": "ssp", "o": "abs"}.
-            convolution_kwargs (dict, optional): Convolution kwargs. Defaults to {}.
-        """
         super().__init__(heads=heads)
+        if num_interactions <= 0:
+            raise ValueError("`num_interactions` must be positive.")
+
         self.cutoff = cutoff
-        self.num_features = num_features
+        self.num_interactions = num_interactions
         self.lmax = lmax
         self.parity = parity
         self.species = species
-        
+        self.radial_mlp_depth = int(radial_mlp_depth)
+        self.radial_mlp_width = int(radial_mlp_width)
+        self.readout_mlp_hidden_layers_depth = readout_mlp_hidden_layers_depth
+        self.readout_mlp_hidden_layers_width = readout_mlp_hidden_layers_width
+        self.readout_mlp_nonlinearity = readout_mlp_nonlinearity
+
         self._enable_cueq(use_cueq)
 
         if nonlinearity_scalars is None:
-            nonlinearity_scalars = {"e": "ssp", "o": "tanh"}
+            nonlinearity_scalars = {"e": "silu", "o": "tanh"}
         if nonlinearity_gates is None:
-            nonlinearity_gates = {"e": "ssp", "o": "abs"}
+            nonlinearity_gates = {"e": "silu", "o": "tanh"}
         convolution_kwargs = {} if convolution_kwargs is None else dict(convolution_kwargs)
-        
+
         if num_elements is None:
             num_elements = len(species) if species is not None else 119
-        
-        ## handling irreps
-        # chemical embedding irreps
-        if node_irreps is None:
-            self.node_irreps = o3.Irreps([(num_features, (0, 1))])
-        elif isinstance(node_irreps, str):
-            self.node_irreps = o3.Irreps(node_irreps)
-        else:
-            self.node_irreps = node_irreps
-        # edge sphere harmonic irreps
-        if edge_sh_irreps is None:
-            self.edge_sh_irreps = o3.Irreps.spherical_harmonics(lmax, p=-1 if parity else 1)
-        elif isinstance(edge_sh_irreps, str):
-            self.edge_sh_irreps = o3.Irreps(edge_sh_irreps)
-        else:
-            self.edge_sh_irreps = edge_sh_irreps
-        # hidden feature irreps
-        if hidden_irreps is None:
-            self.hidden_irreps = o3.Irreps(
-                [
-                    (num_features, (l, p))
-                    for p in ((1, -1) if parity else (1,))
-                    for l in range(lmax + 1)
-                ]
+
+        feature_multiplicities = _normalize_num_features(num_features, lmax)
+        self.num_features = list(feature_multiplicities)
+        if type_embed_num_features is None:
+            type_embed_num_features = feature_multiplicities[0]
+        self.type_embed_num_features = int(type_embed_num_features)
+
+        base_hidden_irreps = _as_irreps(hidden_irreps)
+        if base_hidden_irreps is None:
+            base_hidden_irreps = _build_hidden_irreps(
+                num_features=feature_multiplicities,
+                lmax=lmax,
+                parity=parity,
             )
-        elif isinstance(hidden_irreps, str):
-            self.hidden_irreps = o3.Irreps(hidden_irreps)
-        else:
-            self.hidden_irreps = hidden_irreps
-        
+        self.hidden_irreps = base_hidden_irreps
+
+        self.node_irreps = _as_irreps(node_irreps)
+        if self.node_irreps is None:
+            self.node_irreps = o3.Irreps([(type_embed_num_features, (0, 1))])
+
+        self.edge_sh_irreps = _as_irreps(edge_sh_irreps)
+        if self.edge_sh_irreps is None:
+            self.edge_sh_irreps = o3.Irreps.spherical_harmonics(lmax=lmax)
+
+        scalar_width = feature_multiplicities[0]
+        if hidden_irreps is not None:
+            scalar_width = max(1, self.hidden_irreps.count(o3.Irrep(0, 1)))
+        self.final_layer_irreps = o3.Irreps([(scalar_width, (0, 1))])
+        self.feature_irreps_hidden_list = [self.hidden_irreps] * max(0, num_interactions - 1)
+        self.feature_irreps_hidden_list.append(self.final_layer_irreps)
+
         self.embeddings = nn.ModuleDict()
-        self.embeddings['onehot_embedding'] = OneHotAtomEncoding(num_elements=num_elements, species=species)
-        self.embeddings['radial_basis'] = RadialBasisEdgeEncoding(
+        self.embeddings["onehot_embedding"] = OneHotAtomEncoding(
+            num_elements=num_elements,
+            species=species,
+        )
+        self.embeddings["radial_basis"] = RadialBasisEdgeEncoding(
             basis=BesselBasis(cutoff=cutoff, num_basis=num_basis),
             cutoff_fn=PolynomialCutoff(cutoff=cutoff, power=power),
         )
-        self.embeddings['sphere_harmonics'] = SphericalHarmonicEdgeAttrs(edge_sh_irreps=self.edge_sh_irreps)
-        
+        self.embeddings["sphere_harmonics"] = SphericalHarmonicEdgeAttrs(
+            edge_sh_irreps=self.edge_sh_irreps
+        )
+
         self.irreps_in = {
-            properties.edge_diff_embedding: self.embeddings.sphere_harmonics.irreps_out,
-            properties.edge_dist_embedding: self.embeddings.radial_basis.irreps_out,
+            properties.edge_diff_embedding: self.embeddings["sphere_harmonics"].irreps_out,
+            properties.edge_dist_embedding: self.embeddings["radial_basis"].irreps_out,
         }
-        self.irreps_in.update(self.embeddings.onehot_embedding.irreps_out)
-        
-        self.embeddings['chemical_embedding'] = AtomwiseLinear(
+        self.irreps_in.update(self.embeddings["onehot_embedding"].irreps_out)
+
+        self.embeddings["chemical_embedding"] = AtomwiseLinear(
             irreps_in=self.irreps_in[properties.node_attr],
             irreps_out=self.node_irreps,
         )
-        self.irreps_in[properties.node_feat] = self.embeddings.chemical_embedding.irreps_out
-        
-        # only for extracting configs
+        self.irreps_in[properties.node_feat] = self.embeddings["chemical_embedding"].irreps_out
+        self.irreps_in[properties.node_embedding] = self.embeddings["chemical_embedding"].irreps_out
+
         self.nonlinearity_type = nonlinearity_type
         self.nonlinearity_scalars = nonlinearity_scalars
         self.nonlinearity_gates = nonlinearity_gates
-        self.convolution_kwargs=convolution_kwargs
+        self.convolution_kwargs = dict(convolution_kwargs)
 
         self.interactions = nn.ModuleList()
-        for _ in range(num_interactions):
+        for layer_i, feature_irreps_hidden in enumerate(self.feature_irreps_hidden_list):
+            layer_conv_kwargs = dict(convolution_kwargs)
+            layer_conv_kwargs["radial_mlp_depth"] = radial_mlp_depth
+            layer_conv_kwargs["radial_mlp_width"] = radial_mlp_width
+            layer_conv_kwargs["use_sc"] = layer_i != 0
+            layer_conv_kwargs["is_first_layer"] = layer_i == 0
+            layer_conv_kwargs["self_connection_field"] = properties.node_embedding
+
             interaction = InteractionLayer(
-                irreps_in=self.irreps_in, 
-                feature_irreps_hidden=self.hidden_irreps,
-                convolution_kwargs=convolution_kwargs,
-                resnet=resnet,
+                irreps_in=self.irreps_in,
+                feature_irreps_hidden=feature_irreps_hidden,
+                convolution_kwargs=layer_conv_kwargs,
+                resnet=(layer_i != 0) and resnet,
                 nonlinearity_type=nonlinearity_type,
                 nonlinearity_scalars=nonlinearity_scalars,
                 nonlinearity_gates=nonlinearity_gates,
             )
             self.interactions.append(interaction)
             self.irreps_in.update(interaction.irreps_out)
-        
-        # Setup readout function
+
+        if readout_mlp_hidden_layers_width is None:
+            readout_mlp_hidden_layers_width = self.irreps_in[properties.node_feat].dim
+        self.readout_mlp_hidden_layers_width = readout_mlp_hidden_layers_width
+
+        readout_kwargs = {
+            "in_features": self.irreps_in[properties.node_feat],
+            "use_e3nn": True,
+            "n_hidden_layers": readout_mlp_hidden_layers_depth,
+            "activation": readout_mlp_nonlinearity if readout_mlp_nonlinearity is not None else "None",
+        }
+        if readout_mlp_hidden_layers_depth > 0:
+            hidden_irreps = o3.Irreps(f"{readout_mlp_hidden_layers_width}x0e")
+            readout_kwargs["n_hidden"] = [
+                hidden_irreps for _ in range(readout_mlp_hidden_layers_depth)
+            ]
         self.readout = self._instantiate_readout(
             readout,
             heads=self.heads,
-            in_features=self.irreps_in[properties.node_feat],
-            use_e3nn=True,
+            **readout_kwargs,
         )
-        
+
     def forward(self, data: properties.Type) -> properties.Type:
-        # add mask for local interaction part
         edge_cache = self._apply_cutoff_mask(data, self.cutoff)
-        for m in self.embeddings.values():
-            data = m(data)
-        
-        data[properties.node_embedding] = data[properties.node_feat]        # store node embedding for some modules (charge equilibration)
-        
+        for module in self.embeddings.values():
+            data = module(data)
+
+        data[properties.node_embedding] = data[properties.node_feat]
+
         node_feat = data[properties.node_feat]
         for interaction in self.interactions:
             node_feat = interaction(
                 node_feat,
                 data[properties.node_attr],
-                data[properties.edge_idx], 
+                data[properties.node_embedding],
+                data[properties.edge_idx],
                 data[properties.edge_dist_embedding],
                 data[properties.edge_diff_embedding],
             )
-        
+
         data[properties.node_feat] = node_feat
         data = self.readout(data)
 
         self._restore_cutoff_mask(data, edge_cache)
         return data
+
+    def module_groups(self):
+        return OrderedDict(
+            (
+                ("embeddings", [self.embeddings]),
+                ("interactions", [self.interactions]),
+                ("readout", [self.readout]),
+            )
+        )
+
+    def parameter_groups(self) -> List[ParameterGroup]:
+        return super().parameter_groups()

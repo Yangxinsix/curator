@@ -1,0 +1,23 @@
+_target_: curator.data.datamodule.DataModuleFactory   # domain-aware data factory; returns single- or multi-domain datamodule
+_convert_: partial                                    # allow per-domain Hydra overrides without eager instantiation
+datapath: {}                                          # mapping: domain_name -> {datapath, heads, weight, ...}
+train_path: null                                      # unused for multi-domain mode; keep null
+val_path: null                                        # unused for multi-domain mode; keep null
+test_path: null                                       # unused for multi-domain mode; keep null
+batch_size: 8                                         # default per-domain train batch size
+compute_neighbor_list: False                          # precompute neighbor lists during loading
+cutoff: 5.0                                           # cutoff radius used for neighbor finding
+num_train: 0.9                                        # fraction/count of train samples per domain
+num_val: 0.1                                          # fraction/count of val samples per domain
+num_test: null                                        # remainder for test split
+train_val_split: random                               # random or sequential per-domain splitting
+shuffle: true                                         # shuffle training data
+num_workers: 0                                        # DataLoader worker count
+pin_memory: True                                      # pin host memory when CUDA is available
+species: auto                                         # infer species from all domains
+avg_num_neighbors: auto                               # estimate neighbor stats from all domains
+atomic_energies: auto                                 # estimate reference energies automatically
+normalization: True                                   # enable target normalization
+atomwise_normalization: True                          # normalize atomwise properties independently
+transforms: []                                        # optional transforms applied to each domain dataset
+domain_weights: {}                                    # optional train-loss weights per domain, e.g. replay: 0.25

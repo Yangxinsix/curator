@@ -1,0 +1,2 @@
+_target_: curator.train.FreezeSchedule
+stages: []

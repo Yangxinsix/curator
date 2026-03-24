@@ -1,0 +1,13 @@
+_target_: curator.model.AllegroRepresentation   # trainable Allegro backbone wrapper using CURATOR readout/gradient heads
+backbone: null                                  # override with an Allegro backbone config or an instantiated module
+cutoff: null                                    # inferred from backbone.edge_norm.r_max when null
+species: ${data.species}                        # species used to map atomic numbers to Allegro atom types
+type_map: null                                  # optional explicit remap, e.g. "H:H,C:C" or "1:0,6:1"
+pretrained_path: null                           # optional external checkpoint for backbone initialization
+strict_load: True                               # load checkpoint strictly by default
+feature_dim: 128                                # scalar feature width passed to CURATOR readout
+feature_layer: null                             # optional explicit latent layer name; otherwise infer from backbone outputs
+feature_hook: output                            # capture layer output when feature_layer is set
+readout:
+  _target_: curator.layer.AtomwiseNN            # CURATOR atomwise energy head
+  _partial_: true

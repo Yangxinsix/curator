@@ -16,23 +16,26 @@ from ._node_embedding import OneHotAtomEncoding
 from ._painn_message import PainnMessage
 from ._painn_update import PainnUpdate
 from ._pairwise_distance import PairwiseDistance, get_pair_distance
-from ._pair_repulsion import ZBLBasis, PairRepulsionEnergy
+from ._pair_repulsion import ZBLBasis, PairRepulsionEnergy, NequIPZBLPairEnergy
 from ._symmetric_contraction import Contraction, SymmetricContraction
 from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift, MultiDomainRescaleShift
 from ._strain import Strain
 from ._feature import (
+    BaseKMEAggregator,
     FeatureAggregator,
     FeatureCalculator,
     FeatureExtractor,
     FeatureKernel,
-    FeatureProjector,
+    FeatureSpec,
     FeatureStatistics,
     H5Feature,
-    KMEAggregator,
+    IdentityKMEAggregator,
     MeanAggregator,
-    RandomProjections,
+    RandomFourierKMEAggregator,
+    SketchingKMEAggregator,
     SumAggregator,
     DistanceMetrics,
+    feature_spec_from_object,
     normalize_kernel,
 )
 from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
@@ -95,22 +98,26 @@ __all__ = [
     Strain,                   # input modules (preprocess, add strain on cell and atom positions)
     ZBLBasis,
     PairRepulsionEnergy,
+    NequIPZBLPairEnergy,
     GradientOutput,           # output modules (output forces and stress)
     GlobalRescaleShift,            # output modules (postprocess energy)
     PerSpeciesRescaleShift,
     MultiDomainRescaleShift,
+    BaseKMEAggregator,
     FeatureExtractor,
     FeatureCalculator, 
     FeatureAggregator,
     FeatureKernel,
-    FeatureProjector,
+    FeatureSpec,
     FeatureStatistics,
     H5Feature,
-    KMEAggregator,
+    IdentityKMEAggregator,
     MeanAggregator,
-    RandomProjections,
+    RandomFourierKMEAggregator,
+    SketchingKMEAggregator,
     SumAggregator,
     DistanceMetrics,
+    feature_spec_from_object,
     normalize_kernel,
     MACEAtomwiseNN,
     AtomwiseNN,

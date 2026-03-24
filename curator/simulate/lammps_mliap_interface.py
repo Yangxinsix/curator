@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from typing import Dict, Tuple, Optional, List, Union
 from curator.data import properties
 from curator.layer import GradientOutput, GlobalRescaleShift
-from curator.model.base import NeuralNetworkPotential, LitNNP
+from curator.model import NeuralNetworkPotential, LitNNP
 
 import torch
 from ase.data import chemical_symbols

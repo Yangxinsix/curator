@@ -1,4 +1,5 @@
 import torch
+from collections import OrderedDict
 from torch import nn
 from typing import List, Optional, Dict, Type, Union, Any
 from functools import partial
@@ -11,7 +12,7 @@ from curator.layer import (
     PainnUpdate,
     AtomwiseNN,
 )
-from curator.model.base import Representation
+from curator.model.base import ParameterGroup, Representation
 
 
 class Painn(Representation):
@@ -107,3 +108,16 @@ class Painn(Representation):
         # restore neighbor list
         self._restore_cutoff_mask(data, edge_cache)
         return data
+
+    def module_groups(self):
+        return OrderedDict(
+            (
+                ("embedding", [self.atom_embedding]),
+                ("message_layers", [self.message_layers]),
+                ("update_layers", [self.update_layers]),
+                ("readout", [self.readout]),
+            )
+        )
+
+    def parameter_groups(self) -> List[ParameterGroup]:
+        return super().parameter_groups()

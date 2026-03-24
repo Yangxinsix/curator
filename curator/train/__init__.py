@@ -1,4 +1,4 @@
-from .callbacks import ExponentialMovingAverage
+from .callbacks import ExponentialMovingAverage, FreezeSchedule
 from .model_output import ModelOutput
 from .metrics import (
     AtomsMetric,
@@ -10,6 +10,7 @@ from .metrics import (
 from .train import train
 __all__ = [
     ExponentialMovingAverage,
+    FreezeSchedule,
     ModelOutput,
     AtomsMetric,
     PerSpeciesMAE, 

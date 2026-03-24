@@ -1,23 +1,21 @@
 from curator.layer._feature import (
     FeatureCalculator,
     FeatureExtractor,
-    FeatureKernel,
-    FeatureProjector,
+    FeatureSpec,
     FeatureStatistics,
     H5Feature,
-    RandomProjections,
     DistanceMetrics,
+    feature_spec_from_object,
 )
 from curator.select.active_learning import GeneralActiveLearning
 
 __all__ = [
     "FeatureCalculator",
     "FeatureExtractor",
-    "FeatureKernel",
-    "FeatureProjector",
+    "FeatureSpec",
     "FeatureStatistics",
     "H5Feature",
-    "RandomProjections",
     "DistanceMetrics",
+    "feature_spec_from_object",
     "GeneralActiveLearning",
 ]

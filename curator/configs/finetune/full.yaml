@@ -1,0 +1,7 @@
+# @package _global_
+
+# Standard full-parameter fine-tuning mode:
+# - load checkpoint weights into the current architecture
+# - keep all parameter groups trainable unless overridden elsewhere
+task:
+  checkpoint_mode: weights

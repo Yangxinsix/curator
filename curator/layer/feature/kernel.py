@@ -1,65 +1,64 @@
 from __future__ import annotations
 
+from typing import Union
+
 import torch
+from torch import nn
 
-try:
-    from torch_scatter import scatter_add
-except ImportError:
-    from curator.utils import scatter_add
+from .common import ExtractedFeatures, FeatureSpec, feature_spec_from_object
+from .kme import (
+    BaseKMEAggregator,
+    IdentityKMEAggregator,
+    RandomFourierKMEAggregator,
+    SketchingKMEAggregator,
+)
 
-from .aggregation import FeatureAggregator, SumAggregator
-from .common import ExtractedFeatures, KernelName, normalize_kernel
-from .projector import FeatureProjector
 
+class FeatureKernel(nn.Module):
+    """Parse a feature spec and compute the final feature representation."""
 
-class FeatureKernel:
-    """Compute atom-level features and aggregate them into structure features."""
-
-    def __init__(
-        self,
-        kernel: KernelName,
-        projector: FeatureProjector,
-        aggregator: FeatureAggregator | None = None,
-    ) -> None:
-        self.kernel = normalize_kernel(kernel)
-        self.projector = projector
-        self.aggregator = aggregator if aggregator is not None else SumAggregator()
+    def __init__(self, spec: Union[FeatureSpec, dict]) -> None:
+        super().__init__()
+        self.spec = feature_spec_from_object(spec)
+        self.kernel = self.spec.kernel_name
+        self.local = self.spec.local
+        self.kme = self._build_kme(self.spec)
 
     def compute(self, extracted: ExtractedFeatures) -> torch.Tensor:
-        local = self.kernel.startswith("local_")
-        kernel = self.kernel[len("local_") :] if local else self.kernel
+        raw_feature = self._resolve_raw_feature(extracted)
+        atomic_features = self.kme.transform(raw_feature)
+        if self.local:
+            return atomic_features
+        return self.kme.aggregate(atomic_features, extracted.image_idx)
 
-        if kernel == "full-gradient":
-            if self.projector.num_features == 0:
-                raise ValueError("full-gradient requires random projections.")
-            atomic = torch.zeros(
-                (extracted.image_idx.shape[0], self.projector.num_features),
-                device=extracted.image_idx.device,
+    def _resolve_raw_feature(self, extracted: ExtractedFeatures):
+        if self.spec.source == "full-gradient":
+            return extracted.feats, extracted.grads
+        if self.spec.source == "ll-gradient":
+            return extracted.feats[-1][:, :-1]
+        if self.spec.source == "gnn":
+            return extracted.feats[0][:, :-1]
+        raise ValueError(f"Unsupported raw_feature '{self.spec.raw_feature}'.")
+
+    @staticmethod
+    def _build_kme(spec: FeatureSpec) -> BaseKMEAggregator:
+        if spec.mapping == "gaussian_sketch":
+            return SketchingKMEAggregator(
+                num_features=spec.num_features,
+                pooling=spec.pooling,
+                layer_combine=spec.layer_combine,
+                layer_norm=spec.layer_norm,
+                seed=spec.seed,
             )
-            for feat, grad, in_proj, out_proj in zip(
-                extracted.feats,
-                extracted.grads,
-                self.projector.in_feat_proj,
-                self.projector.out_grad_proj,
-            ):
-                atomic += (feat @ in_proj) * (grad @ out_proj)
-        elif kernel == "ll-gradient":
-            if self.projector.num_features != 0:
-                atomic = (extracted.feats[-1] @ self.projector.in_feat_proj[-1]) * (
-                    extracted.grads[-1] @ self.projector.out_grad_proj[-1]
-                )
-            else:
-                atomic = extracted.feats[-1][:, :-1]
-        elif kernel == "gnn":
-            if self.projector.num_features != 0:
-                atomic = (extracted.feats[0] @ self.projector.in_feat_proj[0]) * (
-                    extracted.grads[0] @ self.projector.out_grad_proj[0]
-                )
-            else:
-                atomic = extracted.feats[0][:, :-1]
-        else:
-            raise RuntimeError(f"Unknown kernel '{self.kernel}'")
-
-        if local:
-            return atomic
-        return self.aggregator.aggregate(atomic, extracted)
+        if spec.mapping == "rff":
+            return RandomFourierKMEAggregator(
+                num_features=spec.num_features,
+                pooling=spec.pooling,
+                layer_combine=spec.layer_combine,
+                layer_norm=spec.layer_norm,
+                sigma=spec.sigma,
+                seed=spec.seed,
+            )
+        return IdentityKMEAggregator(
+            pooling=spec.pooling,
+        )

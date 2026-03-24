@@ -1,11 +1,17 @@
 _target_ : curator.model.Nequip   # NequIP equivariant architecture
 cutoff: 5.0                       # interaction cutoff radius
-num_interactions: 3               # number of convolution blocks
-num_features: 32                  # latent feature dimension
+num_interactions: 4               # curator naming; mapped internally to NequIP 0.17 num_layers
+num_features: 32                  # int or list of length lmax + 1
 num_elements: null                # explicit number of elements; inferred if null
-species: ${data.species}          # list of species passed to NequIP
-num_basis: 8                      # basis size for radial functions
-power: 6                          # envelope power for cutoff
-lmax: 2                           # maximum angular momentum
+species: ${data.species}          # curator naming; mapped internally to NequIP 0.17 type_names
+num_basis: 8                      # curator naming; mapped internally to num_bessels
+power: 6                          # curator naming; mapped internally to polynomial_cutoff_p
+lmax: 1                           # curator naming; mapped internally to l_max
 parity: True                      # enforce parity equivariance
+type_embed_num_features: null     # optional atom-type embedding width; defaults to num_features[0]
+radial_mlp_depth: 1               # NequIP 0.17 radial MLP depth
+radial_mlp_width: 128             # NequIP 0.17 radial MLP width
+readout_mlp_hidden_layers_depth: 0   # scalar readout MLP depth after the final scalar conv layer
+readout_mlp_hidden_layers_width: null  # defaults to final scalar feature dimension when null
+readout_mlp_nonlinearity: silu    # readout MLP nonlinearity
 use_cueq: False                   # enable charge equilibration variant

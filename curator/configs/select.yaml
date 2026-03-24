@@ -2,18 +2,37 @@ _convert_: all
 cfg: null
 seed: 123
 run_path: .
-model_path: null
+model_path: null # Examples: matgl:MEGNet-MP-2018.6.1-Eform?backend=PYG | allegro:/path/model.nequip.zip?target_layer=edge_readout | esen:uma-s-omol?task=omol
 device: cuda
 train_set: null
 pool_set: null
 data_url: null # URL string; use pool_set for local paths
 data_batch_size: 8
 select_batch_size: 100
-kernel: full-g
-export_kernels: null
 method: lcmd_greedy
-n_random_features: 500
-target_layer: readout_mlp # for MatGL adapters, use final_layer
+selection_feature: fg-sketch
+feature_specs:
+  - preset: fg-sketch
+    seed: ${seed}
+
+# Ablation examples:
+# - Gaussian sketch full-gradient with per-layer RMS norm:
+#   preset: fg-sketch-rms
+#   seed: ${seed}
+#
+# - RFF full-gradient:
+#   preset: fg-rff
+#   seed: ${seed}
+#
+# - Override a preset width:
+#   preset: fg-sketch
+#   num_features: 512
+#   seed: ${seed}
+#
+# - Local full-gradient for atom-level selection:
+#   preset: local_fg-sketch
+#   seed: ${seed}
+target_layer: readout_mlp # External defaults: MatGL -> final_layer, Allegro -> edge_readout, eSEN -> energy_block
 save_features: null # H5 cache file path when set
 save_selected_features: null # Selected feature file path when set
 export_normalized_features: true

@@ -1,0 +1,34 @@
+# @package _global_
+defaults:
+  - override /data: multi_domain
+  - _self_
+
+# Multi-domain fine-tuning mode:
+# - load base checkpoint weights into current architecture
+# - expand/initialize domain-specific heads from existing domain "0"
+# - prioritize domain-specific readout/output optimization
+task:
+  checkpoint_mode: weights
+  domain_mode: extend
+  new_domains: null
+  init_new_domains_from: "0"
+  normalize_domain_loss: true
+  optimizer_groups:
+    readout_domains:
+      lr: 5.0e-4
+    output_domains:
+      lr: 5.0e-4
+
+trainer:
+  callbacks:
+    freeze_schedule:
+      _target_: curator.train.FreezeSchedule
+      stages:
+        - start_epoch: 0
+          lr:
+            readout_domains: 5.0e-4
+            output_domains: 5.0e-4
+        - start_epoch: 10
+          lr:
+            readout_domains: 1.0e-4
+            output_domains: 1.0e-4

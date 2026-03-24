@@ -1,0 +1,14 @@
+# @package _global_
+
+# Head-only fine-tuning mode:
+# - load checkpoint weights into the current architecture
+# - freeze non-readout groups by setting the base optimizer lr to zero
+# - keep the representation readout trainable via an explicit group override
+task:
+  checkpoint_mode: weights
+  optimizer:
+    lr: 0.0
+  optimizer_groups:
+    readout:
+      lr: 5.0e-4
+      weight_decay: 0.0

@@ -39,9 +39,9 @@ class InteractionLayer(torch.nn.Module):
     ):
         super().__init__()
         if nonlinearity_scalars is None:
-            nonlinearity_scalars = {"e": "ssp", "o": "tanh"}
+            nonlinearity_scalars = {"e": "silu", "o": "tanh"}
         if nonlinearity_gates is None:
-            nonlinearity_gates = {"e": "ssp", "o": "abs"}
+            nonlinearity_gates = {"e": "silu", "o": "tanh"}
         convolution_kwargs = {} if convolution_kwargs is None else dict(convolution_kwargs)
         # initialization
         assert nonlinearity_type in ("gate", "norm")
@@ -58,6 +58,7 @@ class InteractionLayer(torch.nn.Module):
         self.feature_irreps_hidden = o3.Irreps(feature_irreps_hidden)
         self.resnet = resnet
         self.irreps_out = irreps_in.copy()
+        self.convolution_kwargs = dict(convolution_kwargs)
 
         self.irreps_in = irreps_in
         edge_diff_irreps = self.irreps_in[properties.edge_diff_embedding]
@@ -145,6 +146,7 @@ class InteractionLayer(torch.nn.Module):
         self,
         node_feat,
         node_attr,
+        sc_attr,
         edge_idx,
         edge_dist_embedding,
         edge_diff_embedding,
@@ -158,6 +160,7 @@ class InteractionLayer(torch.nn.Module):
         node_feat = self.conv(
             node_feat,
             node_attr,
+            sc_attr,
             edge_idx,
             edge_dist_embedding,
             edge_diff_embedding,
