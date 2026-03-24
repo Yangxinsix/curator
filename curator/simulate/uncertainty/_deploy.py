@@ -13,6 +13,10 @@ from omegaconf import DictConfig, OmegaConf
 
 from curator.data import properties
 from curator.data._uncertainty import collect_uncertainty_outputs
+import logging
+
+
+logger = logging.getLogger(__name__)
 
 
 def _as_plain_spec(spec: Optional[Any]) -> Optional[dict[str, Any]]:
@@ -87,6 +91,14 @@ def _prepare_mahalanobis(model, spec: dict[str, Any], *, lammps_mliap: bool) -> 
         )
 
     n_random_features = 0 if pair_scriptable else 500
+    logger.info(
+        "Preparing Mahalanobis deploy uncertainty: dataset=%s kernel=%s max_structures=%s streaming=%s target=%s",
+        dataset,
+        kernel,
+        max_structures if max_structures is not None else "all",
+        streaming,
+        "mliap" if lammps_mliap else "torchscript",
+    )
 
     for module in model.output_modules:
         if isinstance(module, FeatureCalculator):

@@ -306,7 +306,7 @@ The uncertainty rule is simple:
 `pair_style curator` uses a normal TorchScript export:
 
 ```bash
-python "${CURATOR_ROOT}/curator/deploy.py" \
+curator-deploy \
   "${CKPT_OR_CKPTS}" \
   --target_path compiled_model.pt
 ```
@@ -314,7 +314,7 @@ python "${CURATOR_ROOT}/curator/deploy.py" \
 `pair_style mliap unified` uses the LAMMPS-specific export:
 
 ```bash
-python "${CURATOR_ROOT}/curator/deploy.py" \
+curator-deploy \
   "${CKPT_OR_CKPTS}" \
   --target_path mliap_model.pt \
   --mliap \
@@ -325,20 +325,20 @@ Convenient uncertainty presets:
 
 ```bash
 # ensemble deploy without a config file
-python "${CURATOR_ROOT}/curator/deploy.py" \
+curator-deploy \
   ckpt1.ckpt ckpt2.ckpt ckpt3.ckpt \
   --uncertainty ensemble \
   --target_path compiled_ensemble.pt
 
 # Mahalanobis deploy for pair_style curator
-python "${CURATOR_ROOT}/curator/deploy.py" \
+curator-deploy \
   model.ckpt \
   --uncertainty mahalanobis \
   --dataset reference.traj \
   --target_path compiled_maha.pt
 
 # Mahalanobis deploy for mliap
-python "${CURATOR_ROOT}/curator/deploy.py" \
+curator-deploy \
   model.ckpt \
   --mliap \
   --element-types Fe Li O P \

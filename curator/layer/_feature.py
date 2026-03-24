@@ -546,6 +546,7 @@ class FeatureCalculator(UncertaintyModule):
             max_n = min(int(self.max_dataset_size), len(dataset))
             dataset = Subset(dataset, range(max_n))
         kernel = self._resolve_distance_kernel(kernel)
+        dataset_size = len(dataset) if hasattr(dataset, "__len__") else None
         image_idx = None
         reduction = None
         if kernel.startswith("local_"):
@@ -554,6 +555,13 @@ class FeatureCalculator(UncertaintyModule):
         stats_batch_size = 8
         if hasattr(dataset, "__len__"):
             stats_batch_size = max(1, min(len(dataset), stats_batch_size))
+        logger.info(
+            "Fitting Mahalanobis reference statistics: kernel=%s structures=%s batch_size=%d streaming=%s",
+            kernel,
+            dataset_size if dataset_size is not None else "unknown",
+            stats_batch_size,
+            self.streaming,
+        )
         stats = FeatureStatistics(
             models=[self.repr_callback],
             dataset=dataset,
@@ -577,6 +585,7 @@ class FeatureCalculator(UncertaintyModule):
             raise RuntimeError("DistanceMetrics did not compute reference distances.")
         self.register_buffer("maha_dist", metrics.reference_distances.to(device))
         self.distance_kernel = kernel
+        logger.info("Mahalanobis reference statistics ready: kernel=%s", kernel)
 
     def _extract_from_node_features(
         self,
@@ -632,17 +641,45 @@ class FeatureCalculator(UncertaintyModule):
 
     @staticmethod
     def _build_image_idx(dataset: torch.utils.data.Dataset) -> torch.Tensor:
+        total = len(dataset)
         counts: List[int] = []
-        for i in range(len(dataset)):
-            n_atoms = dataset[i][properties.n_atoms]
-            if torch.is_tensor(n_atoms):
-                n_atoms = int(n_atoms.item())
-            else:
-                n_atoms = int(n_atoms)
-            counts.append(n_atoms)
+        iterator = range(total)
+        use_tqdm = tqdm is not None and sys.stderr.isatty()
+        log_every = max(1, total // 10) if total > 0 else None
+        if use_tqdm:
+            iterator = tqdm(iterator, desc="build-image-idx", total=total)
+        elif log_every is not None:
+            logger.info("Building local-kernel image index: 0/%d structures", total)
+        get_n_atoms = FeatureCalculator._resolve_n_atoms_getter(dataset)
+        for i in iterator:
+            if not use_tqdm and log_every is not None and (
+                i == 0 or (i + 1) == total or (i + 1) % log_every == 0
+            ):
+                logger.info("Building local-kernel image index: %d/%d structures", i + 1, total)
+            counts.append(get_n_atoms(i))
         if counts:
             return torch.cat([torch.full((n,), i, dtype=torch.long) for i, n in enumerate(counts)])
         return torch.empty((0,), dtype=torch.long)
+
+    @staticmethod
+    def _resolve_n_atoms_getter(dataset: torch.utils.data.Dataset):
+        getter = getattr(dataset, "get_n_atoms", None)
+        if callable(getter):
+            return getter
+        if isinstance(dataset, Subset):
+            parent_getter = FeatureCalculator._resolve_n_atoms_getter(dataset.dataset)
+            return lambda i: parent_getter(dataset.indices[i])
+
+        def generic_get_n_atoms(i: int) -> int:
+            sample = dataset[i]
+            if hasattr(sample, "to_dict"):
+                sample = sample.to_dict()
+            n_atoms = sample[properties.n_atoms]
+            if torch.is_tensor(n_atoms):
+                return int(n_atoms.item())
+            return int(n_atoms)
+
+        return generic_get_n_atoms
 
     def _resolve_distance_kernel(self, kernel: Optional[str] = None) -> str:
         if kernel is None and self._resolved_distance_kernel:

@@ -950,34 +950,6 @@ class CustomFormatter(logging.Formatter):
         return formatter.format(record)
 
 
-_LOGO_LOGGED = False
-
-
-def log_logo(logger: Optional[logging.Logger] = None) -> None:
-    global _LOGO_LOGGED
-    if _LOGO_LOGGED:
-        return
-    _LOGO_LOGGED = True
-    log = logger or logging.getLogger("curator")
-    logo = [
-        """
-            █████████  █████  █████ ███████████     █████████   ███████████    ███████    ███████████  
-           ███░░░░░███░░███  ░░███ ░░███░░░░░███   ███░░░░░███ ░█░░░███░░░█  ███░░░░░███ ░░███░░░░░███ 
-          ███     ░░░  ░███   ░███  ░███    ░███  ░███    ░███ ░   ░███  ░  ███     ░░███ ░███    ░███ 
-         ░███          ░███   ░███  ░██████████   ░███████████     ░███    ░███      ░███ ░██████████  
-         ░███          ░███   ░███  ░███░░░░░███  ░███░░░░░███     ░███    ░███      ░███ ░███░░░░░███ 
-         ░░███     ███ ░███   ░███  ░███    ░███  ░███    ░███     ░███    ░░███     ███  ░███    ░███ 
-          ░░█████████  ░░████████   █████   █████ █████   █████    █████    ░░░███████░   █████   █████
-           ░░░░░░░░░    ░░░░░░░░   ░░░░░   ░░░░░ ░░░░░   ░░░░░    ░░░░░       ░░░░░░░    ░░░░░   ░░░░░
-
-                           Active learning for machine learning interatomic potentials
-        """,
-    ]
-    display_lines = [line.replace("\\\\", "\\") for line in logo]
-    width = max(max(len(line) for line in display_lines), 80)
-    for line in display_lines:
-        log.info(line.center(width))
-
 # Set up Early stopping for pytorch training 
 class EarlyStopping():
     def __init__(self, patience=5, min_delta=0):
