@@ -85,6 +85,7 @@ class AtomsDataModule(pl.LightningDataModule):
         atomwise_normalization: bool = True,
         scale_by: Union[float, List[float], None] = None,
         shift_by: Union[float, List[float], None] = None,
+        scale_forces: bool = False,
         default_dtype: torch.dtype = torch.get_default_dtype(),
         head_reference_by_species: Optional[Dict[str, Dict[Union[int, str], float]]] = None,
         heads: Optional[List] = None,
@@ -155,6 +156,7 @@ class AtomsDataModule(pl.LightningDataModule):
         self.atomic_energies = atomic_energies
         self.mean = shift_by
         self.std = scale_by
+        self.scale_forces = scale_forces
         self.head_reference_by_species = head_reference_by_species or {}
         self._scale_shift_cache: Dict[str, Tuple[float, float]] = {}
         self._species_logged = False
@@ -493,6 +495,9 @@ class AtomsDataModule(pl.LightningDataModule):
         vals = torch.cat(values) if values[0].numel() > 1 else torch.stack(values).reshape(-1)
         mean = torch.mean(vals).item()
         std = torch.std(vals).item()
+        if property_key == properties.energy and self.scale_forces:
+            std = self._get_rms(property_key=properties.forces)
+            logger.debug(f"Energy scale will use forces RMS: {std:.3f}.")
 
         self._scale_shift_cache[property_key] = (mean, std if std != 0.0 else 1.0)
         msg = (
