@@ -2364,7 +2364,7 @@ def update_model(model):
                     old_state_dict[f'readout.readout_mlp.{i}.linear.{name}'] = old_state_dict.pop(f'readout_mlp.{2*i}.{name}')
             warnings.warn("Rename weights in deprecated readout_mlp.")
 
-    except KeyError:
+    except (AttributeError, KeyError):
         pass
 
     if hasattr(new_rep, "readout") and hasattr(new_rep.readout, "domain_modules"):

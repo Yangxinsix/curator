@@ -28,6 +28,11 @@ class _ConsoleProgressFilter(logging.Filter):
     def filter(self, record: logging.LogRecord) -> bool:
         return not getattr(record, "progress", False)
 
+
+def _prepare_run_path(run_path: Optional[Union[str, os.PathLike]]) -> None:
+    os.makedirs(os.fspath(run_path or "."), exist_ok=True)
+
+
 def _configure_cli_logger(
     logger: logging.Logger,
     log_path: str,
@@ -100,9 +105,17 @@ def train(config: DictConfig) -> None:
         prune_config_targets,
         update_config_from_datamodule,
         log_logo,
+        update_model,
         update_model_domains,
     )
 
+    # Load the arguments 
+    if config.cfg is not None:
+        config = read_user_config(config.cfg, config_path="configs", config_name="train")
+
+    normalize_config_sequences(config)
+    prune_config_targets(config, logger=log)
+    _prepare_run_path(config.run_path)
     _configure_cli_logger(
         log,
         os.path.join(config.run_path, "training.log"),
@@ -110,13 +123,6 @@ def train(config: DictConfig) -> None:
         stream=True,
     )
     log_logo(log)
-    
-    # Load the arguments 
-    if config.cfg is not None:
-        config = read_user_config(config.cfg, config_path="configs", config_name="train")
-
-    normalize_config_sequences(config)
-    prune_config_targets(config, logger=log)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -183,15 +189,44 @@ def train(config: DictConfig) -> None:
             if not isinstance(model, NeuralNetworkPotential):
                 raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
         else:
-            model = instantiate(config.model)
             if checkpoint_mode == "weights":
                 from collections import OrderedDict
                 state_dict = torch.load(config.model_path)
+                raw_state_dict = None
                 if isinstance(state_dict, torch.nn.Module):
-                    state_dict = {"state_dict": state_dict.state_dict()}
-                new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in state_dict['state_dict'].items())
+                    # Keep source architecture from checkpoint, then expand domains later.
+                    model = state_dict
+                    raw_state_dict = state_dict.state_dict()
+                else:
+                    checkpoint_model = state_dict.get("model")
+                    checkpoint_model_cfg = state_dict.get("model_params")
+                    if domain_mode in ("extend", "replace"):
+                        if isinstance(checkpoint_model, torch.nn.Module):
+                            model = checkpoint_model
+                        elif checkpoint_model_cfg is not None:
+                            model = instantiate(checkpoint_model_cfg, _convert_="all")
+                        else:
+                            raise ValueError(
+                                "Weights loading for multi-domain fine-tuning requires the checkpoint "
+                                "to store either a full model or model_params so the single-domain "
+                                "source architecture can be recovered."
+                            )
+                        log.debug(
+                            "Weights mode with domain_mode=%s: initialized source model from checkpoint metadata before domain expansion.",
+                            domain_mode,
+                        )
+                    else:
+                        model = instantiate(config.model)
+
+                    raw_state_dict = state_dict.get("state_dict")
+                    if raw_state_dict is None and isinstance(checkpoint_model, torch.nn.Module):
+                        raw_state_dict = checkpoint_model.state_dict()
+                if raw_state_dict is None:
+                    raise ValueError("Checkpoint is missing a state_dict for weights loading.")
+                new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in raw_state_dict.items())
                 model.load_state_dict(new_state_dict, strict=False)
             else:
+                model = instantiate(config.model)
                 resume_ckpt = config.model_path
                 log.debug(
                     "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
@@ -202,6 +237,18 @@ def train(config: DictConfig) -> None:
 
     init_from = getattr(config.task, "init_new_domains_from", None)
     if domain_mode in ("extend", "replace") and new_domains is not None:
+        if not any(hasattr(module, "domain_modules") for module in model.modules()):
+            try:
+                model = update_model(model)
+            except Exception as exc:
+                raise RuntimeError(
+                    "Failed to upgrade a single-domain checkpoint to a domain-aware model "
+                    f"for domain_mode={domain_mode!r}. Use a newer checkpoint or checkpoint_mode=model."
+                ) from exc
+            log.debug(
+                "Upgraded single-domain model structure before applying domain_mode=%s.",
+                domain_mode,
+            )
         init_strategy = "copy" if init_from is not None else "random"
         updated = update_model_domains(
             model,
@@ -289,6 +336,7 @@ def tmp_train(config: DictConfig):
         config = read_user_config(config.cfg, config_path="configs", config_name="train")
 
     normalize_config_sequences(config)
+    _prepare_run_path(config.run_path)
 
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -660,6 +708,8 @@ def evaluate(config: DictConfig):
     if config.model_path is None or config.datapath is None:
         raise RuntimeError("Both model_path and datapath are required for evaluation.")
 
+    _prepare_run_path(config.run_path)
+
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
 
@@ -868,6 +918,8 @@ def simulate(config: DictConfig):
     else:
         normalize_config_sequences(config)
         prune_config_targets(config, logger=log)
+
+    _prepare_run_path(config.run_path)
     
     # Save yaml file in run_path
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
@@ -914,6 +966,8 @@ def select(config: DictConfig):
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="select")
+
+    _prepare_run_path(config.run_path)
 
     _configure_cli_logger(
         log,
@@ -1051,6 +1105,8 @@ def label(config: DictConfig):
     # Load the arguments
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="label")
+
+    _prepare_run_path(config.run_path)
 
     _configure_cli_logger(
         log,
