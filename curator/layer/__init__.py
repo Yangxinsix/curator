@@ -1,3 +1,7 @@
+from .._torch_compat import ensure_torch_safe_globals
+
+ensure_torch_safe_globals()
+
 from ._atomic_linear import AtomwiseLinear, AtomwiseNonLinear
 from ._atomwise_reduce import AtomwiseReduce
 from ._atomwise_nn import AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN

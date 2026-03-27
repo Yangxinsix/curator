@@ -1,3 +1,7 @@
+from .._torch_compat import ensure_torch_safe_globals
+
+ensure_torch_safe_globals()
+
 from .painn import Painn
 from .nequip import Nequip
 from .mace import MACE

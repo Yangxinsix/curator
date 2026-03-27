@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from typing import Optional, Union
 
+from .._torch_compat import ensure_torch_safe_globals
+
 try:
     import argcomplete
 except ImportError:  # pragma: no cover
@@ -76,7 +78,6 @@ def ensure_cli_stream_logger(
 
 _resolvers_registered = False
 _LOGO_LOGGED = False
-_torch_safe_globals_registered = False
 
 
 def ensure_resolvers() -> None:
@@ -87,21 +88,6 @@ def ensure_resolvers() -> None:
 
     register_resolvers()
     _resolvers_registered = True
-
-
-def ensure_torch_safe_globals() -> None:
-    global _torch_safe_globals_registered
-    if _torch_safe_globals_registered:
-        return
-    try:
-        import torch
-    except Exception:
-        return
-    add_safe_globals = getattr(torch.serialization, "add_safe_globals", None)
-    if add_safe_globals is not None:
-        add_safe_globals([slice])
-    _torch_safe_globals_registered = True
-
 
 def log_logo(logger: Optional[logging.Logger] = None) -> None:
     global _LOGO_LOGGED

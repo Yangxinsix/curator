@@ -98,4 +98,4 @@ def convert_main(argv: Optional[List[str]] = None):
         target = convert_mace_to_curator(mace_path=ckpt_path, output_path=output_path, device=torch.device(device))
 
     print(f"Converted checkpoint saved to {target}")
-    return target
+    return None

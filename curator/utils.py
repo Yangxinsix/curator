@@ -1,5 +1,9 @@
 import torch
 import json
+from ._torch_compat import ensure_torch_safe_globals
+
+ensure_torch_safe_globals()
+
 from e3nn.util.jit import script
 from omegaconf import open_dict, OmegaConf, DictConfig, ListConfig
 from hydra import compose, initialize, initialize_config_dir
