@@ -396,13 +396,14 @@ def test_energy_force_hessian_distill_output_params():
     )
     container = OmegaConf.to_container(cfg, resolve=True)
     modules = container["model"]["output_modules"]
-    assert modules[2]["_target_"] == "curator.layer.EnergyHessianOutput"
-    assert modules[2]["model_outputs"] == [
+    hessian_output = modules["energy_hessian_output"]
+    assert hessian_output["_target_"] == "curator.layer.EnergyHessianOutput"
+    assert hessian_output["model_outputs"] == [
         properties.energy_hessian_sampled,
         properties.energy_hessian_sample_indices,
     ]
-    assert modules[2]["num_samples"] == 4
-    assert modules[2]["mask_key"] is None
+    assert hessian_output["num_samples"] == 4
+    assert hessian_output["mask_key"] is None
     assert container["task"]["hessian_num_samples"] == 4
     assert container["task"]["hessian_mask_key"] is None
 
