@@ -16,5 +16,16 @@ cfg: null                          # optional path to an existing config to merg
 model_path: null                   # path to start from a pre-trained checkpoint
 run_path: .                        # root directory for logs, checkpoints, and artifacts
 deploy_model: True                 # export a deployable model after training
+deploy:
+  uncertainty: null                # optional deploy-time uncertainty spec; keep method extensions under curator.simulate.uncertainty
+                                   # structure:
+                                   #   method: none | ensemble | mahalanobis
+                                   #   dataset: null
+                                   #   output_keys: null
+                                   #   maha:
+                                   #     kernel: local-full-g
+                                   #     max_structures: null
+                                   #     regularization: 1e-6
+                                   #     streaming: false
 compile: False                     # torch.compile model before training if supported
 device: cuda                       # device identifier for training

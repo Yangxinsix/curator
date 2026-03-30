@@ -210,14 +210,23 @@ def iter_batches(
             pin_memory=pin_memory,
         )
     iterator = loader
-    if tqdm is not None and desc is not None:
+    use_tqdm = tqdm is not None and desc is not None and sys.stderr.isatty()
+    if use_tqdm:
         iterator = tqdm(
             loader,
             desc=desc,
             total=len(loader),
-            disable=not sys.stderr.isatty(),
         )
-    for batch in iterator:
+    total_batches = len(loader) if hasattr(loader, "__len__") else None
+    log_every = None
+    if desc is not None and not use_tqdm and total_batches is not None:
+        log_every = max(1, total_batches // 10)
+        logger.info("%s: 0/%d batches", desc, total_batches)
+    for batch_idx, batch in enumerate(iterator, start=1):
+        if log_every is not None and (
+            batch_idx == total_batches or batch_idx == 1 or batch_idx % log_every == 0
+        ):
+            logger.info("%s: %d/%d batches", desc, batch_idx, total_batches)
         if hasattr(batch, "to"):
             yield batch.to(device=device, dtype=dtype)
         else:

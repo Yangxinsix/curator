@@ -2,7 +2,7 @@ import inspect
 from collections import OrderedDict
 from dataclasses import dataclass
 from functools import partial
-from typing import Any, Callable, Dict, Iterable, List, Optional, Type, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple, Type, Union
 
 import torch
 from pytorch_lightning import LightningDataModule
@@ -107,14 +107,19 @@ class Representation(nn.Module):
         return readout
 
     @staticmethod
-    def _apply_cutoff_mask(data: properties.Type, cutoff: float):
-        """Apply edge cutoff mask in-place. Returns original edges for optional downstream use."""
-        try:
-            edge_idx = data[properties.edge_idx]
-            edge_diff = data[properties.edge_diff]
-            edge_dist = data[properties.edge_dist]
-        except KeyError:
+    def _apply_cutoff_mask(
+        data: properties.Type, cutoff: float
+    ) -> Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        """Apply edge cutoff mask in-place. Returns original (edge_idx, edge_diff, edge_dist) for optional downstream use."""
+        if (
+            properties.edge_idx not in data
+            or properties.edge_diff not in data
+            or properties.edge_dist not in data
+        ):
             return None
+        edge_idx = data[properties.edge_idx]
+        edge_diff = data[properties.edge_diff]
+        edge_dist = data[properties.edge_dist]
         mask = edge_dist < cutoff
         data[properties.edge_idx] = edge_idx[mask]
         data[properties.edge_diff] = edge_diff[mask]
@@ -122,7 +127,10 @@ class Representation(nn.Module):
         return (edge_idx, edge_diff, edge_dist)
 
     @staticmethod
-    def _restore_cutoff_mask(data: properties.Type, cache):
+    def _restore_cutoff_mask(
+        data: properties.Type,
+        cache: Optional[Tuple[torch.Tensor, torch.Tensor, torch.Tensor]],
+    ) -> None:
         """Restore edges previously masked by _apply_cutoff_mask."""
         if cache is None:
             return
@@ -175,11 +183,38 @@ class NeuralNetworkPotential(nn.Module):
         data = data.copy()
         for module in self.input_modules:
             data = module(data)
-
         data = self.representation(data)
 
         for module in self.output_modules:
             data = module(data)
+
+        return self.extract_outputs(data)
+
+    @torch.jit.unused
+    def forward_with_lammps(
+        self,
+        data: properties.Type,
+        force_domain: Optional[int] = None,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
+    ) -> properties.Type:
+        data = data.copy()
+        if force_domain is not None:
+            dom = torch.tensor([force_domain], dtype=torch.long, device=data[properties.n_atoms].device)
+            data[properties.domain] = dom
+        for m in self.input_modules:
+            data = m(data)
+
+        data = self.representation(
+            data,
+            lammps_data=lammps_data,
+            n_local=n_local,
+            n_ghost=n_ghost,
+        )
+
+        for m in self.output_modules:
+            data = m(data)
 
         return self.extract_outputs(data)
 

@@ -45,6 +45,9 @@ class AseDataset(torch.utils.data.Dataset):
         
     def __len__(self) -> int:
         return len(self.db)
+
+    def get_n_atoms(self, idx: int) -> int:
+        return len(self.db[idx])
     
     def __getitem__(self, idx):
         atoms = self.db[idx]
@@ -94,6 +97,10 @@ class BambooDataset(torch.utils.data.Dataset):
         if meta is not None:
             meta.setdefault("index", index)
         return atoms_data_from_dict(atoms_dict, task=self.task, weight=self.weight, meta=meta)
+
+    def get_n_atoms(self, index: int) -> int:
+        left_a, right_a = self.data['cumsum_atom'][index], self.data['cumsum_atom'][index+1]
+        return int((right_a - left_a).item())
 
     def to_ase_atoms(self, index):
         sample = self.__getitem__(index)
@@ -148,6 +155,9 @@ class NumpyDataset(torch.utils.data.Dataset):
         
     def __len__(self) -> int:
         return len(self.npdata['E'])
+
+    def get_n_atoms(self, idx: int) -> int:
+        return int(len(self.npdata["z"]))
     
     def __getitem__(self, idx):
         atoms_dict = {

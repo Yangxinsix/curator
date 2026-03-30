@@ -43,6 +43,6 @@ class PainnUpdate(nn.Module):
         delta_s = a_sv * inner_prod + a_ss
         
         residual_node_feat = torch.cat([delta_s, delta_v.reshape(-1, self.num_features * 3)], dim=1)
-        node_feat += residual_node_feat
+        node_feat = node_feat + residual_node_feat
         
         return node_feat

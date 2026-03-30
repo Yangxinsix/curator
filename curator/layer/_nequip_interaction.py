@@ -171,5 +171,5 @@ class InteractionLayer(torch.nn.Module):
         # do nonlinearity
         node_feat = self.equivariant_nonlin(node_feat)
         if self.resnet:
-            node_feat += old_node_feat
+            node_feat = node_feat + old_node_feat
         return node_feat

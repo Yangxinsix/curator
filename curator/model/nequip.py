@@ -17,7 +17,7 @@ from curator.layer import (
 )
 from curator.model.base import ParameterGroup, Representation
 
-from typing import Dict, List, Optional, Sequence, Union, Callable, Type
+from typing import Any, Dict, List, Optional, Sequence, Union, Callable, Type
 from functools import partial
 
 
@@ -274,7 +274,13 @@ class Nequip(Representation):
             rep_config["readout"] = partial(MultiDomainAtomwiseNN, **readout_kwargs)
         return rep_config
 
-    def forward(self, data: properties.Type) -> properties.Type:
+    def forward(
+        self,
+        data: properties.Type,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
+    ) -> properties.Type:
         edge_cache = self._apply_cutoff_mask(data, self.cutoff)
         for module in self.embeddings.values():
             data = module(data)
@@ -290,6 +296,9 @@ class Nequip(Representation):
                 data[properties.edge_idx],
                 data[properties.edge_dist_embedding],
                 data[properties.edge_diff_embedding],
+                lammps_data=lammps_data,
+                n_local=n_local,
+                n_ghost=n_ghost,
             )
 
         data[properties.node_feat] = node_feat

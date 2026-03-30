@@ -101,5 +101,5 @@ class PainnMessage(Interaction):
             return residual_node_feat
 
         node_feat = self.truncate_ghost(node_feat, n_local)
-        node_feat += residual_node_feat
+        node_feat = node_feat + residual_node_feat
         return node_feat

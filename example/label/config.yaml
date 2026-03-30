@@ -1,0 +1,30 @@
+annotator:
+  calculator:
+    _target_: gpaw.GPAW
+    xc: PBE
+    mode:
+      name: pw
+      ecut: 520
+    eigensolver:
+      name: dav
+      niter: 1
+    occupations:
+      name: fermi-dirac
+      width: 0.05
+      fixmagmom: true
+    maxiter: 200
+    kpts:
+    - 3
+    - 2
+    - 2
+  _target_: curator.label.annotator.AtomsAnnotator
+  inspector: null
+cfg: null
+run_path: .
+datapath: null
+pool_set: ../simulate/MD.traj
+indices: null
+al_info: ../select/selected.json
+split_jobs: null
+imgs_per_job: null
+job_order: null

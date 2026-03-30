@@ -2,14 +2,13 @@ import torch
 from curator.data import properties, BatchNeighborList
 from typing import Optional
 
-@torch.jit.script
 def get_pair_distance(data: properties.Type, force_process: bool=False) -> properties.Type:
     if properties.edge_dist not in data or force_process:
         pos = data[properties.positions]
         edge = data[properties.edge_idx]
         edge_diff = pos[edge[:, 1]] - pos[edge[:, 0]]
         if properties.cell_displacements in data:
-            edge_diff += data[properties.cell_displacements]
+            edge_diff = edge_diff + data[properties.cell_displacements]
         data[properties.edge_diff] = edge_diff 
         data[properties.edge_dist] = torch.linalg.norm(edge_diff, dim=1)
     
