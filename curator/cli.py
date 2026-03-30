@@ -79,62 +79,6 @@ def _resolve_checkpoint_mode(task_cfg: DictConfig) -> str:
         )
     return mode
 
-
-def _load_native_checkpoint_model(checkpoint_obj):
-    import torch
-    checkpoint_outputs = None
-    checkpoint_wrapper_cfg = _extract_checkpoint_wrapper_cfg(checkpoint_obj)
-    if isinstance(checkpoint_obj, torch.nn.Module):
-        checkpoint_outputs = getattr(checkpoint_obj, "outputs", None)
-        return checkpoint_obj, checkpoint_outputs, checkpoint_wrapper_cfg
-
-    if not isinstance(checkpoint_obj, dict):
-        raise TypeError(f"Unsupported checkpoint type: {type(checkpoint_obj)}")
-
-    from collections import OrderedDict
-    from hydra.utils import instantiate
-    from curator.layer.wrappers import apply_wrappers
-
-    checkpoint_outputs = checkpoint_obj.get("outputs")
-    checkpoint_model = checkpoint_obj.get("model")
-    if isinstance(checkpoint_model, torch.nn.Module):
-        return checkpoint_model, checkpoint_outputs, checkpoint_wrapper_cfg
-
-    checkpoint_model_cfg = checkpoint_obj.get("model_params") or checkpoint_obj.get("model_cfg")
-    raw_state_dict = checkpoint_obj.get("state_dict")
-    if checkpoint_model_cfg is None:
-        raise ValueError(
-            "Checkpoint does not include a model object or model_params/model_cfg needed "
-            "to reconstruct the native model."
-        )
-    if raw_state_dict is None:
-        raise ValueError("Checkpoint is missing state_dict needed to reconstruct the native model.")
-
-    model = instantiate(checkpoint_model_cfg, _convert_="all")
-    if checkpoint_wrapper_cfg is not None:
-        model = apply_wrappers(model, checkpoint_wrapper_cfg)
-    stripped_state_dict = OrderedDict(
-        (key.replace("model.", "", 1), value) for key, value in raw_state_dict.items()
-    )
-    model.load_state_dict(stripped_state_dict, strict=False)
-    return model, checkpoint_outputs, checkpoint_wrapper_cfg
-
-
-def _extract_checkpoint_wrapper_cfg(checkpoint_obj):
-    import torch
-
-    from .utils import resolve_wrapper_config_payload
-
-    if isinstance(checkpoint_obj, torch.nn.Module):
-        return resolve_wrapper_config_payload(checkpoint_obj)
-    if isinstance(checkpoint_obj, dict):
-        return resolve_wrapper_config_payload(
-            checkpoint_obj.get("wrapper_params"),
-            checkpoint_obj.get("model"),
-            checkpoint_obj.get("model_params") or checkpoint_obj.get("model_cfg"),
-        )
-    return None
-
 # Trainining with Pytorch Lightning (only with weights and biasses)
 @hydra.main(config_path="configs", config_name="train", version_base=None)
 def train(config: DictConfig) -> None:
@@ -222,7 +166,16 @@ def train(config: DictConfig) -> None:
         log.debug(f"Loading trained model from {config.model_path}")
         log.debug("Checkpoint loading mode: %s", checkpoint_mode)
         checkpoint_obj = torch.load(config.model_path)
-        checkpoint_wrapper_cfg = _extract_checkpoint_wrapper_cfg(checkpoint_obj)
+        if isinstance(checkpoint_obj, torch.nn.Module):
+            checkpoint_wrapper_cfg = resolve_wrapper_config_payload(checkpoint_obj)
+        elif isinstance(checkpoint_obj, dict):
+            checkpoint_wrapper_cfg = resolve_wrapper_config_payload(
+                checkpoint_obj.get("wrapper_params"),
+                checkpoint_obj.get("model"),
+                checkpoint_obj.get("model_params") or checkpoint_obj.get("model_cfg"),
+            )
+        else:
+            checkpoint_wrapper_cfg = None
         runtime_wrapper_cfg = resolve_wrapper_config_payload(
             getattr(config, "addon", None),
             checkpoint_wrapper_cfg,
@@ -240,7 +193,38 @@ def train(config: DictConfig) -> None:
                 resume_ckpt,
             )
         elif load_native_model:
-            model, checkpoint_outputs, checkpoint_wrapper_cfg = _load_native_checkpoint_model(checkpoint_obj)
+            if isinstance(checkpoint_obj, torch.nn.Module):
+                model = checkpoint_obj
+                checkpoint_outputs = getattr(checkpoint_obj, "outputs", None)
+            elif isinstance(checkpoint_obj, dict):
+                checkpoint_outputs = checkpoint_obj.get("outputs")
+                checkpoint_model = checkpoint_obj.get("model")
+                if isinstance(checkpoint_model, torch.nn.Module):
+                    model = checkpoint_model
+                else:
+                    from collections import OrderedDict
+                    from curator.layer.wrappers import apply_wrappers
+
+                    checkpoint_model_cfg = checkpoint_obj.get("model_params") or checkpoint_obj.get("model_cfg")
+                    raw_state_dict = checkpoint_obj.get("state_dict")
+                    if checkpoint_model_cfg is None:
+                        raise ValueError(
+                            "Checkpoint does not include a model object or model_params/model_cfg needed "
+                            "to reconstruct the native model."
+                        )
+                    if raw_state_dict is None:
+                        raise ValueError(
+                            "Checkpoint is missing state_dict needed to reconstruct the native model."
+                        )
+                    model = instantiate(checkpoint_model_cfg, _convert_="all")
+                    if checkpoint_wrapper_cfg is not None:
+                        model = apply_wrappers(model, checkpoint_wrapper_cfg)
+                    stripped_state_dict = OrderedDict(
+                        (key.replace("model.", "", 1), value) for key, value in raw_state_dict.items()
+                    )
+                    model.load_state_dict(stripped_state_dict, strict=False)
+            else:
+                raise TypeError(f"Unsupported checkpoint type: {type(checkpoint_obj)}")
             if not isinstance(model, NeuralNetworkPotential):
                 raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
         else:

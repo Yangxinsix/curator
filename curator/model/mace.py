@@ -5,7 +5,6 @@ from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
 from collections import OrderedDict
 from functools import partial
-import warnings
 
 from curator.layer import (
     OneHotAtomEncoding,
@@ -62,7 +61,6 @@ class MACE(Representation):
         heads: Optional[list] = None,
         distance_transform: Optional[Union[Literal["agnesi", "soft", "none", ""], nn.Module]] = None,
         filter_forbidden_irreps: bool = True,
-        **kwargs,
     ) -> None:
         """MACE model.
 
@@ -92,24 +90,6 @@ class MACE(Representation):
         self.parity = parity
         self.species = species
         self.filter_forbidden_irreps = filter_forbidden_irreps
-        legacy_wrapper_keys = [
-            key
-            for key in (
-                "use_cueq",
-                "use_elora",
-                "wrapper_stack",
-                "elora_rank",
-                "elora_alpha",
-                "elora_freeze_base",
-            )
-            if key in kwargs
-        ]
-        if legacy_wrapper_keys:
-            warnings.warn(
-                "Legacy representation wrapper kwargs are deprecated and ignored at model "
-                f"construction time: {legacy_wrapper_keys}. Use the top-level addon config instead.",
-                DeprecationWarning,
-            )
 
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions

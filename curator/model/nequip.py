@@ -3,7 +3,6 @@ from collections import OrderedDict
 from torch import nn
 from e3nn import o3
 from e3nn.util.jit import compile_mode
-import warnings
 
 from curator.data import properties
 from curator.layer import (
@@ -93,7 +92,6 @@ class Nequip(Representation):
         convolution_kwargs: Optional[dict] = None,
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
         heads: Optional[list] = None,
-        **kwargs,
     ) -> None:
         super().__init__(heads=heads)
         if num_interactions <= 0:
@@ -109,24 +107,6 @@ class Nequip(Representation):
         self.readout_mlp_hidden_layers_depth = readout_mlp_hidden_layers_depth
         self.readout_mlp_hidden_layers_width = readout_mlp_hidden_layers_width
         self.readout_mlp_nonlinearity = readout_mlp_nonlinearity
-        legacy_wrapper_keys = [
-            key
-            for key in (
-                "use_cueq",
-                "use_elora",
-                "wrapper_stack",
-                "elora_rank",
-                "elora_alpha",
-                "elora_freeze_base",
-            )
-            if key in kwargs
-        ]
-        if legacy_wrapper_keys:
-            warnings.warn(
-                "Legacy representation wrapper kwargs are deprecated and ignored at model "
-                f"construction time: {legacy_wrapper_keys}. Use the top-level addon config instead.",
-                DeprecationWarning,
-            )
 
         if nonlinearity_scalars is None:
             nonlinearity_scalars = {"e": "silu", "o": "tanh"}
