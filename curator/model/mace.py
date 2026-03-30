@@ -5,6 +5,7 @@ from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
 from collections import OrderedDict
 from functools import partial
+import warnings
 
 from curator.layer import (
     OneHotAtomEncoding,
@@ -24,9 +25,8 @@ from curator.layer import (
     AgnesiTransform,
     SoftTransform,
 )
-from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
 from curator.data import properties
-from typing import List, Optional, Dict, Union, Callable, Type, Literal
+from typing import Any, List, Optional, Dict, Union, Callable, Type, Literal
 from ase.data import atomic_numbers
 from curator.model.base import ParameterGroup, Representation, collect_unique_parameters
 
@@ -61,7 +61,6 @@ class MACE(Representation):
         num_basis: int = 8,
         power: int = 6,
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = MACEAtomwiseNN,
-        use_cueq: bool = False,
         heads: Optional[list] = None,
         distance_transform: Optional[Union[Literal["agnesi", "soft", "none", ""], nn.Module]] = None,
         filter_forbidden_irreps: bool = True,
@@ -94,9 +93,24 @@ class MACE(Representation):
         self.cutoff = cutoff
         self.parity = parity
         self.species = species
-
-        # use cuequivariance globally
-        self._enable_cueq(use_cueq)
+        legacy_wrapper_keys = [
+            key
+            for key in (
+                "use_cueq",
+                "use_elora",
+                "wrapper_stack",
+                "elora_rank",
+                "elora_alpha",
+                "elora_freeze_base",
+            )
+            if key in kwargs
+        ]
+        if legacy_wrapper_keys:
+            warnings.warn(
+                "Legacy representation wrapper kwargs are deprecated and ignored at model "
+                f"construction time: {legacy_wrapper_keys}. Use the top-level addon config instead.",
+                DeprecationWarning,
+            )
 
         if isinstance(correlation, int):
             correlation = [correlation] * num_interactions
@@ -238,6 +252,73 @@ class MACE(Representation):
             hidden_irreps=self.hidden_irreps,
             MLP_irreps=self.MLP_irreps,
         )
+
+    def export_init_kwargs(self) -> Dict[str, Any]:
+        correlation = None
+        symmetric_contractions = getattr(self.products[0], "symmetric_contractions", None)
+        contractions = getattr(symmetric_contractions, "contractions", None)
+        if contractions:
+            first = contractions[0]
+            if hasattr(first, "correlation"):
+                correlation = int(first.correlation)
+            elif hasattr(first, "weights"):
+                total = len(first.weights)
+                if total % 3 == 0:
+                    correlation = total // 3 - 1
+        elif hasattr(symmetric_contractions, "sc"):
+            contraction_degree = getattr(symmetric_contractions.sc, "contraction_degree", None)
+            if contraction_degree is not None:
+                correlation = int(contraction_degree)
+        if correlation is None:
+            raise AttributeError("Unable to infer MACE correlation from symmetric contractions.")
+
+        distance_transform = getattr(self.embeddings.radial_basis, "distance_transform", None)
+        if distance_transform is None:
+            distance_transform_name = "none"
+        elif distance_transform.__class__.__name__ == "AgnesiTransform":
+            distance_transform_name = "agnesi"
+        elif distance_transform.__class__.__name__ == "SoftTransform":
+            distance_transform_name = "soft"
+        else:
+            distance_transform_name = distance_transform
+
+        species = list(self.species or [])
+        num_elements = getattr(self.embeddings.onehot_embedding, "num_elements", len(species) or None)
+        rep_config: Dict[str, Any] = {
+            "cutoff": self.cutoff,
+            "num_interactions": len(self.interactions),
+            "correlation": correlation,
+            "interaction_cls": self.interactions[-1].__class__,
+            "interaction_cls_first": self.interactions[0].__class__,
+            "radial_MLP": list(self.interactions[0].conv_tp_weights.hs[1:-1]),
+            "species": species,
+            "num_elements": num_elements,
+            "hidden_irreps": self.hidden_irreps,
+            "edge_sh_irreps": self.edge_sh_irreps,
+            "node_irreps": self.node_irreps,
+            "MLP_irreps": self.MLP_irreps,
+            "avg_num_neighbors": float(self.interactions[0].avg_num_neighbors),
+            "num_basis": self.embeddings.radial_basis.basis.num_basis,
+            "power": self.embeddings.radial_basis.cutoff_fn.p,
+            "distance_transform": distance_transform_name,
+        }
+
+        readout = getattr(self, "readout", None)
+        domain_modules = getattr(readout, "domain_modules", None)
+        if domain_modules:
+            from curator.layer import MultiDomainMACEAtomwiseNN
+
+            domains = getattr(readout, "domains", None) or list(domain_modules.keys())
+            heads_by_domain = {
+                str(domain): list(module.heads)
+                for domain, module in domain_modules.items()
+                if hasattr(module, "heads")
+            }
+            readout_kwargs: Dict[str, Any] = {"domains": [str(domain) for domain in domains]}
+            if heads_by_domain:
+                readout_kwargs["heads_by_domain"] = heads_by_domain
+            rep_config["readout"] = partial(MultiDomainMACEAtomwiseNN, **readout_kwargs)
+        return rep_config
             
     def forward(self, data: properties.Type) -> properties.Type:
         # add mask for local interaction part

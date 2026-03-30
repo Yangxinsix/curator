@@ -13,4 +13,3 @@ num_features: 32                 # embedding width (derived from hidden_irreps i
 num_basis: 8                     # radial basis size
 power: 6                         # cutoff envelope exponent
 gate: silu                       # gating nonlinearity
-use_cueq: False                  # enable charge equilibration variant

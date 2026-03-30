@@ -2,15 +2,14 @@ import unittest
 
 from hydra.utils import instantiate
 
-import curator.layer._cuequivariance_wrapper as cueq
-from unittest import skipIf
+from curator.layer.wrappers import apply_wrappers, export_wrapper_config, set_wrapper_config
 from curator.model import MACE, NeuralNetworkPotential
 from curator.utils import read_user_config
 
 
 class ReadUserConfigOverridesTest(unittest.TestCase):
     def setUp(self):
-        cueq.set_use_cueq(False)
+        set_wrapper_config(use_cueq=False, use_elora=False, wrapper_stack=None)
 
     def test_can_override_representation_via_hydra_style(self):
         cfg = read_user_config(
@@ -26,37 +25,49 @@ class ReadUserConfigOverridesTest(unittest.TestCase):
         self.assertIsInstance(model, NeuralNetworkPotential)
         self.assertIsInstance(model.representation, MACE)
 
-    def test_use_cueq_flag_sets_global(self):
-        if cueq.IS_CUET_AVAILABLE:
-            self.skipTest("cuequivariance available; skip fallback warning test to avoid GPU/perm setup.")
+    def test_addon_config_is_kept_outside_representation_schema(self):
         cfg = read_user_config(
             config_path="curator/configs",
             overrides=[
                 "model/representation=mace",
-                "model.representation.use_cueq=True",
+                "+addon.wrapper_stack=elora",
+                "+addon.elora_rank=8",
+                "model.representation.num_features=4",
                 "data.species=[Li,Fe,P,O]",
             ],
         )
-        instantiate(cfg.model)
-        self.assertTrue(cueq.USE_CUEQ_GLOBAL)
-        if not cueq.IS_CUET_AVAILABLE:
-            # Even without cuequivariance installed, the flag should be set
-            # and we should gracefully fall back to e3nn kernels.
-            self.assertFalse(cueq.IS_CUET_AVAILABLE)
 
-    def test_use_cueq_flag_sets_global_for_nequip(self):
-        if cueq.IS_CUET_AVAILABLE:
-            self.skipTest("cuequivariance available; skip fallback warning test to avoid GPU/perm setup.")
+        self.assertEqual(cfg.addon.wrapper_stack, "elora")
+        self.assertNotIn("use_elora", cfg.model.representation)
+        self.assertNotIn("wrapper_stack", cfg.model.representation)
+
+        model = instantiate(cfg.model)
+        patched = apply_wrappers(model, cfg.addon)
+        metadata = export_wrapper_config(patched)
+
+        self.assertTrue(metadata["use_elora"])
+        self.assertFalse(metadata["use_cueq"])
+        self.assertEqual(metadata["wrapper_stack"], "elora")
+
+    def test_cueq_elora_addon_combines_flags(self):
         cfg = read_user_config(
             config_path="curator/configs",
             overrides=[
-                "model/representation=nequip",
-                "model.representation.use_cueq=True",
+                "model/representation=mace",
+                "+addon.wrapper_stack=cueq+elora",
+                "model.representation.num_features=4",
                 "data.species=[Li,Fe,P,O]",
             ],
         )
-        instantiate(cfg.model)
-        self.assertTrue(cueq.USE_CUEQ_GLOBAL)
+
+        self.assertEqual(cfg.addon.wrapper_stack, "cueq+elora")
+        model = instantiate(cfg.model)
+        patched = apply_wrappers(model, cfg.addon)
+        metadata = export_wrapper_config(patched)
+
+        self.assertTrue(metadata["use_cueq"])
+        self.assertTrue(metadata["use_elora"])
+        self.assertEqual(metadata["wrapper_stack"], "cueq+elora")
 
     def test_can_override_data_field(self):
         custom_path = "/tmp/path_to_dataset"

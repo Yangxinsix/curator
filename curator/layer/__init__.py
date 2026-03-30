@@ -41,6 +41,7 @@ from ._feature import (
 from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from .cutoff import CosineCutoff, PolynomialCutoff
 from .nonlinearities import ShiftedSoftPlus
+from .wrappers import merge_model_elora
 from .radial_basis import (
     BesselBasis,
     SineBasis,
@@ -124,4 +125,5 @@ __all__ = [
     MultiDomainAtomwiseNN,
     MultiDomainMACEAtomwiseNN,
     Dense,
+    merge_model_elora,
 ]

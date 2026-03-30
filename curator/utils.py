@@ -428,7 +428,7 @@ def _infer_nequip_readout_nonlinearity(readout_module) -> Optional[str]:
             return "gelu"
         if cls_name == "Tanh":
             return "tanh"
-        if cls_name in {"Identity", "ScalarLinearLayer"}:
+        if cls_name in {"Identity", "ScalarLinearLayer", "ELoRAScalarLinearLayer"}:
             continue
         if cls_name == "ShiftedSoftplus":
             return "ssp"
@@ -918,6 +918,54 @@ def _listify_config_field(config: Optional[DictConfig], field: str) -> None:
         config[field] = list(value)
 
 
+def _copy_wrapper_config(config_like: Any) -> Optional[Dict[str, Any]]:
+    if config_like is None:
+        return None
+    if isinstance(config_like, torch.nn.Module):
+        from curator.layer.wrappers import export_wrapper_config
+
+        payload = export_wrapper_config(config_like)
+    elif isinstance(config_like, DictConfig):
+        payload = OmegaConf.to_container(config_like, resolve=False)
+    elif isinstance(config_like, dict):
+        payload = dict(config_like)
+    else:
+        return None
+
+    if isinstance(payload, dict) and "addon" in payload and isinstance(payload["addon"], dict):
+        payload = dict(payload["addon"])
+
+    if not isinstance(payload, dict):
+        return None
+
+    keys = (
+        "use_cueq",
+        "use_elora",
+        "wrapper_stack",
+        "elora_rank",
+        "elora_alpha",
+        "elora_freeze_base",
+    )
+    wrapper_payload = {key: payload[key] for key in keys if key in payload}
+    if not wrapper_payload:
+        return None
+    if not (
+        wrapper_payload.get("use_cueq")
+        or wrapper_payload.get("use_elora")
+        or wrapper_payload.get("wrapper_stack")
+    ):
+        return None
+    return wrapper_payload
+
+
+def resolve_wrapper_config_payload(*candidates: Any) -> Optional[Dict[str, Any]]:
+    for candidate in candidates:
+        payload = _copy_wrapper_config(candidate)
+        if payload:
+            return payload
+    return None
+
+
 def load_trained_model(
     model_file: Union[str, Path],
     device = None,
@@ -964,12 +1012,29 @@ def load_trained_model(
             raise
 
     if isinstance(obj, torch.nn.Module):
+        wrapper_cfg = resolve_wrapper_config_payload(
+            getattr(cfg, "addon", None) if cfg is not None else None,
+            obj,
+        )
+        if wrapper_cfg is not None and hasattr(obj, "representation"):
+            from curator.layer.wrappers import apply_wrappers
+
+            obj = apply_wrappers(obj, wrapper_cfg)
         obj.to(device)
         return obj
 
     if isinstance(obj, dict):
         stored_model = obj.get('model')
         if not load_weights_only and isinstance(stored_model, torch.nn.Module):
+            wrapper_cfg = resolve_wrapper_config_payload(
+                getattr(cfg, "addon", None) if cfg is not None else None,
+                obj.get("wrapper_params"),
+                stored_model,
+            )
+            if wrapper_cfg is not None and hasattr(stored_model, "representation"):
+                from curator.layer.wrappers import apply_wrappers
+
+                stored_model = apply_wrappers(stored_model, wrapper_cfg)
             stored_model.to(device)
             return stored_model
 
@@ -980,6 +1045,18 @@ def load_trained_model(
         _listify_config_field(model_cfg, "input_modules")
         _listify_config_field(model_cfg, "output_modules")
         model = instantiate(model_cfg, _convert_="all")
+        wrapper_cfg = resolve_wrapper_config_payload(
+            getattr(cfg, "addon", None) if cfg is not None else None,
+            obj.get("wrapper_params"),
+            stored_model,
+            model_cfg.get("representation")
+            if isinstance(model_cfg, (DictConfig, dict)) and "representation" in model_cfg
+            else None,
+        )
+        if wrapper_cfg is not None:
+            from curator.layer.wrappers import apply_wrappers
+
+            model = apply_wrappers(model, wrapper_cfg)
 
         data_cfg = cfg.data if cfg is not None else obj.get('data_params')
         data_cfg = _copy_config(data_cfg)
@@ -1242,10 +1319,10 @@ def _infer_sequence_key(entry: Any, idx: int, prefix: str) -> str:
     return f"{prefix}_{idx}"
 
 def find_best_model(run_path: Union[str, Path]) -> Tuple[Path, Optional[float]]:
-    """Return best ckpt path under a run directory or the path itself if it is a .ckpt."""
+    """Return best checkpoint path under a run directory or the file path itself."""
 
     run_path = Path(run_path)
-    if run_path.suffix == '.ckpt':
+    if run_path.is_file():
         return run_path, None
 
     cands = list(run_path.glob("best_model_*.ckpt"))
@@ -1604,15 +1681,24 @@ def read_user_config(
     use_config_dir = config_path_obj.is_absolute()
     if not use_config_dir:
         pkg_base = Path(__file__).resolve().parent
-        candidate = (pkg_base / config_path_obj).resolve()
-        if candidate.exists():
-            config_path_obj = candidate
-            use_config_dir = True
-        else:
-            candidate = (Path.cwd() / config_path_obj).resolve()
+        search_candidates = [
+            (pkg_base / config_path_obj).resolve(),
+            (pkg_base.parent / config_path_obj).resolve(),
+            (Path.cwd() / config_path_obj).resolve(),
+        ]
+        if config_path_obj.parts and config_path_obj.parts[0] == pkg_base.name:
+            stripped = Path(*config_path_obj.parts[1:])
+            search_candidates.extend(
+                [
+                    (pkg_base / stripped).resolve(),
+                    (pkg_base.parent / stripped).resolve(),
+                ]
+            )
+        for candidate in search_candidates:
             if candidate.exists():
                 config_path_obj = candidate
                 use_config_dir = True
+                break
     config_path = str(config_path_obj)
 
     override_list = []
@@ -1924,6 +2010,14 @@ def upper_triangular_cell(atoms, verbose=False):
 def get_representation_config(model):
     """Extract configurations of a model, which can then be used to instantiate a new one."""
     rep = model.representation
+    export_fn = getattr(rep, "export_init_kwargs", None)
+    if callable(export_fn):
+        try:
+            exported = export_fn()
+        except NotImplementedError:
+            exported = None
+        if isinstance(exported, abc.Mapping):
+            return dict(exported)
     if model.representation.__class__.__name__ == 'MACE':
         species = list(rep.embeddings.onehot_embedding.type_mapper.symbol_to_type.keys())
         correlation = None
@@ -2263,53 +2357,21 @@ def load_cueq_weights(source_model, target_model):
 
 
 def convert_e3nn_to_cueq(model):
-    dtype = next(model.parameters()).dtype
-    prev_dtype = torch.get_default_dtype()
-    if dtype != prev_dtype:
-        torch.set_default_dtype(dtype)
-    try:
-        rep_config = get_representation_config(model)
-        rep_config["use_cueq"] = True
-        cueq_rep = model.representation.__class__(**rep_config)
+    from curator.layer.wrappers import apply_wrappers, export_wrapper_config
 
-        cueq_model = model.__class__(
-            input_modules=list(model.input_modules),
-            output_modules=list(model.output_modules),
-            representation=cueq_rep,
-            model_outputs=model.model_outputs,
-        )
-    finally:
-        if dtype != prev_dtype:
-            torch.set_default_dtype(prev_dtype)
-
-    load_e3nn_weights(model, cueq_model)
-
-    return cueq_model
+    wrapper_cfg = export_wrapper_config(model)
+    wrapper_cfg["use_cueq"] = True
+    wrapper_cfg["wrapper_stack"] = "cueq+elora" if wrapper_cfg.get("use_elora") else "cueq"
+    return apply_wrappers(model, wrapper_cfg)
 
 
 def convert_cueq_to_e3nn(model):
-    dtype = next(model.parameters()).dtype
-    prev_dtype = torch.get_default_dtype()
-    if dtype != prev_dtype:
-        torch.set_default_dtype(dtype)
-    try:
-        rep_config = get_representation_config(model)
-        rep_config["use_cueq"] = False
-        e3nn_rep = model.representation.__class__(**rep_config)
+    from curator.layer.wrappers import apply_wrappers, export_wrapper_config
 
-        e3nn_model = model.__class__(
-            input_modules=list(model.input_modules),
-            output_modules=list(model.output_modules),
-            representation=e3nn_rep,
-            model_outputs=model.model_outputs,
-        )
-    finally:
-        if dtype != prev_dtype:
-            torch.set_default_dtype(prev_dtype)
-
-    load_cueq_weights(model, e3nn_model)
-
-    return e3nn_model
+    wrapper_cfg = export_wrapper_config(model)
+    wrapper_cfg["use_cueq"] = False
+    wrapper_cfg["wrapper_stack"] = "elora" if wrapper_cfg.get("use_elora") else "e3nn"
+    return apply_wrappers(model, wrapper_cfg)
 
 def update_model(model):
     import warnings
@@ -2333,6 +2395,7 @@ def update_model(model):
     elif rep_name == "MACE":
         rep_config["readout"] = partial(MultiDomainMACEAtomwiseNN, domains=["0"])
     new_rep = model.representation.__class__(**rep_config)
+    wrapper_cfg = resolve_wrapper_config_payload(model)
 
     old_state_dict = model.representation.state_dict()
 
@@ -2377,11 +2440,6 @@ def update_model(model):
             else:
                 remapped[k] = v
         old_state_dict = remapped
-
-    try:
-        new_rep.load_state_dict(old_state_dict)
-    except:
-        warnings.warn("Loading weights from old model failed!")
 
     output_modules = model.output_modules
     # fix output modules
@@ -2493,6 +2551,34 @@ def update_model(model):
         representation=new_rep,
         model_outputs=model.model_outputs,
     )
+    if wrapper_cfg is not None:
+        from curator.layer.wrappers import apply_wrappers
+
+        new_model = apply_wrappers(new_model, wrapper_cfg)
+        new_rep = new_model.representation
+
+    target_state_dict = new_rep.state_dict()
+    for key, value in list(old_state_dict.items()):
+        target_value = target_state_dict.get(key)
+        if (
+            torch.is_tensor(value)
+            and torch.is_tensor(target_value)
+            and value.shape != target_value.shape
+            and value.numel() == target_value.numel()
+        ):
+            old_state_dict[key] = value.reshape(target_value.shape)
+
+    try:
+        missing_keys, unexpected_keys = new_rep.load_state_dict(old_state_dict, strict=False)
+        missing_non_lora = [key for key in missing_keys if "lora_" not in key]
+        unexpected_non_lora = [key for key in unexpected_keys if "lora_" not in key]
+        if missing_non_lora or unexpected_non_lora:
+            warnings.warn(
+                "Representation upgrade left unmatched non-LoRA weights: "
+                f"missing={missing_non_lora}, unexpected={unexpected_non_lora}"
+            )
+    except Exception:
+        warnings.warn("Loading weights from old model failed!")
 
     return new_model
 
@@ -2563,8 +2649,11 @@ def upgrade_checkpoint(
     if "model" not in obj:
         raise KeyError("Checkpoint is missing 'model' entry to upgrade.")
 
+    from curator.layer.wrappers import export_wrapper_config
+
     upgraded_model = update_model(obj["model"])
     obj["model"] = upgraded_model
+    obj["wrapper_params"] = export_wrapper_config(upgraded_model)
     if "state_dict" in obj:
         state_dict = upgraded_model.state_dict()
         new_state_dict = OrderedDict()

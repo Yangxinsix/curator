@@ -1,12 +1,12 @@
 import torch
-import math
 from typing import Optional, Dict, Callable, Any
 from curator.data import properties
 from ._interaction import Interaction
-from ._cuequivariance_wrapper import (
+from ._ops import (
+    build_convnet_radial_mlp,
+    FullyConnectedTensorProduct,
     Linear,
     TensorProduct,
-    FullyConnectedTensorProduct,
 )
 
 from e3nn import o3
@@ -15,62 +15,6 @@ try:
     from torch_scatter import scatter_add
 except ImportError:
     from curator.utils import scatter_add
-from .nonlinearities import ShiftedSoftPlus
-
-
-class _ScalarLinearLayer(torch.nn.Module):
-    def __init__(
-        self,
-        in_features: int,
-        out_features: int,
-        alpha: float = 1.0,
-    ) -> None:
-        super().__init__()
-        self.register_buffer("alpha", torch.tensor(alpha), persistent=False)
-        self.weight = torch.nn.Parameter(torch.empty((in_features, out_features)))
-        torch.nn.init.uniform_(self.weight, -math.sqrt(3.0), math.sqrt(3.0))
-
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        return torch.mm(inputs, self.weight * self.alpha)
-
-
-class _ConvNetRadialMLP(torch.nn.Module):
-    def __init__(
-        self,
-        input_dim: int,
-        output_dim: int,
-        hidden_layers_depth: int,
-        hidden_layers_width: int,
-        nonlinearity: str,
-    ) -> None:
-        super().__init__()
-        dims = [input_dim] + hidden_layers_depth * [hidden_layers_width] + [output_dim]
-        act = {
-            "ssp": ShiftedSoftPlus,
-            "silu": torch.nn.functional.silu,
-        }[nonlinearity]
-        num_layers = len(dims) - 1
-        self.num_layers = num_layers
-        self.activation = act
-        for layer_idx, (h_in, h_out) in enumerate(zip(dims, dims[1:])):
-            gain = 1.0 if layer_idx == 0 else math.sqrt(2.0)
-            alpha = gain / math.sqrt(h_in)
-            self.add_module(
-                f"layer{layer_idx}",
-                _ScalarLinearLayer(
-                    in_features=h_in,
-                    out_features=h_out,
-                    alpha=alpha,
-                ),
-            )
-
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        x = inputs
-        for layer_idx in range(self.num_layers):
-            x = getattr(self, f"layer{layer_idx}")(x)
-            if layer_idx != self.num_layers - 1:
-                x = self.activation(x)
-        return x
 
 class ConvNetLayer(Interaction):
     use_sc: bool
@@ -112,10 +56,10 @@ class ConvNetLayer(Interaction):
 
         if avg_num_neighbors is not None:
             self._initialized = True
-            avg_num_neigh = torch.tensor([avg_num_neighbors])
+            avg_num_neigh = torch.tensor(avg_num_neighbors)
         else:
             self._initialized = False
-            avg_num_neigh = torch.ones((1,))
+            avg_num_neigh = torch.tensor(1.0)
         
         # self._initialized = True if avg_num_neighbors is not None else False
         # avg_num_neighbors = torch.ones((1,)) if avg_num_neighbors is None else torch.tensor([avg_num_neighbors])
@@ -171,7 +115,7 @@ class ConvNetLayer(Interaction):
         )
 
         # init_irreps already confirmed that the edge embeddding is all invariant scalars
-        self.fc = _ConvNetRadialMLP(
+        self.fc = build_convnet_radial_mlp(
             input_dim=edge_dist_irreps.num_irreps,
             output_dim=tp.weight_numel,
             hidden_layers_depth=self.radial_mlp_depth,
@@ -259,11 +203,11 @@ class ConvNetLayer(Interaction):
         if not self._initialized:
             avg_num_neigh = _datamodule._get_avg_num_neighbors()
             if avg_num_neigh is not None:
-                self.avg_num_neighbors = torch.tensor([avg_num_neigh])
+                self.avg_num_neighbors = torch.tensor(avg_num_neigh)
 
     def setup_from_datamodule(self, datamodule):
         return self.datamodule(datamodule)
 
     def setup_from_context(self, ctx):
         if not self._initialized and ctx.avg_num_neighbors is not None:
-            self.avg_num_neighbors = torch.tensor([ctx.avg_num_neighbors])
+            self.avg_num_neighbors = torch.tensor(ctx.avg_num_neighbors)

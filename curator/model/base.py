@@ -48,6 +48,29 @@ def collect_unique_parameters(
             collected.append(param)
     return collected
 
+
+def collect_matching_parameters(
+    module: nn.Module,
+    *,
+    predicate: Callable[[str, nn.Parameter], bool],
+    seen: Optional[set[int]] = None,
+    require_grad: Optional[bool] = None,
+) -> List[nn.Parameter]:
+    if seen is None:
+        seen = set()
+    collected: List[nn.Parameter] = []
+    for name, param in module.named_parameters():
+        if require_grad is not None and bool(param.requires_grad) != bool(require_grad):
+            continue
+        if not predicate(name, param):
+            continue
+        param_id = id(param)
+        if param_id in seen:
+            continue
+        seen.add(param_id)
+        collected.append(param)
+    return collected
+
 class Representation(nn.Module):
     """
     Shared mixin/base to standardize handling of head configs and readout instantiation
@@ -81,21 +104,6 @@ class Representation(nn.Module):
         init_kwargs.update(maybe("heads", heads))
 
         return readout(**init_kwargs)  # type: ignore[arg-type]
-
-    @staticmethod
-    def _enable_cueq(use_cueq: bool):
-        """Helper to enable cuequivariance with a single warning path."""
-        if not use_cueq:
-            return
-        from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE, set_use_cueq
-        import warnings
-
-        set_use_cueq(use_cueq)
-        if use_cueq and not IS_CUET_AVAILABLE:
-            warnings.warn(
-                "Requested use_cueq=True but cuequivariance is not available; falling back to e3nn kernels.",
-                RuntimeWarning,
-            )
 
     @staticmethod
     def _apply_cutoff_mask(data: properties.Type, cutoff: float):
@@ -133,6 +141,11 @@ class Representation(nn.Module):
             if params:
                 groups.append(ParameterGroup(name=str(name), params=params))
         return groups
+
+    def export_init_kwargs(self) -> Dict[str, Any]:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement export_init_kwargs() for wrapper rebuilds."
+        )
 
 
 class NeuralNetworkPotential(nn.Module):
@@ -211,6 +224,15 @@ class NeuralNetworkPotential(nn.Module):
                 register_module(module)
         else:
             register_module(target_module)
+
+    def clone_with_representation(self, representation: nn.Module) -> "NeuralNetworkPotential":
+        return self.__class__(
+            representation=representation,
+            input_modules=list(self.input_modules),
+            output_modules=list(self.output_modules),
+            model_outputs=list(self.model_outputs),
+            heads=self.heads,
+        )
 
     def module_groups(self) -> "OrderedDict[str, List[nn.Module]]":
         groups: "OrderedDict[str, List[nn.Module]]" = OrderedDict()
