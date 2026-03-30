@@ -1,0 +1,11 @@
+_target_: curator.train.model_output.DistillOutput
+name: forces_distill
+student_property: forces
+teacher_property: teacher_forces
+loss_fn:
+  _target_: torch.nn.MSELoss
+loss_weight: ${oc.select:task.loss_weights.forces_distill,100.0}
+teacher_model_path: null
+teacher_cfg: null
+only_train: true
+cache_key: distill_teacher

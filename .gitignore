@@ -8,6 +8,9 @@ build/
 test/*
 !test/test_external_adapters.py
 !test/test_external_training_representations.py
+!test/test_distill_output.py
+!test/test_sqlite_distill.py
+!test/test_offline_distill_cli.py
 scripts/
 
 # model files
@@ -25,6 +28,11 @@ scripts/
 # training logs and outputs
 runs/
 outputs/
+!curator/configs/task/outputs/
+!curator/configs/task/outputs/components/
+!curator/configs/task/outputs/energy_force_distill.yaml
+!curator/configs/task/outputs/components/energy_distill.yaml
+!curator/configs/task/outputs/components/forces_distill.yaml
 wandb/
 lightning_logs/
 mlruns/

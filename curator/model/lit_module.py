@@ -79,7 +79,7 @@ class LitNNP(pl.LightningModule):
             "metric": 16,
             "stage": 12,
         }
-        
+
     def setup(self, stage: Optional[str]=None) -> None:
         if stage == "fit":
             # if not self.model._initialized:  # need to initialize modules everytime to update scales and atomic energies

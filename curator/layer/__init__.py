@@ -3,6 +3,7 @@ from ._atomwise_reduce import AtomwiseReduce
 from ._atomwise_nn import AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from ._convnet import ConvNetLayer
 from ._charge_equilibration import ChargeEquilibration
+from ._energy_hessian import EnergyHessianOutput
 from ._ewald import EwaldSummation
 from ._grad_output import GradientOutput
 from ._nequip_interaction import InteractionLayer
@@ -68,6 +69,7 @@ __all__ = [
     MultiDomainMACEAtomwiseNN,
     ConvNetLayer,
     ChargeEquilibration,
+    EnergyHessianOutput,
     EwaldSummation,
     InteractionLayer,
     EquivariantProductBasisBlock,
@@ -100,6 +102,7 @@ __all__ = [
     PairRepulsionEnergy,
     NequIPZBLPairEnergy,
     GradientOutput,           # output modules (output forces and stress)
+    EnergyHessianOutput,
     GlobalRescaleShift,            # output modules (postprocess energy)
     PerSpeciesRescaleShift,
     MultiDomainRescaleShift,

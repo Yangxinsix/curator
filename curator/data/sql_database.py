@@ -4,8 +4,9 @@ import io
 import os
 import multiprocessing
 import torch
-from typing import Dict
-from curator.data import properties, NeighborListTransform, Asap3NeighborList
+import json
+from typing import Dict, Any, List, Optional
+from curator.data import properties, NeighborListTransform, TorchNeighborList
 from ase.data import chemical_symbols, atomic_numbers
 from ase import units
 
@@ -24,14 +25,62 @@ input data:
  total_charge ()     (float) total charge
  atomic_charge (N)  (float) atomic charge
  total_magmom ()     (float) total magnetic moment (number of unpaired electrons, i.e. for singlet S=0, doublet S=1, etc.)
- dipole (3)    (float) dipole moment in eV*A (with respect to origin)
+dipole (3)    (float) dipole moment in eV*A (with respect to origin)
 '''
 
+EXTRA_COLUMNS_INFO_KEY = "schema.extra_columns"
+
+BASE_COLUMN_SPECS = {
+    properties.atomic_numbers: {"sql_type": "BLOB", "storage": "blob", "dtype": "int32", "shape": ["n_atoms"]},
+    properties.pbc: {"sql_type": "INTEGER", "storage": "scalar", "dtype": "bool"},
+    properties.positions: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["n_atoms", 3]},
+}
+
+OPTIONAL_COLUMN_SPECS = {
+    properties.cell: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": [3, 3]},
+    properties.energy: {"sql_type": "FLOAT", "storage": "scalar", "dtype": "float32"},
+    properties.forces: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["n_atoms", 3]},
+    properties.energy_hessian: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["n_atoms", 3, "n_atoms", 3]},
+    properties.virial: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": [1, 6]},
+    properties.stress: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": [1, 6]},
+    properties.total_charge: {"sql_type": "FLOAT", "storage": "scalar", "dtype": "float32"},
+    properties.atomic_charge: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["n_atoms"]},
+    properties.total_magmom: {"sql_type": "FLOAT", "storage": "scalar", "dtype": "float32"},
+    properties.dipole: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": [1, 3]},
+}
+
+STANDARD_COLUMN_SPECS = {**BASE_COLUMN_SPECS, **OPTIONAL_COLUMN_SPECS}
+STANDARD_COLUMN_ORDER = list(STANDARD_COLUMN_SPECS.keys())
+
 class QMDatabase:
-    def __init__(self, filename, flags=apsw.SQLITE_OPEN_READONLY):
+    def __init__(
+        self,
+        filename,
+        flags=apsw.SQLITE_OPEN_READONLY,
+        extra_columns: Optional[Dict[str, Dict[str, Any]]] = None,
+    ):
         self.db = filename
         self.connections = {}  # allow multiple connections (needed for multi-threading)
+        self._all_data_columns: List[str] = []
+        self._read_columns: List[str] = []
         self._open(flags=flags)  # creates the database if it doesn't exist yet
+        stored_extra_columns = self.get_info(EXTRA_COLUMNS_INFO_KEY, default={}) or {}
+        self.extra_columns: Dict[str, Dict[str, Any]] = {}
+        normalized_extra_columns = {}
+        for key, spec in (extra_columns or {}).items():
+            normalized_extra_columns[str(key)] = {
+                "sql_type": str(spec["sql_type"]).upper(),
+                "storage": str(spec.get("storage", "blob")).lower(),
+                "dtype": np.dtype(spec.get("dtype", "float32")).name,
+                "shape": None if spec.get("shape") is None else list(spec["shape"]),
+            }
+        if stored_extra_columns and normalized_extra_columns and stored_extra_columns != normalized_extra_columns:
+            raise ValueError("extra_columns does not match the schema stored in the SQLite database.")
+        self.extra_columns = normalized_extra_columns or stored_extra_columns
+        if self.extra_columns and (flags & apsw.SQLITE_OPEN_READWRITE):
+            self.set_info(EXTRA_COLUMNS_INFO_KEY, self.extra_columns, flags=apsw.SQLITE_OPEN_READWRITE)
+        self._column_specs = {**STANDARD_COLUMN_SPECS, **self.extra_columns}
+        self._refresh_schema()
 
     def __len__(self):
         cursor = self._get_connection(flags=apsw.SQLITE_OPEN_READONLY).cursor()
@@ -39,59 +88,64 @@ class QMDatabase:
 
     def __getitem__(self, idx):
         cursor = self._get_connection(flags=apsw.SQLITE_OPEN_READONLY).cursor()
+        columns = ", ".join(self._read_columns)
         if type(idx) == list:  # for batched data retrieval
-            data = cursor.execute('''SELECT * FROM data WHERE id IN (''' + str(idx)[1:-1] + ')').fetchall()
-            return [self._unpack_data_tuple(i) for i in data]
+            data = cursor.execute(f'''SELECT {columns} FROM data WHERE id IN (''' + str(idx)[1:-1] + ')').fetchall()
+            return [self._unpack_data_tuple(i, self._read_columns) for i in data]
         else:
-            data = cursor.execute('''SELECT * FROM data WHERE id=''' + str(idx)).fetchone()
-            return self._unpack_data_tuple(data)
+            data = cursor.execute(f'''SELECT {columns} FROM data WHERE id=''' + str(idx)).fetchone()
+            return self._unpack_data_tuple(data, self._read_columns)
 
-    def _unpack_data_tuple(self, data):
+    def _refresh_schema(self):
+        cursor = self._get_connection(flags=apsw.SQLITE_OPEN_READONLY).cursor()
+        self._all_data_columns = [row[1] for row in cursor.execute("PRAGMA table_info(data)").fetchall()]
+        self._read_columns = ["id"]
+        self._read_columns += [column for column in STANDARD_COLUMN_ORDER if column in self._all_data_columns]
+        self._read_columns += [column for column in self.extra_columns if column in self._all_data_columns]
 
-        # access data tuples
-        n_atoms = len(data[1]) // 4  # a single int32 is 4 bytes
-        atomic_numbers = self._deblob(data[1], dtype=np.int32, shape=(n_atoms,))
-        pbc = np.array([bool(data[2])])
-        positions = self._deblob(data[3], dtype=np.float32, shape=(n_atoms, 3))
-        cell = None if data[4] is None else self._deblob(data[4], dtype=np.float32, shape=(3, 3))
-        energy = np.array([data[5]], dtype=np.float32) if data[5] is not None else None
-        forces = self._deblob(data[6], dtype=np.float32, shape=(n_atoms, 3)) if data[6] is not None else None
-        virial = None if data[7] is None else self._deblob(data[7], dtype=np.float32, shape=(1, 6))
-        stress = None if data[8] is None else self._deblob(data[8], dtype=np.float32, shape=(1, 6))
-        total_charge = np.array([data[9]], dtype=np.float32) if data[9] is not None else None
-        atomic_charge = None if data[10] is None else self._deblob(data[10], dtype=np.float32, shape=(n_atoms,))
-        total_magmom = np.array([data[11]], dtype=np.float32) if data[11] is not None else None
-        dipole = None if data[12] is None else self._deblob(data[12], dtype=np.float32, shape=(1, 3))
+    def _unpack_data_tuple(self, data, columns=None):
+        if data is None:
+            raise KeyError("Requested index does not exist in SQLite database.")
+        if columns is None:
+            columns = self._all_data_columns if len(data) == len(self._all_data_columns) else self._read_columns
+        row = dict(zip(columns, data))
+        atomic_numbers_blob = row.get(properties.atomic_numbers)
+        if atomic_numbers_blob is None:
+            raise KeyError("SQLite row is missing atomic_numbers.")
+        n_atoms = len(atomic_numbers_blob) // 4
+        atoms_data = {properties.n_atoms: np.array([n_atoms], dtype=np.int64)}
 
-        # must have properties
-        atoms_data = {
-            properties.n_atoms: np.array([n_atoms], dtype=np.int64),  # for indexing
-            properties.atomic_numbers: atomic_numbers.astype(np.int64),  # for indexing
-            properties.pbc: pbc,
-            properties.positions: positions,
-        }
+        for key, value in row.items():
+            if key == "id" or value is None:
+                continue
+            spec = self._column_specs.get(key)
+            if spec is None:
+                continue
+            if spec["storage"] == "scalar":
+                scalar = bool(value) if spec["dtype"] == "bool" else value
+                atoms_data[key] = np.array([scalar], dtype=np.dtype(spec["dtype"]))
+                continue
+            shape = None if spec.get("shape") is None else tuple(
+                n_atoms if dim == "n_atoms" else dim for dim in spec["shape"]
+            )
+            atoms_data[key] = self._deblob(value, dtype=np.dtype(spec["dtype"]), shape=shape)
 
-        # optional properties
-        if cell is not None:
-            atoms_data[properties.cell] = cell
-        if energy is not None:
-            atoms_data[properties.energy] = energy
-        if forces is not None:
-            atoms_data[properties.forces] = forces
-        if total_charge is not None:
-            atoms_data[properties.total_charge] = total_charge
-        if total_magmom is not None:
-            atoms_data[properties.total_magmom] = total_magmom
-        if atomic_charge is not None:
-            atoms_data[properties.atomic_charge] = atomic_charge
-        if dipole is not None:
-            atoms_data[properties.dipole] = dipole
-        if virial is not None:
-            atoms_data[properties.virial] = virial
-        if stress is not None:
-            atoms_data[properties.stress] = stress
-
+        if properties.atomic_numbers in atoms_data:
+            atoms_data[properties.atomic_numbers] = atoms_data[properties.atomic_numbers].astype(np.int64)
         return atoms_data
+
+    def _ensure_data_columns(self, keys: List[str], cursor) -> None:
+        existing = set(self._all_data_columns)
+        for key in keys:
+            if key in existing or key == "id":
+                continue
+            sql_type = self._column_specs.get(key, {}).get("sql_type")
+            if sql_type is None:
+                raise KeyError(f"Unsupported column '{key}'. Register it in extra_columns before writing.")
+            cursor.execute(f"ALTER TABLE data ADD COLUMN {key} {sql_type}")
+            existing.add(key)
+        self._all_data_columns = [column for column in ["id", *STANDARD_COLUMN_ORDER, *self.extra_columns.keys()] if column in existing]
+        self._read_columns = list(self._all_data_columns)
 
     def add_data(self, data_dict, flags=apsw.SQLITE_OPEN_READWRITE, transaction=True):
         """
@@ -100,14 +154,39 @@ class QMDatabase:
         :param flags: SQLite access flags
         :param transaction: Boolean flag for handling transactions
         """
-        # blob np.ndarray
-        data_dict = self._blob_dict(data_dict)
-
         # Check for NaN values
-        vals = [v for k, v in data_dict.items() if k in [properties.atomic_numbers, properties.positions]]
+        vals = []
+        for key in (properties.atomic_numbers, properties.positions):
+            value = data_dict.get(key)
+            if isinstance(value, torch.Tensor):
+                value = value.detach().cpu().numpy()
+            elif value is not None:
+                value = np.asarray(value)
+            vals.append(value)
         if self._any_is_nan(*vals):
             print("encountered NaN, data is not added")
             return
+
+        encoded = {}
+        for key, value in data_dict.items():
+            spec = self._column_specs.get(key)
+            if spec is None:
+                raise KeyError(f"Unsupported column '{key}'. Register it in extra_columns before writing.")
+            if value is None:
+                encoded[key] = None
+                continue
+            if isinstance(value, torch.Tensor):
+                value = value.detach().cpu().numpy()
+            if spec["storage"] == "scalar":
+                scalar = np.asarray(value).reshape(-1)[0]
+                if spec["dtype"] == "bool":
+                    encoded[key] = int(bool(scalar))
+                elif np.issubdtype(np.dtype(spec["dtype"]), np.integer):
+                    encoded[key] = int(scalar)
+                else:
+                    encoded[key] = float(scalar)
+            else:
+                encoded[key] = self._blob(np.asarray(value, dtype=np.dtype(spec["dtype"])))
 
         cursor = self._get_connection(flags=flags).cursor()
 
@@ -115,11 +194,12 @@ class QMDatabase:
             cursor.execute('''BEGIN EXCLUSIVE''')  # Begin exclusive transaction to lock the DB
 
         try:
+            self._ensure_data_columns(list(encoded.keys()), cursor)
             length = cursor.execute('''SELECT * FROM metadata WHERE id=1''').fetchone()[-1]
             keys = ['id']   # id
             vals = [None if length > 0 else 0]
-            keys += [k for k in data_dict.keys()]
-            vals += [v for v in data_dict.values()]
+            keys += [k for k in encoded.keys()]
+            vals += [v for v in encoded.values()]
             columns = ', '.join(keys)
             placeholders = ', '.join('?' * len(vals))
             sql_cmd = f'INSERT INTO data ({columns}) VALUES ({placeholders})'
@@ -128,8 +208,12 @@ class QMDatabase:
             # insert metadata
             cursor.execute('''INSERT OR REPLACE INTO metadata VALUES (?,?)''', (1, length + 1))
             Nmax = cursor.execute('''SELECT * FROM metadata WHERE id=0''').fetchone()[-1]
-            if data_dict[properties.atomic_numbers].shape[0] > Nmax:  # Update Nmax if necessary
-                cursor.execute('''INSERT OR REPLACE INTO metadata VALUES (?,?)''', (0, data_dict[properties.atomic_numbers].shape[0]))
+            atomic_numbers = data_dict[properties.atomic_numbers]
+            if isinstance(atomic_numbers, torch.Tensor):
+                atomic_numbers = atomic_numbers.detach().cpu().numpy()
+            n_atoms = len(np.asarray(atomic_numbers).reshape(-1))
+            if n_atoms > Nmax:  # Update Nmax if necessary
+                cursor.execute('''INSERT OR REPLACE INTO metadata VALUES (?,?)''', (0, n_atoms))
 
             if transaction:
                 cursor.execute('''COMMIT''')  # End transaction
@@ -147,24 +231,6 @@ class QMDatabase:
             elif np.any(np.isnan(val)):
                 return True
         return nan
-
-    def _blob_dict(self, data_dict):
-        new_dict = {}
-        for k, v in data_dict.items():
-            if isinstance(v, np.ndarray):
-                new_dict[k] = self._blob(v)
-            elif v is None:
-                new_dict[k] = None
-            elif k == properties.pbc:
-                new_dict[k] = int(v)
-            elif k == properties.energy:
-                new_dict[k] = float(v)
-            elif k == properties.total_charge:
-                new_dict[k] = float(v)
-            elif k == properties.total_magmom:
-                new_dict[k] = float(v)
-
-        return new_dict
 
     def _blob(self, array):
         """Convert numpy array to blob/buffer object."""
@@ -192,36 +258,96 @@ class QMDatabase:
         newdb = not os.path.isfile(self.db)
         cursor = self._get_connection(flags=flags).cursor()
         if newdb:
+            columns_sql = ",\n                 ".join(
+                [f"{column} {STANDARD_COLUMN_SPECS[column]['sql_type']}" for column in STANDARD_COLUMN_ORDER]
+            )
             # Create table to store data with full names
-            cursor.execute('''CREATE TABLE IF NOT EXISTS data
+            cursor.execute(
+                f'''CREATE TABLE IF NOT EXISTS data
                 (id INTEGER NOT NULL PRIMARY KEY,
-                 atomic_numbers BLOB,
-                 pbc INTEGER,
-                 positions BLOB,
-                 cell BLOB,
-                 energy FLOAT,
-                 forces BLOB,
-                 virial BLOB,
-                 stress BLOB,
-                 total_charge FLOAT,
-                 atomic_charge BLOB,
-                 total_magmom FLOAT,
-                 dipole BLOB)''')
+                 {columns_sql})'''
+            )
 
             # Create table to store metadata (information about Nmax and the length, i.e., number of entries)
             cursor.execute('''CREATE TABLE IF NOT EXISTS metadata
                 (id INTEGER PRIMARY KEY, N INTEGER)''')
+            self._ensure_info_table(cursor)
 
             # Initialize metadata values
             cursor.execute('''INSERT OR IGNORE INTO metadata (id, N) VALUES (?,?)''', (0, 0))  # Nmax
             cursor.execute('''INSERT OR IGNORE INTO metadata (id, N) VALUES (?,?)''', (1, 0))  # num_data
+
+    @staticmethod
+    def _ensure_info_table(cursor):
+        cursor.execute(
+            '''CREATE TABLE IF NOT EXISTS info
+               (key TEXT PRIMARY KEY, value TEXT NOT NULL)'''
+        )
+
+    def set_info(self, key: str, value: Any, flags=apsw.SQLITE_OPEN_READWRITE):
+        cursor = self._get_connection(flags=flags).cursor()
+        self._ensure_info_table(cursor)
+        payload = value if isinstance(value, str) else json.dumps(value, sort_keys=True)
+        cursor.execute(
+            '''INSERT OR REPLACE INTO info (key, value) VALUES (?, ?)''',
+            (str(key), payload),
+        )
+
+    def get_info(self, key: str, default: Any = None, flags=apsw.SQLITE_OPEN_READONLY):
+        cursor = self._get_connection(flags=flags).cursor()
+        if not self._has_info_table(cursor):
+            return default
+        row = cursor.execute(
+            '''SELECT value FROM info WHERE key=?''',
+            (str(key),),
+        ).fetchone()
+        if row is None:
+            return default
+        value = row[0]
+        try:
+            return json.loads(value)
+        except Exception:
+            return value
+
+    def get_all_info(self, flags=apsw.SQLITE_OPEN_READONLY) -> Dict[str, Any]:
+        cursor = self._get_connection(flags=flags).cursor()
+        if not self._has_info_table(cursor):
+            return {}
+        entries = cursor.execute('''SELECT key, value FROM info''').fetchall()
+        info: Dict[str, Any] = {}
+        for key, value in entries:
+            try:
+                info[key] = json.loads(value)
+            except Exception:
+                info[key] = value
+        return info
+
+    def set_cache_metadata(self, metadata: Dict[str, Any], namespace: str = "cache", flags=apsw.SQLITE_OPEN_READWRITE):
+        for key, value in metadata.items():
+            self.set_info(f"{namespace}.{key}", value, flags=flags)
+
+    def get_cache_metadata(self, namespace: str = "cache", flags=apsw.SQLITE_OPEN_READONLY) -> Dict[str, Any]:
+        prefix = f"{namespace}."
+        info = self.get_all_info(flags=flags)
+        return {
+            key[len(prefix):]: value
+            for key, value in info.items()
+            if key.startswith(prefix)
+        }
+
+    @staticmethod
+    def _has_info_table(cursor) -> bool:
+        row = cursor.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='info'"
+        ).fetchone()
+        return row is not None
 
     def _get_connection(self, flags=apsw.SQLITE_OPEN_READONLY):
         '''
         This allows multiple processes to access the database at once,
         every process must have its own connection
         '''
-        key = multiprocessing.current_process().name
+        key = (multiprocessing.current_process().name, int(flags))
         if key not in self.connections.keys():
             self.connections[key] = apsw.Connection(self.db, flags=flags)
             self.connections[key].setbusytimeout(300000)  # 5-minute timeout
@@ -254,9 +380,14 @@ class Sqlite3Dataset(QMDatabase, torch.utils.data.Dataset):
             weight: float = 1.0,
             meta: Dict = None,
             return_atoms_data: bool = True,
+            default_dtype: torch.dtype = torch.float32,
             **kwargs,
         ):
-        super().__init__(filename, **kwargs)
+        flags = kwargs.pop("flags", apsw.SQLITE_OPEN_READONLY)
+        extra_columns = kwargs.pop("extra_columns", None)
+        super().__init__(filename, flags=flags, extra_columns=extra_columns)
+        if isinstance(default_dtype, str):
+            default_dtype = getattr(torch, default_dtype)
         self.cutoff = cutoff
         self.compute_neighbor_list = compute_neighbor_list
         self.transforms = transforms if transforms is not None else []
@@ -264,16 +395,18 @@ class Sqlite3Dataset(QMDatabase, torch.utils.data.Dataset):
         self.weight = weight
         self.meta = meta
         self.return_atoms_data = return_atoms_data
+        self.default_dtype = default_dtype
         if self.compute_neighbor_list:
             assert isinstance(self.cutoff, float), "Cutoff radius must be given when compute the neighbor list"
             if not any([isinstance(t, NeighborListTransform) for t in self.transforms]):
-                self.transforms.append(Asap3NeighborList(cutoff=self.cutoff, return_cell_displacements=return_cell_displacements))
+                self.transforms.append(TorchNeighborList(cutoff=self.cutoff, return_cell_displacements=return_cell_displacements))
         
     def __getitem__(self, idx):
         cursor = self._get_connection(flags=apsw.SQLITE_OPEN_READONLY).cursor()
-        data = cursor.execute('''SELECT * FROM data WHERE id='''+str(int(idx))).fetchone()
-        atoms_data = self._unpack_data_tuple(data)
-        atoms_data = self.dict_to_torch_tensors(atoms_data)
+        columns = ", ".join(self._read_columns)
+        data = cursor.execute(f'''SELECT {columns} FROM data WHERE id=''' + str(int(idx))).fetchone()
+        atoms_data = self._unpack_data_tuple(data, self._read_columns)
+        atoms_data = self.dict_to_torch_tensors(atoms_data, default_dtype=self.default_dtype)
         # transform
         for t in self.transforms:
             atoms_data = t(atoms_data)

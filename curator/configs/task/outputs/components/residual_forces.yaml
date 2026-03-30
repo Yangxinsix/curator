@@ -1,5 +1,5 @@
 _target_: curator.train.ModelOutput
 name: residual_forces
 loss_fn: null
-loss_weight: ${task.residual_forces_weight}
+loss_weight: ${oc.select:task.loss_weights.residual_forces,1.0}
 is_penalty: true

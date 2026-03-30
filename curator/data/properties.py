@@ -31,6 +31,9 @@ cell_displacements: Final[str] = "_cell_displacements"     # cell displacements 
 # chemical properties
 energy: Final[str] = "energy"
 forces: Final[str] = "forces"
+energy_hessian: Final[str] = "energy_hessian"
+energy_hessian_sampled: Final[str] = "energy_hessian_sampled"
+energy_hessian_sample_indices: Final[str] = "energy_hessian_sample_indices"
 edge_forces: Final[str] = "edge_forces"
 strain: Final[str] = "strain"
 stress: Final[str] = "stress"

@@ -97,6 +97,7 @@ def train(config: DictConfig) -> None:
     from pytorch_lightning.loggers import WandbLogger
     from pytorch_lightning import seed_everything
     from curator.model import LitNNP, NeuralNetworkPotential
+    from .train.distill import prepare_distillation
     from .utils import (
         read_user_config,
         CustomFormatter,
@@ -123,10 +124,6 @@ def train(config: DictConfig) -> None:
         stream=True,
     )
     log_logo(log)
-
-    # Save yaml file in run_path
-    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
-    log.debug("Running on host: " + str(socket.gethostname()))
     
     # Set up seed
     if hasattr(config, "trainer") and getattr(config.trainer, "accelerator", None) == "cpu":
@@ -140,6 +137,10 @@ def train(config: DictConfig) -> None:
         seed_everything(config.seed, workers=True)
     else:
         log.debug("Seed randomly...")
+    log.debug("Running on host: " + str(socket.gethostname()))
+
+    prepare_distillation(config, logger=log)
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     
     # Initiate the datamodule
     log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_path}")
@@ -194,8 +195,11 @@ def train(config: DictConfig) -> None:
                 state_dict = torch.load(config.model_path)
                 raw_state_dict = None
                 if isinstance(state_dict, torch.nn.Module):
-                    # Keep source architecture from checkpoint, then expand domains later.
-                    model = state_dict
+                    if domain_mode in ("extend", "replace"):
+                        # Keep source architecture from checkpoint, then expand domains later.
+                        model = state_dict
+                    else:
+                        model = instantiate(config.model)
                     raw_state_dict = state_dict.state_dict()
                 else:
                     checkpoint_model = state_dict.get("model")
@@ -337,17 +341,6 @@ def tmp_train(config: DictConfig):
 
     normalize_config_sequences(config)
     _prepare_run_path(config.run_path)
-
-    # Save yaml file in run_path
-    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
-    log.debug("Running on host: " + str(socket.gethostname()))
-    
-    # Set up the seed
-    if "seed" in config:
-        log.debug(f"Seed with <{config.seed}>")
-        seed_everything(config.seed, workers=True)
-    else:
-        log.debug("Seed randomly...")
     
     _configure_cli_logger(
         log,
@@ -355,6 +348,16 @@ def tmp_train(config: DictConfig):
         CustomFormatter(),
         stream=True,
     )
+
+    # Set up the seed
+    if "seed" in config:
+        log.debug(f"Seed with <{config.seed}>")
+        seed_everything(config.seed, workers=True)
+    else:
+        log.debug("Seed randomly...")
+
+    OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
+    log.debug("Running on host: " + str(socket.gethostname()))
     
     # Set up datamodule and load training and validation set
     # Initiate the datamodule
@@ -857,7 +860,7 @@ def evaluate_main(argv: Optional[List[str]] = None):
     args = _parse_args(argv)
 
     _ensure_resolvers()
-    from curator.simulate.evaluator import Evaluator
+    from curator.evaluate.evaluator import Evaluator
     from curator.model import EnsembleModel
     from .utils import load_models
 
