@@ -4,6 +4,8 @@
 # - load checkpoint weights into the current architecture
 # - freeze non-readout groups by setting the base optimizer lr to zero
 # - keep the representation readout trainable via an explicit group override
+finetune: head_only
+
 task:
   checkpoint_mode: weights
   optimizer:

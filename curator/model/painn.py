@@ -46,6 +46,8 @@ class Painn(Representation):
         self.num_interactions = num_interactions
         self.num_features = num_features
         self.num_basis = num_basis
+        self.cutoff_fn = cutoff_fn
+        self.radial_basis = radial_basis
 
         # Setup atom embeddings
         self.atom_embedding = nn.Embedding(num_embedding, num_features)
@@ -64,12 +66,27 @@ class Painn(Representation):
             ]            
         )
         
+        readout = self._normalize_readout_factory(
+            readout,
+            base_cls=AtomwiseNN,
+        )
+
         # Setup readout function
         self.readout = self._instantiate_readout(
             readout,
             heads=self.heads,
             in_features=self.num_features,
         )
+
+    def export_init_kwargs(self) -> Dict[str, Any]:
+        return {
+            "num_interactions": self.num_interactions,
+            "num_features": self.num_features,
+            "cutoff": self.cutoff,
+            "num_basis": self.num_basis,
+            "cutoff_fn": self.cutoff_fn,
+            "radial_basis": self.radial_basis,
+        }
 
     def forward(
         self, 

@@ -169,6 +169,14 @@ class GlobalRescaleShift(nn.Module):
             heads = [HEAD_PRESETS["energy"]]
         # ensure heads are HeadConfig instances (keep explicit HeadConfig overrides)
         self.heads = resolve_heads(heads)
+        self._initialize_transforms(scale_trainable=scale_trainable, shift_trainable=shift_trainable)
+
+    def _initialize_transforms(
+        self,
+        *,
+        scale_trainable: bool = False,
+        shift_trainable: bool = False,
+    ) -> None:
         # build per-head transforms
         scales = []
         shifts = []
@@ -312,7 +320,7 @@ class GlobalRescaleShift(nn.Module):
             return
         return self.setup_from_context(ctx)
 
-    # compatibility helpers for legacy access (single head) / return list for multi-head
+    # inspection helpers for exporter / debugging
     @property
     def scale_by(self) -> List[Any]:
         return [self._format_scalar(sc.scale) for sc in self.scales]
@@ -323,7 +331,6 @@ class GlobalRescaleShift(nn.Module):
 
     @property
     def atomic_energies(self) -> Optional[torch.Tensor]:
-        # legacy name; values are per-species shift table
         for i, h in enumerate(self.heads):
             if h.key == properties.energy:
                 return self.atomic_shifts[i].values

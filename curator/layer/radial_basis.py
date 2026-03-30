@@ -159,16 +159,18 @@ class RadialBasisEdgeEncoding(torch.nn.Module):
         edge_dist = data[properties.edge_dist]
         cutoff = self.cutoff_fn(edge_dist)
         edge_dist_for_basis = edge_dist
-        if self.distance_transform is not None:
-            if self.atomic_numbers is None:
+        distance_transform = getattr(self, "distance_transform", None)
+        atomic_numbers = getattr(self, "atomic_numbers", None)
+        if distance_transform is not None:
+            if atomic_numbers is None:
                 raise ValueError("distance_transform requires atomic_numbers to be set.")
             if edge_dist_for_basis.dim() == 1:
                 edge_dist_for_basis = edge_dist_for_basis.unsqueeze(-1)
-            edge_dist_for_basis = self.distance_transform(
+            edge_dist_for_basis = distance_transform(
                 edge_dist_for_basis,
                 data[properties.node_attr],
                 data[properties.edge_idx],
-                self.atomic_numbers.to(edge_dist_for_basis.device),
+                atomic_numbers.to(edge_dist_for_basis.device),
             )
         if edge_dist_for_basis.dim() > 1 and edge_dist_for_basis.shape[-1] == 1:
             edge_dist_for_basis = edge_dist_for_basis.squeeze(-1)

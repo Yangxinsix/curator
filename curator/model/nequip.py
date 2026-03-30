@@ -104,6 +104,7 @@ class Nequip(Representation):
         self.lmax = lmax
         self.parity = parity
         self.species = species
+        self.use_cueq = use_cueq
         self.radial_mlp_depth = int(radial_mlp_depth)
         self.radial_mlp_width = int(radial_mlp_width)
         self.readout_mlp_hidden_layers_depth = readout_mlp_hidden_layers_depth
@@ -218,11 +219,50 @@ class Nequip(Representation):
             readout_kwargs["n_hidden"] = [
                 hidden_irreps for _ in range(readout_mlp_hidden_layers_depth)
             ]
+        readout = self._normalize_readout_factory(
+            readout,
+            base_cls=AtomwiseNN,
+        )
         self.readout = self._instantiate_readout(
             readout,
             heads=self.heads,
             **readout_kwargs,
         )
+
+    def export_init_kwargs(self) -> Dict[str, object]:
+        mapper = getattr(self.embeddings.onehot_embedding, "type_mapper", None)
+        if mapper is not None:
+            species = list(mapper.symbol_to_type.keys())
+        else:
+            species = list(self.species or [])
+        num_elements = getattr(self.embeddings.onehot_embedding, "num_elements", len(species))
+
+        return {
+            "cutoff": self.cutoff,
+            "num_interactions": len(self.interactions),
+            "species": species,
+            "num_elements": num_elements,
+            "hidden_irreps": self.hidden_irreps,
+            "edge_sh_irreps": self.edge_sh_irreps,
+            "node_irreps": self.node_irreps,
+            "lmax": self.lmax,
+            "parity": self.parity,
+            "num_features": self.num_features,
+            "type_embed_num_features": self.type_embed_num_features,
+            "num_basis": self.embeddings.radial_basis.basis.num_basis,
+            "power": self.embeddings.radial_basis.cutoff_fn.p,
+            "resnet": self.interactions[0].resnet,
+            "nonlinearity_type": self.nonlinearity_type,
+            "nonlinearity_scalars": self.nonlinearity_scalars,
+            "nonlinearity_gates": self.nonlinearity_gates,
+            "radial_mlp_depth": self.radial_mlp_depth,
+            "radial_mlp_width": self.radial_mlp_width,
+            "readout_mlp_hidden_layers_depth": self.readout_mlp_hidden_layers_depth,
+            "readout_mlp_hidden_layers_width": self.readout_mlp_hidden_layers_width,
+            "readout_mlp_nonlinearity": self.readout_mlp_nonlinearity,
+            "convolution_kwargs": self.convolution_kwargs,
+            "use_cueq": getattr(self, "use_cueq", False),
+        }
 
     def forward(self, data: properties.Type) -> properties.Type:
         edge_cache = self._apply_cutoff_mask(data, self.cutoff)

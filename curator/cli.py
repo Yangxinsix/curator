@@ -12,7 +12,6 @@ import logging
 import socket
 import contextlib
 from typing import Optional, Union, Dict, List
-import re
 
 # very ugly solution for solving pytorch lighting and myqueue conflictions
 if "SLURM_NTASKS" in os.environ:
@@ -80,6 +79,43 @@ def _resolve_checkpoint_mode(task_cfg: DictConfig) -> str:
         )
     return mode
 
+
+def _load_native_checkpoint_model(checkpoint_obj):
+    from collections import OrderedDict
+
+    import torch
+    from hydra.utils import instantiate
+
+    checkpoint_outputs = None
+    if isinstance(checkpoint_obj, torch.nn.Module):
+        checkpoint_outputs = getattr(checkpoint_obj, "outputs", None)
+        return checkpoint_obj, checkpoint_outputs
+
+    if not isinstance(checkpoint_obj, dict):
+        raise TypeError(f"Unsupported checkpoint type: {type(checkpoint_obj)}")
+
+    checkpoint_outputs = checkpoint_obj.get("outputs")
+    checkpoint_model = checkpoint_obj.get("model")
+    if isinstance(checkpoint_model, torch.nn.Module):
+        return checkpoint_model, checkpoint_outputs
+
+    checkpoint_model_cfg = checkpoint_obj.get("model_params") or checkpoint_obj.get("model_cfg")
+    raw_state_dict = checkpoint_obj.get("state_dict")
+    if checkpoint_model_cfg is None:
+        raise ValueError(
+            "Checkpoint does not include a model object or model_params/model_cfg needed "
+            "to reconstruct the native model."
+        )
+    if raw_state_dict is None:
+        raise ValueError("Checkpoint is missing state_dict needed to reconstruct the native model.")
+
+    model = instantiate(checkpoint_model_cfg, _convert_="all")
+    stripped_state_dict = OrderedDict(
+        (key.replace("model.", "", 1), value) for key, value in raw_state_dict.items()
+    )
+    model.load_state_dict(stripped_state_dict, strict=False)
+    return model, checkpoint_outputs
+
 # Trainining with Pytorch Lightning (only with weights and biasses)
 @hydra.main(config_path="configs", config_name="train", version_base=None)
 def train(config: DictConfig) -> None:
@@ -97,6 +133,7 @@ def train(config: DictConfig) -> None:
     from pytorch_lightning.loggers import WandbLogger
     from pytorch_lightning import seed_everything
     from curator.model import LitNNP, NeuralNetworkPotential
+    from .finetune import prepare_multi_domain_finetune
     from .utils import (
         read_user_config,
         CustomFormatter,
@@ -105,8 +142,6 @@ def train(config: DictConfig) -> None:
         prune_config_targets,
         update_config_from_datamodule,
         log_logo,
-        update_model,
-        update_model_domains,
     )
 
     # Load the arguments 
@@ -147,28 +182,13 @@ def train(config: DictConfig) -> None:
     datamodule.setup()
     # something must be inferred from data before instantiating the model
     update_config_from_datamodule(config, datamodule, logger=log)
-
-    # Extend or replace domains
-    domain_mode = getattr(config.task, "domain_mode", None)
-    new_domains = getattr(config.task, "new_domains", None)
-    if domain_mode is None and config.model_path is not None:
-        if hasattr(datamodule, "domain_modules") and len(datamodule.domain_modules) > 1:
-            domain_mode = "extend"
-            config.task.domain_mode = domain_mode
-            log.debug("Auto-set domain_mode=extend for multi-domain fine-tune.")
-    if domain_mode in ("extend", "replace") and new_domains is None:
-        if hasattr(datamodule, "domain_modules") and hasattr(datamodule, "domain_to_id"):
-            inferred = []
-            for name in datamodule.domain_modules.keys():
-                if str(name).lower().startswith("replay"):
-                    continue
-                dom_id = datamodule.domain_to_id.get(name)
-                if dom_id is not None:
-                    inferred.append(str(dom_id))
-            if inferred:
-                new_domains = inferred
-                config.task.new_domains = inferred
-                log.debug("Inferred new_domains from datapath (excluding replay): %s", inferred)
+    finetune = str(getattr(config, "finetune", "") or "").strip().lower() or None
+    use_multi_domain_finetune = finetune == "multi_domain"
+    if finetune not in {None, "full", "head_only", "multi_domain"}:
+        raise ValueError(
+            f"Unknown finetune mode {finetune!r}; expected one of "
+            f"[None, 'full', 'head_only', 'multi_domain']."
+        )
 
     resume_ckpt = None
     checkpoint_outputs = None
@@ -176,89 +196,54 @@ def train(config: DictConfig) -> None:
     if config.model_path is not None:
         config.model_path = find_best_model(config.model_path)[0]
         checkpoint_mode = _resolve_checkpoint_mode(config.task)
+        load_native_model = checkpoint_mode == "model"
+        if use_multi_domain_finetune:
+            load_native_model = True
         log.debug(f"Loading trained model from {config.model_path}")
         log.debug("Checkpoint loading mode: %s", checkpoint_mode)
-        if checkpoint_mode == "model":
-            state_dict = torch.load(config.model_path)
-            if isinstance(state_dict, torch.nn.Module):
-                model = state_dict
-                checkpoint_outputs = getattr(state_dict, "outputs", None)
-            else:
-                model = state_dict['model']
-                checkpoint_outputs = state_dict.get('outputs')
+        if checkpoint_mode == "resume":
+            model = instantiate(config.model)
+            resume_ckpt = config.model_path
+            log.debug(
+                "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
+                resume_ckpt,
+            )
+        elif load_native_model:
+            checkpoint_obj = torch.load(config.model_path)
+            model, checkpoint_outputs = _load_native_checkpoint_model(checkpoint_obj)
             if not isinstance(model, NeuralNetworkPotential):
                 raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
         else:
-            if checkpoint_mode == "weights":
-                from collections import OrderedDict
-                state_dict = torch.load(config.model_path)
-                raw_state_dict = None
-                if isinstance(state_dict, torch.nn.Module):
-                    # Keep source architecture from checkpoint, then expand domains later.
-                    model = state_dict
-                    raw_state_dict = state_dict.state_dict()
-                else:
-                    checkpoint_model = state_dict.get("model")
-                    checkpoint_model_cfg = state_dict.get("model_params")
-                    if domain_mode in ("extend", "replace"):
-                        if isinstance(checkpoint_model, torch.nn.Module):
-                            model = checkpoint_model
-                        elif checkpoint_model_cfg is not None:
-                            model = instantiate(checkpoint_model_cfg, _convert_="all")
-                        else:
-                            raise ValueError(
-                                "Weights loading for multi-domain fine-tuning requires the checkpoint "
-                                "to store either a full model or model_params so the single-domain "
-                                "source architecture can be recovered."
-                            )
-                        log.debug(
-                            "Weights mode with domain_mode=%s: initialized source model from checkpoint metadata before domain expansion.",
-                            domain_mode,
-                        )
-                    else:
-                        model = instantiate(config.model)
+            from collections import OrderedDict
 
-                    raw_state_dict = state_dict.get("state_dict")
-                    if raw_state_dict is None and isinstance(checkpoint_model, torch.nn.Module):
-                        raw_state_dict = checkpoint_model.state_dict()
-                if raw_state_dict is None:
-                    raise ValueError("Checkpoint is missing a state_dict for weights loading.")
-                new_state_dict = OrderedDict((key.replace('model.', ''), value) for key, value in raw_state_dict.items())
-                model.load_state_dict(new_state_dict, strict=False)
+            checkpoint_obj = torch.load(config.model_path)
+            raw_state_dict = None
+            checkpoint_model = None
+            if isinstance(checkpoint_obj, torch.nn.Module):
+                checkpoint_model = checkpoint_obj
+                raw_state_dict = checkpoint_obj.state_dict()
             else:
-                model = instantiate(config.model)
-                resume_ckpt = config.model_path
-                log.debug(
-                    "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
-                    resume_ckpt,
-                )
+                checkpoint_model = checkpoint_obj.get("model")
+                raw_state_dict = checkpoint_obj.get("state_dict")
+                if raw_state_dict is None and isinstance(checkpoint_model, torch.nn.Module):
+                    raw_state_dict = checkpoint_model.state_dict()
+            if raw_state_dict is None:
+                raise ValueError("Checkpoint is missing a state_dict for weights loading.")
+
+            stripped_state_dict = OrderedDict(
+                (key.replace("model.", "", 1), value) for key, value in raw_state_dict.items()
+            )
+            model = instantiate(config.model)
+            model.load_state_dict(stripped_state_dict, strict=False)
     else:
         model = instantiate(config.model)
 
-    init_from = getattr(config.task, "init_new_domains_from", None)
-    if domain_mode in ("extend", "replace") and new_domains is not None:
-        if not any(hasattr(module, "domain_modules") for module in model.modules()):
-            try:
-                model = update_model(model)
-            except Exception as exc:
-                raise RuntimeError(
-                    "Failed to upgrade a single-domain checkpoint to a domain-aware model "
-                    f"for domain_mode={domain_mode!r}. Use a newer checkpoint or checkpoint_mode=model."
-                ) from exc
-            log.debug(
-                "Upgraded single-domain model structure before applying domain_mode=%s.",
-                domain_mode,
-            )
-        init_strategy = "copy" if init_from is not None else "random"
-        updated = update_model_domains(
-            model,
-            new_domains,
-            mode=domain_mode,
-            template_domain=init_from or "0",
-            init_strategy=init_strategy,
-            logger=log,
-        )
-        log.debug("Updated model domains: mode=%s new_domains=%s updated=%s", domain_mode, new_domains, updated)
+    if use_multi_domain_finetune:
+        model = prepare_multi_domain_finetune(config, datamodule, model, logger=log)
+
+    if not getattr(model, "_initialized", False):
+        model.initialize_modules(datamodule)
+        log.debug("Initialized model modules from datamodule before task setup.")
 
     # Casting model dtype to data dtype
     target_dtype = None
@@ -325,9 +310,7 @@ def tmp_train(config: DictConfig):
     import torch
     from hydra.utils import instantiate
     from e3nn.util.jit import script
-    from torch_ema import ExponentialMovingAverage
     from pytorch_lightning import seed_everything
-    from .utils import EarlyStopping
     from .utils import read_user_config, normalize_config_sequences, CustomFormatter
     from curator.train import train
 
@@ -528,7 +511,8 @@ def _default_nequip_output_path(raw_input: str) -> Path:
 
 def convert_main(argv: Optional[List[str]] = None):
     args = _convert_parse_args(argv)
-    from .utils import upgrade_checkpoint, convert_mace_to_curator
+    from .model.checkpoint_upgrade import upgrade_checkpoint
+    from .model.conversion import convert_mace_to_curator
 
     device = args.device
     target = None
@@ -541,7 +525,8 @@ def convert_main(argv: Optional[List[str]] = None):
         )
     elif args.e3nn_to_cueq or args.cueq_to_e3nn:
         import torch
-        from curator.utils import load_models, convert_e3nn_to_cueq, convert_cueq_to_e3nn
+        from curator.utils import load_models
+        from curator.model.conversion import convert_e3nn_to_cueq, convert_cueq_to_e3nn
         from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
 
         if args.cueq_to_e3nn and (not torch.cuda.is_available() or not IS_CUET_AVAILABLE):
@@ -585,7 +570,7 @@ def convert_main(argv: Optional[List[str]] = None):
         target = output_path
     elif args.nequip_to_curator:
         import torch
-        from curator.utils import convert_nequip_to_curator
+        from curator.model.conversion import convert_nequip_to_curator
 
         output_path = Path(args.output) if args.output is not None else _default_nequip_output_path(args.ckpt_path)
         target = convert_nequip_to_curator(
@@ -595,7 +580,7 @@ def convert_main(argv: Optional[List[str]] = None):
         )
     elif args.mace_to_curator or args.curator_to_mace:
         import torch
-        from curator.utils import convert_mace_to_curator, convert_curator_to_mace
+        from curator.model.conversion import convert_curator_to_mace, convert_mace_to_curator
 
         ckpt_path = Path(args.ckpt_path)
         output_path = args.output
@@ -981,14 +966,14 @@ def select(config: DictConfig):
     OmegaConf.save(config, f"{config.run_path}/config.yaml", resolve=False)
     log.debug("Running on host: " + str(socket.gethostname()))
 
-    legacy_fields = []
+    removed_fields = []
     for field in ("kernel", "export_kernels", "n_random_features"):
         if field in config:
-            legacy_fields.append(field)
-    if legacy_fields:
+            removed_fields.append(field)
+    if removed_fields:
         raise RuntimeError(
             "The projector/kernel selection interface has been removed. "
-            f"Replace {legacy_fields} with 'feature_specs' and optional 'selection_feature'."
+            f"Replace {removed_fields} with 'feature_specs' and optional 'selection_feature'."
         )
 
     # Set up the seed

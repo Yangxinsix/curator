@@ -11,8 +11,6 @@ from curator.layer import (
     AtomwiseLinear,
     AtomwiseNN,
     MACEAtomwiseNN,
-    AtomwiseNN,
-    MACEAtomwiseNN,
     AtomwiseNonLinear,
     RadialBasisEdgeEncoding,
     BesselBasis,
@@ -24,9 +22,8 @@ from curator.layer import (
     AgnesiTransform,
     SoftTransform,
 )
-from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
 from curator.data import properties
-from typing import List, Optional, Dict, Union, Callable, Type, Literal
+from typing import Any, List, Optional, Dict, Union, Callable, Type, Literal
 from ase.data import atomic_numbers
 from curator.model.base import ParameterGroup, Representation, collect_unique_parameters
 
@@ -94,6 +91,8 @@ class MACE(Representation):
         self.cutoff = cutoff
         self.parity = parity
         self.species = species
+        self.use_cueq = use_cueq
+        self.filter_forbidden_irreps = filter_forbidden_irreps
 
         # use cuequivariance globally
         self._enable_cueq(use_cueq)
@@ -230,7 +229,12 @@ class MACE(Representation):
             )
             self.products.append(prod)
 
-            # Setup readout function
+        readout = self._normalize_readout_factory(
+            readout,
+            base_cls=MACEAtomwiseNN,
+        )
+
+        # Setup readout function
         self.readout = self._instantiate_readout(
             readout,
             heads=self.heads,
@@ -238,6 +242,58 @@ class MACE(Representation):
             hidden_irreps=self.hidden_irreps,
             MLP_irreps=self.MLP_irreps,
         )
+
+    def export_init_kwargs(self) -> Dict[str, Any]:
+        correlation = None
+        symmetric_contractions = getattr(self.products[0], "symmetric_contractions", None)
+        contractions = getattr(symmetric_contractions, "contractions", None)
+        if contractions:
+            first = contractions[0]
+            if hasattr(first, "correlation"):
+                correlation = int(first.correlation)
+            elif hasattr(first, "weights"):
+                total = len(first.weights)
+                if total % 3 == 0:
+                    correlation = total // 3 - 1
+        elif hasattr(symmetric_contractions, "sc"):
+            contraction_degree = getattr(symmetric_contractions.sc, "contraction_degree", None)
+            if contraction_degree is not None:
+                correlation = int(contraction_degree)
+        if correlation is None:
+            raise AttributeError("Unable to infer MACE correlation from symmetric contractions.")
+
+        distance_transform = getattr(self.embeddings.radial_basis, "distance_transform", None)
+        if distance_transform is None:
+            distance_transform_name: Union[str, nn.Module] = "none"
+        elif distance_transform.__class__.__name__ == "AgnesiTransform":
+            distance_transform_name = "agnesi"
+        elif distance_transform.__class__.__name__ == "SoftTransform":
+            distance_transform_name = "soft"
+        else:
+            distance_transform_name = distance_transform
+
+        species = list(self.species or [])
+        num_elements = getattr(self.embeddings.onehot_embedding, "num_elements", len(species) or None)
+        return {
+            "cutoff": self.cutoff,
+            "num_interactions": len(self.interactions),
+            "correlation": correlation,
+            "interaction_cls": self.interactions[-1].__class__,
+            "interaction_cls_first": self.interactions[0].__class__,
+            "radial_MLP": list(self.interactions[0].conv_tp_weights.hs[1:-1]),
+            "species": species,
+            "num_elements": num_elements,
+            "hidden_irreps": self.hidden_irreps,
+            "edge_sh_irreps": self.edge_sh_irreps,
+            "node_irreps": self.node_irreps,
+            "MLP_irreps": self.MLP_irreps,
+            "avg_num_neighbors": float(self.interactions[0].avg_num_neighbors),
+            "num_basis": self.embeddings.radial_basis.basis.num_basis,
+            "power": self.embeddings.radial_basis.cutoff_fn.p,
+            "use_cueq": getattr(self, "use_cueq", False),
+            "distance_transform": distance_transform_name,
+            "filter_forbidden_irreps": getattr(self, "filter_forbidden_irreps", True),
+        }
             
     def forward(self, data: properties.Type) -> properties.Type:
         # add mask for local interaction part
@@ -278,7 +334,7 @@ class MACE(Representation):
         return data
 
     def module_groups(self):
-        return OrderedDict(
+        groups = OrderedDict(
             (
                 ("embeddings", [self.embeddings]),
                 ("interactions", [self.interactions]),
@@ -286,6 +342,7 @@ class MACE(Representation):
                 ("readout", [self.readout]),
             )
         )
+        return groups
 
     def parameter_groups(self) -> List[ParameterGroup]:
         groups: List[ParameterGroup] = []

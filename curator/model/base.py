@@ -73,14 +73,38 @@ class Representation(nn.Module):
             call = readout.func
 
         sig = inspect.signature(call)
+        accepts_kwargs = any(
+            param.kind == inspect.Parameter.VAR_KEYWORD
+            for param in sig.parameters.values()
+        )
 
         def maybe(name, value):
-            return {name: value} if name in sig.parameters and value is not None else {}
+            return {name: value} if value is not None and (accepts_kwargs or name in sig.parameters) else {}
 
-        init_kwargs = dict(kwargs)
+        if accepts_kwargs:
+            init_kwargs = {key: value for key, value in kwargs.items() if value is not None}
+        else:
+            init_kwargs = {
+                key: value
+                for key, value in kwargs.items()
+                if key in sig.parameters and value is not None
+            }
         init_kwargs.update(maybe("heads", heads))
 
         return readout(**init_kwargs)  # type: ignore[arg-type]
+
+    @staticmethod
+    def _normalize_readout_factory(
+        readout: Union[nn.Module, Type[nn.Module], Callable, Dict[str, Any]],
+        *,
+        base_cls: Type[nn.Module],
+    ) -> Union[nn.Module, Type[nn.Module], Callable]:
+        if hasattr(readout, "get") and not isinstance(readout, nn.Module) and not callable(readout):
+            readout_kwargs = dict(readout)
+            if "_target_" in readout_kwargs:
+                return readout
+            return partial(base_cls, **readout_kwargs)
+        return readout
 
     @staticmethod
     def _enable_cueq(use_cueq: bool):
@@ -134,6 +158,11 @@ class Representation(nn.Module):
                 groups.append(ParameterGroup(name=str(name), params=params))
         return groups
 
+    def export_init_kwargs(self) -> Dict[str, Any]:
+        raise NotImplementedError(
+            f"{self.__class__.__name__} must implement export_init_kwargs() for wrapper rebuilds."
+        )
+
 
 class NeuralNetworkPotential(nn.Module):
     """Base class for neural network potentials."""
@@ -157,11 +186,8 @@ class NeuralNetworkPotential(nn.Module):
         self.collect_outputs()
         self.register_callbacks()
 
-    def forward(self, data: properties.Type, force_domain: Optional[Union[str, int]] = None) -> properties.Type:
+    def forward(self, data: properties.Type) -> properties.Type:
         data = data.copy()
-        if force_domain is not None:
-            dom = torch.tensor([int(force_domain)], dtype=torch.long, device=data[properties.n_atoms].device)
-            data[properties.domain] = dom
         for module in self.input_modules:
             data = module(data)
 
@@ -212,68 +238,36 @@ class NeuralNetworkPotential(nn.Module):
         else:
             register_module(target_module)
 
+    def clone_with_representation(self, representation: nn.Module) -> "NeuralNetworkPotential":
+        return self.__class__(
+            representation=representation,
+            input_modules=list(self.input_modules),
+            output_modules=list(self.output_modules),
+            model_outputs=list(self.model_outputs),
+            heads=getattr(self, "heads", None),
+        )
+
     def module_groups(self) -> "OrderedDict[str, List[nn.Module]]":
         groups: "OrderedDict[str, List[nn.Module]]" = OrderedDict()
-
-        def normalize_modules(modules: Any) -> List[nn.Module]:
-            if modules is None:
-                return []
-            if isinstance(modules, nn.Module):
-                return [modules]
-            return [module for module in list(modules) if module is not None]
 
         if len(self.input_modules) > 0:
             groups["input_modules"] = [self.input_modules]
 
-        representation_groups: "OrderedDict[str, List[nn.Module]]" = OrderedDict()
         rep_groups_fn = getattr(self.representation, "module_groups", None)
         rep_groups = rep_groups_fn() if callable(rep_groups_fn) else None
         if rep_groups:
             for name, modules in rep_groups.items():
-                module_list = normalize_modules(modules)
-                if module_list:
-                    representation_groups[str(name)] = module_list
+                groups[str(name)] = list(modules)
         else:
-            representation_groups["representation"] = [self.representation]
-
-        readout = getattr(self.representation, "readout", None)
-        readout_domain_modules = getattr(readout, "domain_modules", None)
-        if isinstance(readout_domain_modules, nn.ModuleDict) and len(readout_domain_modules) > 0:
-            representation_groups.pop("readout", None)
-            readout_shared = [
-                child for name, child in readout.named_children() if name != "domain_modules"
-            ]
-            if readout_shared:
-                representation_groups["readout_shared"] = readout_shared
-            representation_groups["readout_domains"] = [readout_domain_modules]
-
-        groups.update(representation_groups)
+            groups["representation"] = [self.representation]
 
         if len(self.output_modules) > 0:
-            output_shared: List[nn.Module] = []
-            output_domains: List[nn.ModuleDict] = []
-            for module in self.output_modules:
-                domain_modules = getattr(module, "domain_modules", None)
-                if isinstance(domain_modules, nn.ModuleDict) and len(domain_modules) > 0:
-                    output_shared.extend(
-                        child for name, child in module.named_children() if name != "domain_modules"
-                    )
-                    output_domains.append(domain_modules)
-                else:
-                    output_shared.append(module)
-            if output_domains:
-                if output_shared:
-                    groups["output_shared"] = output_shared
-                groups["output_domains"] = output_domains
-            else:
-                groups["output_modules"] = [self.output_modules]
+            groups["output_modules"] = [self.output_modules]
         return groups
 
     def parameter_groups(self) -> List[ParameterGroup]:
         groups: List[ParameterGroup] = []
         seen: set[int] = set()
-        module_groups = self.module_groups()
-        consumed_names: set[str] = set()
 
         def append_group(name: str, items: Iterable[Any], defaults: Optional[Dict[str, Any]] = None) -> None:
             params = collect_unique_parameters(items, seen=seen)
@@ -281,36 +275,25 @@ class NeuralNetworkPotential(nn.Module):
                 group_defaults = dict(defaults) if defaults is not None else None
                 groups.append(ParameterGroup(name=str(name), params=params, defaults=group_defaults))
 
-        if "input_modules" in module_groups:
-            append_group("input_modules", module_groups["input_modules"])
-            consumed_names.add("input_modules")
+        if len(self.input_modules) > 0:
+            append_group("input_modules", [self.input_modules])
 
         rep_groups_fn = getattr(self.representation, "parameter_groups", None)
         rep_groups = rep_groups_fn() if callable(rep_groups_fn) else None
         if rep_groups:
             for group in rep_groups:
-                group_name = str(group.name)
-                group_defaults = group.defaults
-                if group_name == "readout" and "readout_domains" in module_groups:
-                    if "readout_shared" in module_groups:
-                        append_group("readout_shared", module_groups["readout_shared"], group_defaults)
-                        consumed_names.add("readout_shared")
-                    append_group("readout_domains", module_groups["readout_domains"], group_defaults)
-                    consumed_names.add("readout_domains")
-                    consumed_names.add("readout")
-                    continue
-                append_group(group_name, group.params, group_defaults)
-                consumed_names.add(group_name)
+                append_group(group.name, group.params, group.defaults)
         else:
-            if "representation" in module_groups:
-                append_group("representation", module_groups["representation"])
-                consumed_names.add("representation")
+            rep_module_groups_fn = getattr(self.representation, "module_groups", None)
+            rep_module_groups = rep_module_groups_fn() if callable(rep_module_groups_fn) else None
+            if rep_module_groups:
+                for name, modules in rep_module_groups.items():
+                    append_group(name, modules)
+            else:
+                append_group("representation", [self.representation])
 
-        for group_name, modules in module_groups.items():
-            if group_name in consumed_names:
-                continue
-            append_group(group_name, modules)
-            consumed_names.add(group_name)
+        if len(self.output_modules) > 0:
+            append_group("output_modules", [self.output_modules])
 
         append_group("misc", [self])
         return groups

@@ -815,3 +815,23 @@ class MultiDomainDataModule(pl.LightningDataModule):
             global_ctx.avg_num_neighbors = max(avg_neighbors)
         contexts["global"] = global_ctx
         return contexts
+
+    def _get_species(self):
+        species_union = set()
+        for dm in self.domain_modules.values():
+            get_species = getattr(dm, "_get_species", None)
+            if callable(get_species):
+                species_union.update(get_species() or [])
+        return sorted(species_union)
+
+    def _get_avg_num_neighbors(self) -> Optional[float]:
+        avg_neighbors = []
+        for dm in self.domain_modules.values():
+            get_avg = getattr(dm, "_get_avg_num_neighbors", None)
+            if callable(get_avg):
+                value = get_avg()
+                if value is not None:
+                    avg_neighbors.append(value)
+        if not avg_neighbors:
+            return None
+        return max(avg_neighbors)
