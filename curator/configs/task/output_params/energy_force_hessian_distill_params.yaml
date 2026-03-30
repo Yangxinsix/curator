@@ -1,0 +1,22 @@
+# @package _global_
+model:
+  output_modules:
+    gradient_output:
+      _target_: curator.layer.GradientOutput
+      grad_on_edge_diff: false
+      grad_on_positions: true
+      model_outputs:
+        - energy
+        - forces
+    energy_hessian_output:
+      _target_: curator.layer.EnergyHessianOutput
+      model_outputs:
+        - energy_hessian_sampled
+        - energy_hessian_sample_indices
+      num_samples: ${task.hessian_num_samples}
+      mask_key: ${task.hessian_mask_key}
+    global_rescale_shift:
+      _target_: curator.layer.GlobalRescaleShift
+task:
+  hessian_num_samples: 4
+  hessian_mask_key: null

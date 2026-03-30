@@ -1,5 +1,6 @@
 import torch
 from torch import nn
+from ._ops import ScalarLinear
 from ._interaction import Interaction
 from .cutoff import CosineCutoff
 from .radial_basis import SineBasis
@@ -36,12 +37,12 @@ class PainnMessage(Interaction):
         self.radial_basis = radial_basis
         
         self.scalar_message_mlp = nn.Sequential(
-            nn.Linear(num_features, num_features),
+            ScalarLinear(num_features, num_features, bias=True),
             nn.SiLU(),
-            nn.Linear(num_features, num_features * 3),
+            ScalarLinear(num_features, num_features * 3, bias=True),
         )
         
-        self.filter_layer = nn.Linear(num_basis, num_features * 3)
+        self.filter_layer = ScalarLinear(num_basis, num_features * 3, bias=True)
         
     # def forward(self, node_scalar, node_vector, edge, edge_diff, edge_dist):
     def forward(

@@ -1,0 +1,6 @@
+defaults:
+  - _self_
+  - /task/outputs/components@energy: energy
+  - /task/outputs/components@forces: forces
+  - /task/outputs/components@energy_distill: energy_distill
+  - /task/outputs/components@forces_distill: forces_distill

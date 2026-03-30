@@ -3,6 +3,7 @@ from ._atomwise_reduce import AtomwiseReduce
 from ._atomwise_nn import AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from ._convnet import ConvNetLayer
 from ._charge_equilibration import ChargeEquilibration
+from ._energy_hessian import EnergyHessianOutput
 from ._ewald import EwaldSummation
 from ._grad_output import GradientOutput
 from ._nequip_interaction import InteractionLayer
@@ -41,6 +42,7 @@ from ._feature import (
 from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from .cutoff import CosineCutoff, PolynomialCutoff
 from .nonlinearities import ShiftedSoftPlus
+from .wrappers import merge_model_elora
 from .radial_basis import (
     BesselBasis,
     SineBasis,
@@ -68,6 +70,7 @@ __all__ = [
     MultiDomainMACEAtomwiseNN,
     ConvNetLayer,
     ChargeEquilibration,
+    EnergyHessianOutput,
     EwaldSummation,
     InteractionLayer,
     EquivariantProductBasisBlock,
@@ -100,6 +103,7 @@ __all__ = [
     PairRepulsionEnergy,
     NequIPZBLPairEnergy,
     GradientOutput,           # output modules (output forces and stress)
+    EnergyHessianOutput,
     GlobalRescaleShift,            # output modules (postprocess energy)
     PerSpeciesRescaleShift,
     MultiDomainRescaleShift,
@@ -124,4 +128,5 @@ __all__ = [
     MultiDomainAtomwiseNN,
     MultiDomainMACEAtomwiseNN,
     Dense,
+    merge_model_elora,
 ]

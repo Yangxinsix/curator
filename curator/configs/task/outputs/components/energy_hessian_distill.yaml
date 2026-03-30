@@ -1,0 +1,16 @@
+_target_: curator.train.model_output.DistillOutput
+name: energy_hessian_distill
+student_property: energy_hessian_sampled
+teacher_property: teacher_energy_hessian
+teacher_output_property: energy_hessian
+sample_index_key: energy_hessian_sample_indices
+sample_fn:
+  _target_: curator.layer._energy_hessian.EnergyHessianSample
+  mask_key: ${oc.select:task.hessian_mask_key,null}
+loss_fn:
+  _target_: torch.nn.MSELoss
+loss_weight: ${oc.select:task.loss_weights.energy_hessian_distill,1.0}
+teacher_model_path: null
+teacher_cfg: null
+only_train: true
+cache_key: distill_teacher

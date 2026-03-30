@@ -22,7 +22,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     if args.command == "to_curator":
-        dest = convert_mace_to_curator(args.mace_checkpoint, args.output, foundation=args.foundation, device=device)
+        dest = convert_mace_to_curator(args.mace_checkpoint, args.output, device=device)
         print(f"Saved Curator model to {dest}")
     elif args.command == "to_mace":
         dest = convert_curator_to_mace(args.curator_checkpoint, args.output, device=device)

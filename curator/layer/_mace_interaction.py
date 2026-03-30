@@ -3,14 +3,14 @@ from torch import nn
 from curator.data import properties
 from e3nn.util.jit import compile_mode
 from e3nn import o3
-from ._cuequivariance_wrapper import (
-    Linear,
-    TensorProduct,
+from ._ops import (
+    FullyConnectedNet,
     FullyConnectedTensorProduct,
-    SymmetricContractionWrapper,
+    Linear,
+    SymmetricContraction,
+    TensorProduct,
 )
 from ._interaction import Interaction
-from e3nn.nn import FullyConnectedNet
 from .utils import (
     tp_out_irreps_with_instructions,
     linear_out_irreps,
@@ -35,7 +35,7 @@ class EquivariantProductBasisBlock(torch.nn.Module):
         super().__init__()
 
         self.use_sc = use_sc
-        self.symmetric_contractions = SymmetricContractionWrapper(
+        self.symmetric_contractions = SymmetricContraction(
             irreps_in=node_feats_irreps,
             irreps_out=target_irreps,
             correlation=correlation,
@@ -77,7 +77,7 @@ class RealAgnosticInteractionBlock(Interaction):
         self.target_irreps = target_irreps
         self.radial_MLP = radial_MLP
         self._initialized = True if avg_num_neighbors is not None else False
-        avg_num_neighbors = torch.ones((1,)) if avg_num_neighbors is None else torch.tensor([avg_num_neighbors])
+        avg_num_neighbors = torch.tensor(1.0) if avg_num_neighbors is None else torch.tensor(avg_num_neighbors)
         self.register_buffer("avg_num_neighbors", avg_num_neighbors)
         
         # First linear
@@ -166,18 +166,14 @@ class RealAgnosticInteractionBlock(Interaction):
         if not self._initialized:
             avg_num_neigh = _datamodule._get_avg_num_neighbors()
             if avg_num_neigh is not None:
-                self.avg_num_neighbors = torch.tensor([avg_num_neigh])
+                self.avg_num_neighbors = torch.tensor(avg_num_neigh)
 
     def setup_from_datamodule(self, datamodule):
         return self.datamodule(datamodule)
 
     def setup_from_context(self, ctx):
         if not self._initialized and ctx.avg_num_neighbors is not None:
-            self.avg_num_neighbors = torch.tensor([ctx.avg_num_neighbors])
-
-    def setup_from_context(self, ctx):
-        if not self._initialized and ctx.avg_num_neighbors is not None:
-            self.avg_num_neighbors = torch.tensor([ctx.avg_num_neighbors])
+            self.avg_num_neighbors = torch.tensor(ctx.avg_num_neighbors)
 
 
 @compile_mode("script")
@@ -197,7 +193,7 @@ class RealAgnosticResidualInteractionBlock(Interaction):
         self.hidden_irreps = hidden_irreps
         self.radial_MLP = radial_MLP
         self._initialized = True if avg_num_neighbors is not None else False
-        avg_num_neighbors = torch.ones((1,)) if avg_num_neighbors is None else torch.tensor([avg_num_neighbors])
+        avg_num_neighbors = torch.tensor(1.0) if avg_num_neighbors is None else torch.tensor(avg_num_neighbors)
         self.register_buffer("avg_num_neighbors", avg_num_neighbors) 
 
         # First linear
@@ -284,4 +280,4 @@ class RealAgnosticResidualInteractionBlock(Interaction):
         if not self._initialized:
             avg_num_neigh = _datamodule._get_avg_num_neighbors()
             if avg_num_neigh is not None:
-                self.avg_num_neighbors = torch.tensor([avg_num_neigh])
+                self.avg_num_neighbors = torch.tensor(avg_num_neigh)

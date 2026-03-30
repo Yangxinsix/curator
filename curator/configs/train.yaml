@@ -7,6 +7,7 @@ defaults:
   - optional model/repr_params: ${model/representation}_params  # representation-specific hyperparameters (batch size, optimizer, lr, etc.)
   - optional task/output_params: ${task/outputs}_params         # task output-specific overrides
   - optional finetune: null        # optional fine-tuning mode, e.g. `finetune=multi_domain`
+  - optional addon: null           # optional runtime wrapper/addon stack, e.g. `addon=elora`
   - _self_
 
 # Some parameters that are important for training

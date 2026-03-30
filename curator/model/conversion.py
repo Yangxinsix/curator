@@ -1046,148 +1046,16 @@ def convert_nequip_to_curator(
     return output_path
 
 
-def _transfer_symmetric_contractions(
-    source_dict: Dict[str, torch.Tensor],
-    target_dict: Dict[str, torch.Tensor],
-    max_L: int,
-    correlation: int,
-    num_layers: int,
-    *,
-    reverse: bool,
-) -> None:
-    if correlation == 2:
-        raise NotImplementedError("Correlation 2 not supported yet")
-    if correlation == 3:
-        kmax_pairs: List[Tuple[int, int]] = [
-            *[(idx, max_L) for idx in range(num_layers - 1)],
-            (num_layers - 1, 0),
-        ]
-    else:
-        raise NotImplementedError(f"Correlation {correlation} not supported")
-    for idx, kmax in kmax_pairs:
-        if not reverse:
-            weights = torch.concatenate(
-                [
-                    source_dict[f"products.{idx}.symmetric_contractions.contractions.{k}.weights{suffix}"]
-                    for k in range(kmax + 1)
-                    for suffix in ["_max", ".0", ".1"]
-                ],
-                dim=1,
-            )
-            target_dict[f"products.{idx}.symmetric_contractions.sc.weight"] = weights
-            continue
-
-        key = f"products.{idx}.symmetric_contractions.sc.weight"
-        if key not in source_dict:
-            continue
-        weight = source_dict[key]
-        offset = 0
-        for k in range(kmax + 1):
-            for suffix in ["_max", ".0", ".1"]:
-                target_key = f"products.{idx}.symmetric_contractions.contractions.{k}.weights{suffix}"
-                if target_key not in target_dict:
-                    continue
-                width = target_dict[target_key].shape[1]
-                target_dict[target_key] = weight[:, offset : offset + width]
-                offset += width
-
-def _load_backend_weights(
-    source_model,
-    target_model,
-    *,
-    expand: bool,
-) -> None:
-    source_dict = source_model.representation.state_dict()
-    target_dict = target_model.representation.state_dict()
-    target_shapes = {key: value.shape for key, value in target_dict.items()}
-    num_layers = len(target_model.representation.interactions)
-    transfer_keys = [
-        "embeddings.chemical_embedding.linear.weight",
-        *[f"readout.readouts.{idx}.linear.weight" for idx in range(num_layers - 1)],
-        *[f"readout.readout_mlp.{idx}.linear.weight" for idx in range(2)],
-        *[f"readout.readouts.{num_layers - 1}.{idx}.linear.weight" for idx in range(2)],
-        *[
-            key
-            for idx in range(num_layers)
-            for key in [
-                f"interactions.{idx}.linear_up.weight",
-                *[f"interactions.{idx}.conv_tp_weights.layer{layer_idx}.weight" for layer_idx in range(4)],
-                f"interactions.{idx}.linear.weight",
-                f"interactions.{idx}.skip_tp.weight",
-                f"products.{idx}.linear.weight",
-            ]
-        ],
-    ]
-
-    for key in transfer_keys:
-        target_shape = target_shapes.get(key)
-        if target_shape is None:
-            continue
-        if key in source_dict:
-            target_dict[key] = _match_tensor_shape_for_load(source_dict[key], target_shape, expand=expand)
-        else:
-            logging.warning("Key %s not found in source model", key)
-
-    lmax = getattr(source_model.representation, "lmax", None)
-    if lmax is not None:
-        try:
-            correlation = len(source_model.representation.products[0].symmetric_contractions.contractions[0].weights) + 1
-        except Exception:
-            correlation = source_model.representation.products[0].symmetric_contractions.sc.contraction_degree
-        _transfer_symmetric_contractions(
-            source_dict,
-            target_dict,
-            lmax,
-            correlation,
-            num_layers,
-            reverse=not expand,
-        )
-
-    transferred_keys = set(transfer_keys)
-    remaining_keys = set(source_dict.keys()) & set(target_dict.keys()) - transferred_keys
-    remaining_keys = {key for key in remaining_keys if "symmetric_contraction" not in key}
-    if not expand:
-        for key in source_dict.keys():
-            if "weight" in key and any(token in key for token in ["linear", "skip_tp"]):
-                target_shape = target_shapes.get(key)
-                if target_shape is not None:
-                    target_dict[key] = _match_tensor_shape_for_load(source_dict[key], target_shape, expand=False)
-
-    for key in remaining_keys:
-        src_val = _match_tensor_shape_for_load(source_dict[key], target_shapes[key], expand=expand)
-        if src_val.shape == target_shapes[key]:
-            target_dict[key] = src_val
-        elif expand:
-            logging.warning(
-                "Shape mismatch for key %s: source %s vs target %s",
-                key,
-                source_dict[key].shape,
-                target_shapes[key],
-            )
-
-    target_model.representation.load_state_dict(target_dict)
-
-
 def _convert_backend(model, *, use_cueq: bool):
-    device = next(model.parameters()).device
-    dtype = next(model.parameters()).dtype
-    prev_dtype = torch.get_default_dtype()
-    if dtype != prev_dtype:
-        torch.set_default_dtype(dtype)
-    try:
-        rep_config = model.representation.export_init_kwargs()
-        rep_config["use_cueq"] = use_cueq
-        converted_model = model.clone_with_representation(
-            model.representation.__class__(**rep_config)
-        )
-    finally:
-        if dtype != prev_dtype:
-            torch.set_default_dtype(prev_dtype)
+    from curator.layer.wrappers import apply_wrappers, export_wrapper_config
 
-    _load_backend_weights(model, converted_model, expand=use_cueq)
-    converted_model = converted_model.to(device=device, dtype=dtype)
-    converted_model.train(model.training)
-    return converted_model
+    wrapper_cfg = export_wrapper_config(model)
+    wrapper_cfg["use_cueq"] = bool(use_cueq)
+    if use_cueq:
+        wrapper_cfg["wrapper_stack"] = "cueq+elora" if wrapper_cfg.get("use_elora") else "cueq"
+    else:
+        wrapper_cfg["wrapper_stack"] = "elora" if wrapper_cfg.get("use_elora") else "e3nn"
+    return apply_wrappers(model, wrapper_cfg)
 
 
 def convert_e3nn_to_cueq(model):

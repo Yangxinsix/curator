@@ -1,0 +1,4 @@
+teacher_model_path: null     # checkpoint, compiled model, or run directory used to generate teacher labels
+teacher_labels_path: null    # optional sqlite override; defaults to run_path/distill_dataset/{dataset,train,val,test}.sqlite
+teacher_cfg: null            # optional cfg override when loading older teacher checkpoints
+overwrite: false             # regenerate sqlite even if the target file already exists

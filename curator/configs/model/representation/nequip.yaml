@@ -14,4 +14,3 @@ radial_mlp_width: 128             # NequIP 0.17 radial MLP width
 readout_mlp_hidden_layers_depth: 0   # scalar readout MLP depth after the final scalar conv layer
 readout_mlp_hidden_layers_width: null  # defaults to final scalar feature dimension when null
 readout_mlp_nonlinearity: silu    # readout MLP nonlinearity
-use_cueq: False                   # enable charge equilibration variant

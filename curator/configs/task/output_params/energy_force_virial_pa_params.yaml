@@ -10,4 +10,5 @@ model:
       - stress
   - _target_: curator.layer.GlobalRescaleShift
 task:
-  virial_weight: 1
+  loss_weights:
+    virial: 1

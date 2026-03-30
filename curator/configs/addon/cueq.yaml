@@ -1,0 +1,14 @@
+# @package _global_
+
+defaults:
+  - _self_
+
+addon:
+  name: cueq
+  use_cueq: true
+  use_elora: false
+  wrapper_stack: cueq
+  description: Use cuequivariance kernels without enabling ELoRA.
+
+task:
+  checkpoint_mode: weights

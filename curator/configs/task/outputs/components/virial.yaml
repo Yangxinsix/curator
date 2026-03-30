@@ -2,7 +2,7 @@ _target_: curator.train.ModelOutput
 name: virial
 loss_fn:
   _target_: torch.nn.MSELoss
-loss_weight: ${task.virial_weight}
+loss_weight: ${oc.select:task.loss_weights.virial,1.0}
 metrics:
   mae:
     _target_: torchmetrics.regression.MeanAbsoluteError

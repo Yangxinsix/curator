@@ -6,7 +6,7 @@ deploy: null                            # deployment config or compiled model pa
 device: cuda                            # device for evaluation
 
 evaluator:
-  _target_: curator.simulate.evaluator.Evaluator  # evaluation driver
+  _target_: curator.evaluate.evaluator.Evaluator  # evaluation driver
   data_reader:
     _target_: curator.data.AseDataReader          # reader for ASE-formatted data
     _partial_: True                               # instantiate lazily

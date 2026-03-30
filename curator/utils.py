@@ -75,6 +75,54 @@ def _listify_config_field(config: Optional[DictConfig], field: str) -> None:
         config[field] = list(value)
 
 
+def _copy_wrapper_config(config_like: Any) -> Optional[Dict[str, Any]]:
+    if config_like is None:
+        return None
+    if isinstance(config_like, torch.nn.Module):
+        from curator.layer.wrappers import export_wrapper_config
+
+        payload = export_wrapper_config(config_like)
+    elif isinstance(config_like, DictConfig):
+        payload = OmegaConf.to_container(config_like, resolve=False)
+    elif isinstance(config_like, dict):
+        payload = dict(config_like)
+    else:
+        return None
+
+    if isinstance(payload, dict) and "addon" in payload and isinstance(payload["addon"], dict):
+        payload = dict(payload["addon"])
+
+    if not isinstance(payload, dict):
+        return None
+
+    keys = (
+        "use_cueq",
+        "use_elora",
+        "wrapper_stack",
+        "elora_rank",
+        "elora_alpha",
+        "elora_freeze_base",
+    )
+    wrapper_payload = {key: payload[key] for key in keys if key in payload}
+    if not wrapper_payload:
+        return None
+    if not (
+        wrapper_payload.get("use_cueq")
+        or wrapper_payload.get("use_elora")
+        or wrapper_payload.get("wrapper_stack")
+    ):
+        return None
+    return wrapper_payload
+
+
+def resolve_wrapper_config_payload(*candidates: Any) -> Optional[Dict[str, Any]]:
+    for candidate in candidates:
+        payload = _copy_wrapper_config(candidate)
+        if payload:
+            return payload
+    return None
+
+
 def load_trained_model(
     model_file: Union[str, Path],
     device = None,
@@ -121,12 +169,29 @@ def load_trained_model(
             raise
 
     if isinstance(obj, torch.nn.Module):
+        wrapper_cfg = resolve_wrapper_config_payload(
+            getattr(cfg, "addon", None) if cfg is not None else None,
+            obj,
+        )
+        if wrapper_cfg is not None and hasattr(obj, "representation"):
+            from curator.layer.wrappers import apply_wrappers
+
+            obj = apply_wrappers(obj, wrapper_cfg)
         obj.to(device)
         return obj
 
     if isinstance(obj, dict):
         stored_model = obj.get('model')
         if not load_weights_only and isinstance(stored_model, torch.nn.Module):
+            wrapper_cfg = resolve_wrapper_config_payload(
+                getattr(cfg, "addon", None) if cfg is not None else None,
+                obj.get("wrapper_params"),
+                stored_model,
+            )
+            if wrapper_cfg is not None and hasattr(stored_model, "representation"):
+                from curator.layer.wrappers import apply_wrappers
+
+                stored_model = apply_wrappers(stored_model, wrapper_cfg)
             stored_model.to(device)
             return stored_model
 
@@ -137,6 +202,18 @@ def load_trained_model(
         _listify_config_field(model_cfg, "input_modules")
         _listify_config_field(model_cfg, "output_modules")
         model = instantiate(model_cfg, _convert_="all")
+        wrapper_cfg = resolve_wrapper_config_payload(
+            getattr(cfg, "addon", None) if cfg is not None else None,
+            obj.get("wrapper_params"),
+            stored_model,
+            model_cfg.get("representation")
+            if isinstance(model_cfg, (DictConfig, dict)) and "representation" in model_cfg
+            else None,
+        )
+        if wrapper_cfg is not None:
+            from curator.layer.wrappers import apply_wrappers
+
+            model = apply_wrappers(model, wrapper_cfg)
 
         data_cfg = cfg.data if cfg is not None else obj.get('data_params')
         data_cfg = _copy_config(data_cfg)
@@ -943,3 +1020,198 @@ def upper_triangular_cell(atoms, verbose=False):
         if verbose:
             print("Transformed to upper triangular unit cell.", flush=True)
     return atoms
+
+
+def get_representation_config(model):
+    rep = model.representation
+    export_fn = getattr(rep, "export_init_kwargs", None)
+    if callable(export_fn):
+        try:
+            exported = export_fn()
+        except NotImplementedError:
+            exported = None
+        if isinstance(exported, abc.Mapping):
+            return dict(exported)
+    raise TypeError(
+        f"{rep.__class__.__name__} does not expose export_init_kwargs() for wrapper rebuilds."
+    )
+
+
+def get_kmax_pairs(
+    max_L: int, correlation: int, num_layers: int
+) -> List[Tuple[int, int]]:
+    if correlation == 2:
+        raise NotImplementedError("Correlation 2 not supported yet")
+    if correlation == 3:
+        kmax_pairs = [[i, max_L] for i in range(num_layers - 1)]
+        kmax_pairs = kmax_pairs + [[num_layers - 1, 0]]
+        return kmax_pairs
+    raise NotImplementedError(f"Correlation {correlation} not supported")
+
+
+def transfer_symmetric_contractions(
+    source_dict: Dict[str, torch.Tensor],
+    target_dict: Dict[str, torch.Tensor],
+    max_L: int,
+    correlation: int,
+    num_layers: int,
+):
+    kmax_pairs = get_kmax_pairs(max_L, correlation, num_layers)
+
+    for i, kmax in kmax_pairs:
+        wm = torch.concatenate(
+            [
+                source_dict[
+                    f"products.{i}.symmetric_contractions.contractions.{k}.weights{j}"
+                ]
+                for k in range(kmax + 1)
+                for j in ["_max", ".0", ".1"]
+            ],
+            dim=1,
+        )
+        target_dict[f"products.{i}.symmetric_contractions.sc.weight"] = wm
+
+
+def get_transfer_keys(num_layers: int) -> List[str]:
+    return [
+        "embeddings.chemical_embedding.linear.weight",
+        *[f"readout.readouts.{j}.linear.weight" for j in range(num_layers - 1)],
+        *[f"readout.readout_mlp.{i}.linear.weight" for i in range(2)],
+        *[f"readout.readouts.{num_layers - 1}.{i}.linear.weight" for i in range(2)],
+    ] + [
+        s
+        for j in range(num_layers)
+        for s in [
+            f"interactions.{j}.linear_up.weight",
+            *[f"interactions.{j}.conv_tp_weights.layer{i}.weight" for i in range(4)],
+            f"interactions.{j}.linear.weight",
+            f"interactions.{j}.skip_tp.weight",
+            f"products.{j}.linear.weight",
+        ]
+    ]
+
+
+def _squeeze_if_compatible(src: torch.Tensor, target_shape: torch.Size) -> torch.Tensor:
+    if src.shape != target_shape and src.dim() == len(target_shape) + 1 and src.shape[0] == 1:
+        return src.squeeze(0)
+    return src
+
+
+def _expand_if_compatible(src: torch.Tensor, target_shape: torch.Size) -> torch.Tensor:
+    if src.shape != target_shape and src.dim() + 1 == len(target_shape) and target_shape[0] == 1:
+        return src.unsqueeze(0)
+    return src
+
+
+def transfer_symmetric_contractions_back(
+    source_dict: Dict[str, torch.Tensor],
+    target_dict: Dict[str, torch.Tensor],
+    max_L: int,
+    correlation: int,
+    num_layers: int,
+):
+    kmax_pairs = get_kmax_pairs(max_L, correlation, num_layers)
+
+    for i, kmax in kmax_pairs:
+        key = f"products.{i}.symmetric_contractions.sc.weight"
+        if key not in source_dict:
+            continue
+        weight = source_dict[key]
+        offset = 0
+        for k in range(kmax + 1):
+            for suffix in ["_max", ".0", ".1"]:
+                tgt_key = f"products.{i}.symmetric_contractions.contractions.{k}.weights{suffix}"
+                if tgt_key not in target_dict:
+                    continue
+                width = target_dict[tgt_key].shape[1]
+                target_dict[tgt_key] = weight[:, offset : offset + width]
+                offset += width
+
+
+def load_e3nn_weights(source_model, target_model):
+    source_dict = source_model.representation.state_dict()
+    target_dict = target_model.representation.state_dict()
+    target_shapes = {k: v.shape for k, v in target_dict.items()}
+
+    num_layers = len(source_model.representation.interactions)
+    transfer_keys = get_transfer_keys(num_layers)
+    for key in transfer_keys:
+        target_shape = target_shapes.get(key)
+        if target_shape is None:
+            continue
+        if key in source_dict:
+            target_dict[key] = _expand_if_compatible(source_dict[key], target_shape)
+        else:
+            logging.warning("Key %s not found in source model", key)
+
+    use_cueq = any(k.endswith("symmetric_contractions.sc.weight") for k in target_shapes)
+    if use_cueq:
+        lmax = source_model.representation.lmax
+        try:
+            correlation = (
+                len(source_model.representation.products[0].symmetric_contractions.contractions[0].weights) + 1
+            )
+        except AttributeError:
+            correlation = source_model.representation.products[0].symmetric_contractions.sc.contraction_degree
+        transfer_symmetric_contractions(source_dict, target_dict, lmax, correlation, num_layers)
+
+    transferred_keys = set(transfer_keys)
+    remaining_keys = set(source_dict.keys()) & set(target_dict.keys()) - transferred_keys
+    if use_cueq:
+        remaining_keys = {k for k in remaining_keys if "symmetric_contraction" not in k}
+    for key in remaining_keys:
+        src_val = _expand_if_compatible(source_dict[key], target_shapes[key])
+        if src_val.shape == target_shapes[key]:
+            target_dict[key] = src_val
+        else:
+            logging.warning(
+                "Shape mismatch for key %s: source %s vs target %s",
+                key,
+                source_dict[key].shape,
+                target_shapes[key],
+            )
+
+    target_model.representation.load_state_dict(target_dict)
+
+
+def load_cueq_weights(source_model, target_model):
+    source_dict = source_model.representation.state_dict()
+    target_dict = target_model.representation.state_dict()
+    target_shapes = {k: v.shape for k, v in target_dict.items()}
+
+    num_layers = len(target_model.representation.interactions)
+    transfer_keys = get_transfer_keys(num_layers)
+    for key in transfer_keys:
+        target_shape = target_shapes.get(key)
+        if target_shape is None:
+            continue
+        if key in source_dict:
+            target_dict[key] = _squeeze_if_compatible(source_dict[key], target_shape)
+        else:
+            logging.warning("Key %s not found in source cueq model", key)
+
+    for key in source_dict.keys():
+        if "weight" in key and any(x in key for x in ["linear", "skip_tp"]):
+            target_shape = target_shapes.get(key)
+            if target_shape is not None:
+                target_dict[key] = _squeeze_if_compatible(source_dict[key], target_shape)
+
+    lmax = getattr(source_model.representation, "lmax", None)
+    try:
+        correlation = (
+            len(source_model.representation.products[0].symmetric_contractions.contractions[0].weights) + 1
+        )
+    except Exception:
+        correlation = source_model.representation.products[0].symmetric_contractions.sc.contraction_degree
+    if lmax is not None:
+        transfer_symmetric_contractions_back(source_dict, target_dict, lmax, correlation, num_layers)
+
+    transferred_keys = set(transfer_keys)
+    remaining_keys = set(source_dict.keys()) & set(target_dict.keys()) - transferred_keys
+    remaining_keys = {k for k in remaining_keys if "symmetric_contraction" not in k}
+    for key in remaining_keys:
+        src_val = _squeeze_if_compatible(source_dict[key], target_shapes[key])
+        if src_val.shape == target_shapes[key]:
+            target_dict[key] = src_val
+
+    target_model.representation.load_state_dict(target_dict)

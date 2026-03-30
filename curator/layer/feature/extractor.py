@@ -125,9 +125,12 @@ class FeatureExtractor(nn.Module):
             except Exception:
                 pass
         try:
-            from curator.layer._cuequivariance_wrapper import Linear as CueqLinear
+            from curator.layer.wrappers.cueq import IS_CUET_AVAILABLE, cuet
+            from curator.layer.wrappers.cueq_elora import CueqLoRALinear
 
-            types.append(CueqLinear)
+            if IS_CUET_AVAILABLE and cuet is not None:
+                types.append(cuet.Linear)
+            types.append(CueqLoRALinear)
         except Exception:
             pass
         return tuple(types)

@@ -2,6 +2,7 @@ defaults:
   - optimizer: adam                  # optimizer used for training
   - scheduler: reduce_on_plateau     # LR scheduler policy
   - outputs: energy_force            # which model outputs and losses to train
+  - optional distill: null           # optional offline teacher-label generation
 
 _target_: curator.model.LitNNP       # LightningModule wrapper around the model
 scheduler_monitor: val_total_loss    # metric monitored by the scheduler
@@ -10,8 +11,6 @@ save_entire_model: True              # save full model object (not just state di
 checkpoint_mode: weights             # checkpoint loading mode: weights | model | resume
 optimizer_groups: null               # optional per-group optimizer overrides, e.g. backbone/readout/output_modules
 
-# customize loss ratios
-energy_weight: 1                     # scale factor for energy loss
-forces_weight: 100                   # scale factor for force loss
-# stress_weight: 50                  # optional scale for stress loss
+# optional task-side loss overrides keyed by output name, e.g. {energy: 2, forces: 98}
+loss_weights: {}
 patience: 200                        # early stopping patience (epochs)

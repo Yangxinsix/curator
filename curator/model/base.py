@@ -107,21 +107,6 @@ class Representation(nn.Module):
         return readout
 
     @staticmethod
-    def _enable_cueq(use_cueq: bool):
-        """Helper to enable cuequivariance with a single warning path."""
-        if not use_cueq:
-            return
-        from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE, set_use_cueq
-        import warnings
-
-        set_use_cueq(use_cueq)
-        if use_cueq and not IS_CUET_AVAILABLE:
-            warnings.warn(
-                "Requested use_cueq=True but cuequivariance is not available; falling back to e3nn kernels.",
-                RuntimeWarning,
-            )
-
-    @staticmethod
     def _apply_cutoff_mask(data: properties.Type, cutoff: float):
         """Apply edge cutoff mask in-place. Returns original edges for optional downstream use."""
         try:
@@ -244,7 +229,7 @@ class NeuralNetworkPotential(nn.Module):
             input_modules=list(self.input_modules),
             output_modules=list(self.output_modules),
             model_outputs=list(self.model_outputs),
-            heads=getattr(self, "heads", None),
+            heads=self.heads,
         )
 
     def module_groups(self) -> "OrderedDict[str, List[nn.Module]]":

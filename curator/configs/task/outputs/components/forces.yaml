@@ -2,7 +2,7 @@ _target_: curator.train.ModelOutput
 name: forces
 loss_fn:
   _target_: torch.nn.MSELoss
-loss_weight: ${task.forces_weight}
+loss_weight: ${oc.select:task.loss_weights.forces,100.0}
 metrics:
   mae:
     _target_: torchmetrics.regression.MeanAbsoluteError
