@@ -3,6 +3,7 @@ from collections import OrderedDict
 from torch import nn
 from e3nn import o3
 from e3nn.util.jit import compile_mode
+import warnings
 
 from curator.data import properties
 from curator.layer import (
@@ -91,7 +92,6 @@ class Nequip(Representation):
         readout_mlp_nonlinearity: Optional[Union[str, Callable]] = "silu",
         convolution_kwargs: Optional[dict] = None,
         readout: Union[AtomwiseNN, Type[AtomwiseNN], partial] = AtomwiseNN,
-        use_cueq: bool = False,
         heads: Optional[list] = None,
         **kwargs,
     ) -> None:
@@ -109,8 +109,24 @@ class Nequip(Representation):
         self.readout_mlp_hidden_layers_depth = readout_mlp_hidden_layers_depth
         self.readout_mlp_hidden_layers_width = readout_mlp_hidden_layers_width
         self.readout_mlp_nonlinearity = readout_mlp_nonlinearity
-
-        self._enable_cueq(use_cueq)
+        legacy_wrapper_keys = [
+            key
+            for key in (
+                "use_cueq",
+                "use_elora",
+                "wrapper_stack",
+                "elora_rank",
+                "elora_alpha",
+                "elora_freeze_base",
+            )
+            if key in kwargs
+        ]
+        if legacy_wrapper_keys:
+            warnings.warn(
+                "Legacy representation wrapper kwargs are deprecated and ignored at model "
+                f"construction time: {legacy_wrapper_keys}. Use the top-level addon config instead.",
+                DeprecationWarning,
+            )
 
         if nonlinearity_scalars is None:
             nonlinearity_scalars = {"e": "silu", "o": "tanh"}
@@ -223,6 +239,57 @@ class Nequip(Representation):
             heads=self.heads,
             **readout_kwargs,
         )
+
+    def export_init_kwargs(self) -> Dict[str, object]:
+        mapper = getattr(self.embeddings.onehot_embedding, "type_mapper", None)
+        if mapper is not None:
+            species = list(mapper.symbol_to_type.keys())
+        else:
+            species = list(self.species or [])
+        num_elements = getattr(self.embeddings.onehot_embedding, "num_elements", len(species))
+
+        rep_config: Dict[str, object] = {
+            "cutoff": self.cutoff,
+            "num_interactions": len(self.interactions),
+            "species": species,
+            "num_elements": num_elements,
+            "hidden_irreps": self.hidden_irreps,
+            "edge_sh_irreps": self.edge_sh_irreps,
+            "node_irreps": self.node_irreps,
+            "lmax": self.lmax,
+            "parity": self.parity,
+            "num_features": self.num_features,
+            "type_embed_num_features": self.type_embed_num_features,
+            "num_basis": self.embeddings.radial_basis.basis.num_basis,
+            "power": self.embeddings.radial_basis.cutoff_fn.p,
+            "resnet": self.interactions[0].resnet,
+            "nonlinearity_type": self.nonlinearity_type,
+            "nonlinearity_scalars": self.nonlinearity_scalars,
+            "nonlinearity_gates": self.nonlinearity_gates,
+            "radial_mlp_depth": self.radial_mlp_depth,
+            "radial_mlp_width": self.radial_mlp_width,
+            "readout_mlp_hidden_layers_depth": self.readout_mlp_hidden_layers_depth,
+            "readout_mlp_hidden_layers_width": self.readout_mlp_hidden_layers_width,
+            "readout_mlp_nonlinearity": self.readout_mlp_nonlinearity,
+            "convolution_kwargs": self.convolution_kwargs,
+        }
+
+        readout = getattr(self, "readout", None)
+        domain_modules = getattr(readout, "domain_modules", None)
+        if domain_modules:
+            from curator.layer import MultiDomainAtomwiseNN
+
+            domains = getattr(readout, "domains", None) or list(domain_modules.keys())
+            heads_by_domain = {
+                str(domain): list(module.heads)
+                for domain, module in domain_modules.items()
+                if hasattr(module, "heads")
+            }
+            readout_kwargs: Dict[str, object] = {"domains": [str(domain) for domain in domains]}
+            if heads_by_domain:
+                readout_kwargs["heads_by_domain"] = heads_by_domain
+            rep_config["readout"] = partial(MultiDomainAtomwiseNN, **readout_kwargs)
+        return rep_config
 
     def forward(self, data: properties.Type) -> properties.Type:
         edge_cache = self._apply_cutoff_mask(data, self.cutoff)

@@ -1,4 +1,4 @@
-from ._cuequivariance_wrapper import Linear
+from ._ops import Linear
 from e3nn import o3
 from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode

@@ -1,0 +1,18 @@
+# @package _global_
+
+defaults:
+  - _self_
+  - override /finetune: elora    # keep base weights frozen; train LoRA group
+
+addon:
+  name: cueq_elora
+  use_cueq: true
+  use_elora: true
+  wrapper_stack: cueq+elora
+  elora_rank: 16
+  elora_alpha: 16.0
+  elora_freeze_base: true
+  description: cueq channel-wise kernels with ELoRA adapters on internal weights.
+
+task:
+  checkpoint_mode: weights

@@ -1,6 +1,7 @@
 import torch
 from torch import nn
 from curator.data import properties
+from ._ops import ScalarLinear
 
 class PainnUpdate(nn.Module):
     """Update function"""
@@ -8,13 +9,13 @@ class PainnUpdate(nn.Module):
         super().__init__()
         self.num_features = num_features
 
-        self.update_U = nn.Linear(num_features, num_features)
-        self.update_V = nn.Linear(num_features, num_features)
+        self.update_U = ScalarLinear(num_features, num_features, bias=True)
+        self.update_V = ScalarLinear(num_features, num_features, bias=True)
         
         self.update_mlp = nn.Sequential(
-            nn.Linear(num_features * 2, num_features),
+            ScalarLinear(num_features * 2, num_features, bias=True),
             nn.SiLU(),
-            nn.Linear(num_features, num_features * 3),
+            ScalarLinear(num_features, num_features * 3, bias=True),
         )
         
     def forward(

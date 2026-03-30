@@ -6,7 +6,7 @@ from e3nn import o3
 from e3nn.nn import Activation
 from curator.data.properties import activation_fn, HeadConfig, resolve_heads
 from curator.data import properties
-from ._cuequivariance_wrapper import Linear
+from ._ops import Linear, ScalarLinear
 import warnings
 try:
     from torch_scatter import scatter_add, scatter_mean
@@ -48,7 +48,7 @@ class Dense(nn.Module):
             self.activation = Activation(irreps_in=out_features, acts=[activation])
         else:
             assert isinstance(in_features, int), 'in_features must be interger for torch.nn.Linear layer!'
-            self.linear = nn.Linear(in_features, out_features, *args, **kwargs)
+            self.linear = ScalarLinear(in_features, out_features, *args, **kwargs)
             self.activation = activation or nn.Identity()
 
     def forward(self, input: torch.Tensor):

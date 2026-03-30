@@ -21,6 +21,7 @@ from curator.model.base import (
     ParameterGroup,
     collect_unique_parameters,
 )
+from curator.layer.wrappers import collect_addon_parameter_groups, export_wrapper_config
 
 class LitNNP(pl.LightningModule):
     """ Base class for neural network potentials using PyTorch Lightning."""
@@ -513,13 +514,29 @@ class LitNNP(pl.LightningModule):
     def on_save_checkpoint(self, checkpoint):
         checkpoint['data_params'] = self.config.data
         checkpoint['model_params'] = self.config.model
+        checkpoint['wrapper_params'] = export_wrapper_config(self.model)
         checkpoint['outputs'] = self.outputs
         checkpoint['optimizer'] = self.optimizer
         if self.save_entire_model:
             checkpoint['model'] = self.model
 
     def _optimizer_parameter_groups(self) -> List[ParameterGroup]:
-        groups = list(self.model.parameter_groups())
+        addon_groups = collect_addon_parameter_groups(self.model)
+        addon_param_ids = {id(param) for group in addon_groups for param in group.params}
+
+        groups: List[ParameterGroup] = []
+        for group in self.model.parameter_groups():
+            params = [param for param in group.params if id(param) not in addon_param_ids]
+            if params:
+                groups.append(
+                    ParameterGroup(
+                        name=group.name,
+                        params=params,
+                        defaults=dict(group.defaults) if group.defaults else None,
+                    )
+                )
+
+        groups.extend(addon_groups)
         seen = {id(param) for group in groups for param in group.params}
         extra_params = collect_unique_parameters([self.outputs], seen=seen)
         if extra_params:
@@ -529,11 +546,25 @@ class LitNNP(pl.LightningModule):
     def _build_optimizer_param_groups(self) -> List[Dict[str, Any]]:
         parameter_groups = self._optimizer_parameter_groups()
         available = {group.name for group in parameter_groups}
-        unknown = sorted(set(self.optimizer_groups) - available)
+        optimizer_groups = dict(self.optimizer_groups or {})
+        optimizer_groups.pop("_delete_", None)
+
+        alias_map = {
+            "readout": ("readout_domains", "readout_shared"),
+            "output_modules": ("output_domains", "output_shared"),
+        }
+        for source_name, target_names in alias_map.items():
+            if source_name not in optimizer_groups:
+                continue
+            for target_name in target_names:
+                if target_name in available and target_name not in optimizer_groups:
+                    optimizer_groups[target_name] = dict(optimizer_groups[source_name])
+
+        unknown = sorted(set(optimizer_groups) - available)
         if unknown:
-            raise KeyError(
-                f"Unknown optimizer group names: {unknown}. "
-                f"Available groups: {sorted(available)}"
+            warnings.warn(
+                "Ignoring optimizer group overrides with no matching parameters: "
+                f"{unknown}. Available groups: {sorted(available)}"
             )
 
         param_groups: List[Dict[str, Any]] = []
@@ -544,7 +575,7 @@ class LitNNP(pl.LightningModule):
             }
             if parameter_group.defaults:
                 optimizer_group.update(dict(parameter_group.defaults))
-            overrides = self.optimizer_groups.get(optimizer_group["name"])
+            overrides = optimizer_groups.get(optimizer_group["name"])
             if overrides:
                 optimizer_group.update(dict(overrides))
             param_groups.append(optimizer_group)

@@ -104,6 +104,7 @@ def train(config: DictConfig) -> None:
         find_best_model,
         normalize_config_sequences,
         prune_config_targets,
+        resolve_wrapper_config_payload,
         update_config_from_datamodule,
         log_logo,
         update_model,
@@ -173,6 +174,7 @@ def train(config: DictConfig) -> None:
 
     resume_ckpt = None
     checkpoint_outputs = None
+    checkpoint_wrapper_cfg = None
 
     if config.model_path is not None:
         config.model_path = find_best_model(config.model_path)[0]
@@ -184,9 +186,14 @@ def train(config: DictConfig) -> None:
             if isinstance(state_dict, torch.nn.Module):
                 model = state_dict
                 checkpoint_outputs = getattr(state_dict, "outputs", None)
+                checkpoint_wrapper_cfg = resolve_wrapper_config_payload(state_dict)
             else:
                 model = state_dict['model']
                 checkpoint_outputs = state_dict.get('outputs')
+                checkpoint_wrapper_cfg = resolve_wrapper_config_payload(
+                    state_dict.get("wrapper_params"),
+                    model,
+                )
             if not isinstance(model, NeuralNetworkPotential):
                 raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
         else:
@@ -201,9 +208,15 @@ def train(config: DictConfig) -> None:
                     else:
                         model = instantiate(config.model)
                     raw_state_dict = state_dict.state_dict()
+                    checkpoint_wrapper_cfg = resolve_wrapper_config_payload(state_dict)
                 else:
                     checkpoint_model = state_dict.get("model")
                     checkpoint_model_cfg = state_dict.get("model_params")
+                    checkpoint_wrapper_cfg = resolve_wrapper_config_payload(
+                        state_dict.get("wrapper_params"),
+                        checkpoint_model,
+                        checkpoint_model_cfg,
+                    )
                     if domain_mode in ("extend", "replace"):
                         if isinstance(checkpoint_model, torch.nn.Module):
                             model = checkpoint_model
@@ -238,6 +251,15 @@ def train(config: DictConfig) -> None:
                 )
     else:
         model = instantiate(config.model)
+
+    runtime_wrapper_cfg = resolve_wrapper_config_payload(
+        getattr(config, "addon", None),
+        checkpoint_wrapper_cfg,
+    )
+    if runtime_wrapper_cfg is not None:
+        from curator.layer.wrappers import apply_wrappers
+
+        model = apply_wrappers(model, runtime_wrapper_cfg)
 
     init_from = getattr(config.task, "init_new_domains_from", None)
     if domain_mode in ("extend", "replace") and new_domains is not None:
@@ -545,7 +567,7 @@ def convert_main(argv: Optional[List[str]] = None):
     elif args.e3nn_to_cueq or args.cueq_to_e3nn:
         import torch
         from curator.utils import load_models, convert_e3nn_to_cueq, convert_cueq_to_e3nn
-        from curator.layer._cuequivariance_wrapper import IS_CUET_AVAILABLE
+        from curator.layer._ops import IS_CUET_AVAILABLE
 
         if args.cueq_to_e3nn and (not torch.cuda.is_available() or not IS_CUET_AVAILABLE):
             raise RuntimeError(
