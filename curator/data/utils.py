@@ -76,8 +76,13 @@ def _read_trajectory_path(path: str, *args, **kwargs):
             return [sliced]
         return sliced
     if slice_obj is None:
-        result = read(base, ":", *args, **kwargs)
+        if args or "index" in kwargs:
+            result = read(base, *args, **kwargs)
+        else:
+            result = read(base, ":")
     else:
+        if "index" in kwargs:
+            raise TypeError("index is specified both via @slice syntax and keyword arguments")
         result = read(base, slice_obj, *args, **kwargs)
     if isinstance(result, Atoms):
         return [result]

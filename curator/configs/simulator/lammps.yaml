@@ -1,12 +1,10 @@
-_target_: curator.simulate.simulator.LammpsSimulator   # LAMMPS-based simulator
-init_traj: null                                        # initial structure/trajectory path
-start_index: -1                                        # index to resume from (-1 appends)
-out_traj: ${run_path}/MD.traj                          # path for MD trajectory output
-uncertain_traj: ${run_path}/warning_struct.traj        # path for uncertain frames
-lammps_input: in.lammps                                # LAMMPS input script filename
-masses: true                                           # include mass definitions
-units: metal                                           # LAMMPS units setting
-atom_style: atomic                                     # LAMMPS atom style
-lammps_output: dump.lammps                             # default LAMMPS dump file
-uncertain_output: null                                 # optional separate dump for uncertain frames
-specorder: null                                        # species ordering passed to LAMMPS
+defaults:
+  - engine: lammps
+  - _self_
+
+_target_: curator.simulate.core.simulator.Simulator    # generic simulator orchestrator
+init_traj: null                                        # initial structure or trajectory path
+start_index: null                                      # frame index to start from
+callbacks: []                                          # LAMMPS backend is artifact-driven, not callback-driven
+run_kwargs:
+  steps: 100                                           # number of LAMMPS steps to run
