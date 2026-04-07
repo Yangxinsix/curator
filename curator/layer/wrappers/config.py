@@ -1,88 +1,105 @@
 from __future__ import annotations
 
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass, replace
-from typing import Optional, Sequence, Union
+from dataclasses import asdict, dataclass
+from typing import Any, Mapping, Optional
 
-
-WrapperStack = Union[str, Sequence[str], None]
+from omegaconf import DictConfig, OmegaConf
 
 
 @dataclass(frozen=True)
 class WrapperConfig:
-    use_cueq: bool = False
-    use_elora: bool = False
-    wrapper_stack: Optional[str] = None
-    elora_rank: int = 16
-    elora_alpha: float = 16.0
-    elora_freeze_base: bool = True
-
-    @property
-    def resolved_stack(self) -> str:
-        parts = []
-        if self.use_cueq:
-            parts.append("cueq")
-        if self.use_elora:
-            parts.append("elora")
-        return "+".join(parts) if parts else "e3nn"
+    backend: str = "e3nn"
+    adapter: str = "none"
+    lora_rank: int = 16
+    lora_alpha: float = 16.0
+    lora_freeze_base: bool = False
 
     def to_dict(self) -> dict:
-        payload = asdict(self)
-        payload["wrapper_stack"] = self.wrapper_stack or self.resolved_stack
-        return payload
+        return asdict(self)
 
 
-def _normalize_stack(wrapper_stack: WrapperStack) -> Optional[str]:
-    if wrapper_stack is None:
-        return None
-    if isinstance(wrapper_stack, str):
-        raw = wrapper_stack
-    else:
-        raw = "+".join(str(item) for item in wrapper_stack if str(item).strip())
-    normalized = raw.strip().lower().replace(",", "+")
+_WRAPPER_FIELDS = (
+    "backend",
+    "adapter",
+    "lora_rank",
+    "lora_alpha",
+    "lora_freeze_base",
+)
+
+
+def _normalize_backend(backend: Optional[str]) -> str:
+    normalized = str(backend or "e3nn").strip().lower()
     if not normalized or normalized == "default":
-        return None
-    parts = [part.strip() for part in normalized.split("+") if part.strip()]
-    if not parts:
-        return None
-    if any(part not in {"cueq", "elora", "e3nn"} for part in parts):
+        normalized = "e3nn"
+    if normalized in {"oeq", "open_equivariance"}:
+        normalized = "oeq"
+    if normalized in {"cuequivariance", "cuequivariance_torch"}:
+        normalized = "cueq"
+    if normalized == "openequivariance":
+        normalized = "oeq"
+    if normalized not in {"e3nn", "cueq", "oeq"}:
         raise ValueError(
-            f"Unsupported wrapper_stack={wrapper_stack!r}. Expected a combination of "
-            f"'cueq' and 'elora'."
+            f"Unsupported backend={backend!r}. Expected one of "
+            f"['e3nn', 'cueq', 'cuequivariance', 'oeq', 'openequivariance']."
         )
-    if "e3nn" in parts and len(parts) > 1:
-        raise ValueError("wrapper_stack='e3nn' cannot be combined with other wrappers.")
-    if parts == ["e3nn"]:
-        return "e3nn"
-    ordered = []
-    for part in ("cueq", "elora"):
-        if part in parts:
-            ordered.append(part)
-    return "+".join(ordered) if ordered else "e3nn"
+    return normalized
+
+
+def _normalize_adapter(adapter: Optional[str]) -> str:
+    normalized = str(adapter or "none").strip().lower()
+    if not normalized or normalized == "default":
+        normalized = "none"
+    if normalized not in {"none", "lora"}:
+        raise ValueError(
+            f"Unsupported adapter={adapter!r}. Expected one of ['none', 'lora']."
+        )
+    return normalized
 
 
 def resolve_wrapper_config(
     *,
-    use_cueq: bool = False,
-    use_elora: bool = False,
-    wrapper_stack: WrapperStack = None,
-    elora_rank: int = 16,
-    elora_alpha: float = 16.0,
-    elora_freeze_base: bool = True,
+    backend: str = "e3nn",
+    adapter: str = "none",
+    lora_rank: int = 16,
+    lora_alpha: float = 16.0,
+    lora_freeze_base: bool = False,
 ) -> WrapperConfig:
-    normalized_stack = _normalize_stack(wrapper_stack)
-    if normalized_stack is not None:
-        use_cueq = "cueq" in normalized_stack
-        use_elora = "elora" in normalized_stack
-    if elora_rank <= 0:
-        use_elora = False
+    backend = _normalize_backend(backend)
+    adapter = _normalize_adapter(adapter)
+    if lora_rank <= 0:
+        adapter = "none"
     return WrapperConfig(
-        use_cueq=bool(use_cueq),
-        use_elora=bool(use_elora),
-        wrapper_stack=normalized_stack,
-        elora_rank=int(elora_rank),
-        elora_alpha=float(elora_alpha),
-        elora_freeze_base=bool(elora_freeze_base),
+        backend=backend,
+        adapter=adapter,
+        lora_rank=int(lora_rank),
+        lora_alpha=float(lora_alpha),
+        lora_freeze_base=bool(lora_freeze_base),
+    )
+
+
+def get_config_wrapper_config(config_like: DictConfig | Mapping[str, Any] | None) -> Optional[WrapperConfig]:
+    if config_like is None:
+        return None
+    if isinstance(config_like, DictConfig):
+        payload = OmegaConf.to_container(config_like, resolve=False)
+    elif isinstance(config_like, Mapping):
+        payload = dict(config_like)
+    else:
+        raise TypeError(
+            f"Expected DictConfig or mapping for wrapper config, got {type(config_like)!r}."
+        )
+    if not isinstance(payload, dict):
+        return None
+    present_fields = [field for field in _WRAPPER_FIELDS if field in payload and payload[field] is not None]
+    if not present_fields:
+        return None
+    return resolve_wrapper_config(
+        backend=payload.get("backend", "e3nn"),
+        adapter=payload.get("adapter", "none"),
+        lora_rank=payload.get("lora_rank", 16),
+        lora_alpha=payload.get("lora_alpha", 16.0),
+        lora_freeze_base=payload.get("lora_freeze_base", False),
     )
 
 
@@ -97,41 +114,20 @@ def get_wrapper_config() -> WrapperConfig:
     return _WRAPPER_CONFIG.get()
 
 
-def get_wrapper_config_dict() -> dict:
-    return get_wrapper_config().to_dict()
-
-
 def set_wrapper_config(
     *,
-    use_cueq: bool = False,
-    use_elora: bool = False,
-    wrapper_stack: WrapperStack = None,
-    elora_rank: int = 16,
-    elora_alpha: float = 16.0,
-    elora_freeze_base: bool = True,
+    backend: str = "e3nn",
+    adapter: str = "none",
+    lora_rank: int = 16,
+    lora_alpha: float = 16.0,
+    lora_freeze_base: bool = False,
 ) -> WrapperConfig:
     config = resolve_wrapper_config(
-        use_cueq=use_cueq,
-        use_elora=use_elora,
-        wrapper_stack=wrapper_stack,
-        elora_rank=elora_rank,
-        elora_alpha=elora_alpha,
-        elora_freeze_base=elora_freeze_base,
+        backend=backend,
+        adapter=adapter,
+        lora_rank=lora_rank,
+        lora_alpha=lora_alpha,
+        lora_freeze_base=lora_freeze_base,
     )
     _WRAPPER_CONFIG.set(config)
     return config
-
-
-def update_wrapper_config(**kwargs) -> WrapperConfig:
-    current = get_wrapper_config()
-    payload = current.to_dict()
-    payload.update(kwargs)
-    return set_wrapper_config(**payload)
-
-
-def clone_wrapper_config(
-    config: Optional[WrapperConfig] = None,
-    **updates,
-) -> WrapperConfig:
-    base = config or get_wrapper_config()
-    return replace(base, **updates)

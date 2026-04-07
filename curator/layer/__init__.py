@@ -17,9 +17,9 @@ from ._node_embedding import OneHotAtomEncoding
 from ._painn_message import PainnMessage
 from ._painn_update import PainnUpdate
 from ._pairwise_distance import PairwiseDistance, get_pair_distance
-from ._pair_repulsion import ZBLBasis, PairRepulsionEnergy, NequIPZBLPairEnergy
+from ._pair_repulsion import ZBLBasis, PairRepulsionEnergy
 from ._symmetric_contraction import Contraction, SymmetricContraction
-from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift, MultiDomainRescaleShift
+from ._rescale import GlobalRescaleShift, PerSpeciesRescaleShift, PerSpeciesScale, MultiDomainRescaleShift
 from ._strain import Strain
 from ._feature import (
     BaseKMEAggregator,
@@ -42,7 +42,7 @@ from ._feature import (
 from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from .cutoff import CosineCutoff, PolynomialCutoff
 from .nonlinearities import ShiftedSoftPlus
-from .wrappers import merge_model_elora
+from .wrappers import merge_model_wrappers
 from .radial_basis import (
     BesselBasis,
     SineBasis,
@@ -101,11 +101,11 @@ __all__ = [
     Strain,                   # input modules (preprocess, add strain on cell and atom positions)
     ZBLBasis,
     PairRepulsionEnergy,
-    NequIPZBLPairEnergy,
     GradientOutput,           # output modules (output forces and stress)
     EnergyHessianOutput,
     GlobalRescaleShift,            # output modules (postprocess energy)
     PerSpeciesRescaleShift,
+    PerSpeciesScale,
     MultiDomainRescaleShift,
     BaseKMEAggregator,
     FeatureExtractor,
@@ -128,5 +128,5 @@ __all__ = [
     MultiDomainAtomwiseNN,
     MultiDomainMACEAtomwiseNN,
     Dense,
-    merge_model_elora,
+    merge_model_wrappers,
 ]

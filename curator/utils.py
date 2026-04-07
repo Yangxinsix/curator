@@ -75,54 +75,6 @@ def _listify_config_field(config: Optional[DictConfig], field: str) -> None:
         config[field] = list(value)
 
 
-def _copy_wrapper_config(config_like: Any) -> Optional[Dict[str, Any]]:
-    if config_like is None:
-        return None
-    if isinstance(config_like, torch.nn.Module):
-        from curator.layer.wrappers import export_wrapper_config
-
-        payload = export_wrapper_config(config_like)
-    elif isinstance(config_like, DictConfig):
-        payload = OmegaConf.to_container(config_like, resolve=False)
-    elif isinstance(config_like, dict):
-        payload = dict(config_like)
-    else:
-        return None
-
-    if isinstance(payload, dict) and "addon" in payload and isinstance(payload["addon"], dict):
-        payload = dict(payload["addon"])
-
-    if not isinstance(payload, dict):
-        return None
-
-    keys = (
-        "use_cueq",
-        "use_elora",
-        "wrapper_stack",
-        "elora_rank",
-        "elora_alpha",
-        "elora_freeze_base",
-    )
-    wrapper_payload = {key: payload[key] for key in keys if key in payload}
-    if not wrapper_payload:
-        return None
-    if not (
-        wrapper_payload.get("use_cueq")
-        or wrapper_payload.get("use_elora")
-        or wrapper_payload.get("wrapper_stack")
-    ):
-        return None
-    return wrapper_payload
-
-
-def resolve_wrapper_config_payload(*candidates: Any) -> Optional[Dict[str, Any]]:
-    for candidate in candidates:
-        payload = _copy_wrapper_config(candidate)
-        if payload:
-            return payload
-    return None
-
-
 def load_trained_model(
     model_file: Union[str, Path],
     device = None,
@@ -169,70 +121,45 @@ def load_trained_model(
             raise
 
     if isinstance(obj, torch.nn.Module):
-        wrapper_cfg = resolve_wrapper_config_payload(
-            getattr(cfg, "addon", None) if cfg is not None else None,
-            obj,
-        )
-        if wrapper_cfg is not None and hasattr(obj, "representation"):
-            from curator.layer.wrappers import apply_wrappers
-
-            obj = apply_wrappers(obj, wrapper_cfg)
         obj.to(device)
         return obj
 
-    if isinstance(obj, dict):
-        stored_model = obj.get('model')
-        if not load_weights_only and isinstance(stored_model, torch.nn.Module):
-            wrapper_cfg = resolve_wrapper_config_payload(
-                getattr(cfg, "addon", None) if cfg is not None else None,
-                obj.get("wrapper_params"),
-                stored_model,
-            )
-            if wrapper_cfg is not None and hasattr(stored_model, "representation"):
-                from curator.layer.wrappers import apply_wrappers
+    if not isinstance(obj, dict):
+        raise TypeError(f"Unsupported checkpoint format at {model_file}.")
 
-                stored_model = apply_wrappers(stored_model, wrapper_cfg)
-            stored_model.to(device)
-            return stored_model
+    stored_model = obj.get("model")
+    if not load_weights_only and isinstance(stored_model, torch.nn.Module):
+        stored_model.to(device)
+        return stored_model
 
-        model_cfg = cfg.model if cfg is not None else obj.get('model_params')
-        model_cfg = _copy_config(model_cfg)
-        if model_cfg is None:
-            raise ValueError("Checkpoint does not contain model parameters to instantiate.")
-        _listify_config_field(model_cfg, "input_modules")
-        _listify_config_field(model_cfg, "output_modules")
-        model = instantiate(model_cfg, _convert_="all")
-        wrapper_cfg = resolve_wrapper_config_payload(
-            getattr(cfg, "addon", None) if cfg is not None else None,
-            obj.get("wrapper_params"),
-            stored_model,
-            model_cfg.get("representation")
-            if isinstance(model_cfg, (DictConfig, dict)) and "representation" in model_cfg
-            else None,
-        )
-        if wrapper_cfg is not None:
-            from curator.layer.wrappers import apply_wrappers
+    model_cfg = cfg.model if cfg is not None else obj.get("model_params") or obj.get("model_cfg")
+    model_cfg = _copy_config(model_cfg)
+    if model_cfg is None:
+        raise ValueError("Checkpoint does not contain model parameters to instantiate.")
+    _listify_config_field(model_cfg, "input_modules")
+    _listify_config_field(model_cfg, "output_modules")
+    model = instantiate(model_cfg, _convert_="all")
 
-            model = apply_wrappers(model, wrapper_cfg)
+    data_cfg = cfg.data if cfg is not None else obj.get('data_params') if isinstance(obj, dict) else None
+    data_cfg = _copy_config(data_cfg)
+    if data_cfg is not None:
+        datamodule = instantiate(data_cfg, _convert_="all")
+        if hasattr(datamodule, 'setup'):
+            datamodule.setup()
+        if hasattr(model, 'initialize_modules'):
+            model.initialize_modules(datamodule)
 
-        data_cfg = cfg.data if cfg is not None else obj.get('data_params')
-        data_cfg = _copy_config(data_cfg)
-        if data_cfg is not None:
-            datamodule = instantiate(data_cfg, _convert_="all")
-            if hasattr(datamodule, 'setup'):
-                datamodule.setup()
-            if hasattr(model, 'initialize_modules'):
-                model.initialize_modules(datamodule)
-
-        sd = obj.get('state_dict')
-        if sd is None:
-            raise ValueError("Checkpoint is missing a state_dict.")
-        stripped = {k.replace("model.", "", 1): v for k, v in sd.items()}
-        model.load_state_dict(stripped, strict=False)
-        model.to(device)
-        return model
-
-    raise TypeError(f"Unsupported checkpoint format at {model_file}.")
+    state_dict = obj.get("state_dict")
+    if state_dict is None and isinstance(stored_model, torch.nn.Module):
+        state_dict = stored_model.state_dict()
+    if state_dict is None:
+        raise ValueError("Checkpoint is missing a state_dict.")
+    model.load_state_dict(
+        {name.replace("model.", "", 1): value for name, value in state_dict.items()},
+        strict=False,
+    )
+    model.to(device)
+    return model
 
 
 def load_model(
@@ -243,7 +170,7 @@ def load_model(
     cfg: Optional[DictConfig] = None,
 ) -> torch.nn.Module:
     if isinstance(model_file, str):
-        from curator.model.adapters import is_external_model_spec, load_external_model
+        from curator.model.external import is_external_model_spec, load_external_model
 
         if is_external_model_spec(model_file):
             return load_external_model(model_file, device=device)
@@ -288,7 +215,7 @@ def load_models(
     for m in model_like:
         if isinstance(m, (str, Path)):
             if isinstance(m, str):
-                from curator.model.adapters import is_external_model_spec, load_external_model
+                from curator.model.external import is_external_model_spec, load_external_model
 
                 if is_external_model_spec(m):
                     models.append(load_external_model(m, device=device))
@@ -550,10 +477,9 @@ def update_config_from_datamodule(
     """
     Update config based on datamodule contents.
 
-    This function intentionally stays on the generic single-domain path:
-    infer species and default heads, but do not promote the model to
-    multi-domain structures here. Multi-domain fine-tune config mutation lives
-    in ``curator.finetune.multi_domain``.
+    This function intentionally stays on the generic config-update path:
+    infer species and default heads, but do not mutate the model structure here.
+    Domain-aware model preparation happens later in the training flow.
     """
     def _is_auto(value) -> bool:
         return value is None or (isinstance(value, str) and value.lower() == "auto")
@@ -648,24 +574,12 @@ def update_config_from_datamodule(
             pass
 
     # Update heads for the generic model path.
-    datapath = getattr(config.data, "datapath", None)
     data_heads = OmegaConf.select(config, "data.heads")
     if _is_auto(data_heads) or data_heads is None:
         data_heads = ["energy"]
     data_heads = _ensure_list(data_heads, default=["energy"])
-    rescale_shift_heads = OmegaConf.select(config, "data.rescale_shift_heads")
-    rescale_shift_heads = _ensure_list(rescale_shift_heads, default=[])
-
-    merged_data_heads = list(data_heads)
-    merged_rescale_heads = list(rescale_shift_heads)
-    if isinstance(datapath, (DictConfig, dict)):
-        for item in datapath.values():
-            if not isinstance(item, (DictConfig, dict)):
-                continue
-            merged_data_heads.extend(_ensure_list(item.get("heads"), default=[]))
-            merged_rescale_heads.extend(_ensure_list(item.get("rescale_shift_heads"), default=[]))
-    merged_data_heads = list(dict.fromkeys(merged_data_heads))
-    merged_rescale_heads = list(dict.fromkeys(merged_rescale_heads))
+    shared_rescale_shift_heads = OmegaConf.select(config, "data.rescale_shift_heads")
+    shared_rescale_shift_heads = _ensure_list(shared_rescale_shift_heads, default=[])
 
     readout_heads = OmegaConf.select(config, "model.representation.readout.heads")
     should_update_heads = not _readout_has_explicit_outputs(config) and (
@@ -675,11 +589,51 @@ def update_config_from_datamodule(
             and list(readout_heads) == ["energy"]
         )
     )
-    if should_update_heads:
-        _update_heads_cfg(config, "model.heads", merged_data_heads)
-        _update_heads_cfg(config, "model.representation.readout.heads", merged_data_heads)
-        rescale_heads = merged_data_heads + [key for key in merged_rescale_heads if key not in merged_data_heads]
-        _update_rescale_heads(config, rescale_heads or ["energy"])
+    domain_modules = getattr(datamodule, "domain_modules", None)
+    if domain_modules:
+        heads_by_domain: Dict[str, List] = {}
+        rescale_heads = []
+        domain_to_id = getattr(datamodule, "domain_to_id", {}) or {}
+        for domain_name, domain_dm in domain_modules.items():
+            domain_key = str(domain_to_id.get(domain_name, domain_name))
+            domain_heads = _ensure_list(getattr(domain_dm, "heads", None), default=data_heads)
+            heads_by_domain[domain_key] = list(dict.fromkeys(domain_heads))
+
+            domain_rescale = [properties.energy]
+            for key in _ensure_list(
+                getattr(domain_dm, "rescale_shift_heads", None),
+                default=shared_rescale_shift_heads,
+            ):
+                if key not in domain_rescale:
+                    domain_rescale.append(key)
+
+            for key in domain_rescale:
+                rescale_heads.append({"key": key, "domains": [domain_key]})
+
+        if should_update_heads:
+            merged_heads: List = []
+            for domain_heads in heads_by_domain.values():
+                for head in domain_heads:
+                    if head not in merged_heads:
+                        merged_heads.append(head)
+            _update_heads_cfg(config, "model.heads", merged_heads or ["energy"])
+            _update_representation_heads_by_domain(config, heads_by_domain)
+
+        _update_rescale_heads(
+            config,
+            rescale_heads or [{"key": "energy", "domains": list(heads_by_domain.keys())}],
+        )
+    else:
+        rescale_heads = [properties.energy]
+        for key in shared_rescale_shift_heads:
+            if key not in rescale_heads:
+                rescale_heads.append(key)
+
+        if should_update_heads:
+            _update_heads_cfg(config, "model.heads", data_heads)
+            _update_representation_heads(config, data_heads)
+
+        _update_rescale_heads(config, rescale_heads or [properties.energy])
 
     # If we are not using multi-domain loaders, strip dataloader_idx suffixes.
     if not hasattr(datamodule, "domain_modules"):

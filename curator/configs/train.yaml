@@ -6,14 +6,13 @@ defaults:
   - data: custom                   # dataset and dataloader settings
   - optional model/repr_params: ${model/representation}_params  # representation-specific hyperparameters (batch size, optimizer, lr, etc.)
   - optional task/output_params: ${task/outputs}_params         # task output-specific overrides
-  - optional finetune: null        # optional fine-tuning mode, e.g. `finetune=multi_domain`
-  - optional addon: null           # optional runtime wrapper/addon stack, e.g. `addon=elora`
+  - finetune: full                 # training policy: `full`, `head_only`, `lora`
   - _self_
 
 # Some parameters that are important for training
 seed: 3407                         # random seed for reproducibility
 cfg: null                          # optional path to an existing config to merge
-model_path: null                   # path to start from a pre-trained checkpoint
+model_path: null                   # path/run dir for a Curator checkpoint, or external pretrained spec like `mace:/path/model` / `nequip:/path/model`
 run_path: .                        # root directory for logs, checkpoints, and artifacts
 deploy_model: True                 # export a deployable model after training
 deploy:
@@ -29,3 +28,4 @@ deploy:
                                    #     streaming: false
 compile: False                     # torch.compile model before training if supported
 device: cuda                       # device identifier for training
+backend: null                      # optional runtime backend override, e.g. `backend=cueq` or `backend=oeq`

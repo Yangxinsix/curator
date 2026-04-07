@@ -7,7 +7,7 @@ from .common import argcomplete, prepare_cli_environment
 
 def _convert_parse_args(argv: Optional[List[str]] = None):
     parser = argparse.ArgumentParser(
-        description="Convert original MACE checkpoints to Curator format or upgrade Curator checkpoints",
+        description="Convert model checkpoints between Curator and external formats, or change Curator model structure.",
         fromfile_prefix_chars="+",
     )
     parser.add_argument("ckpt_path", metavar="INPUT_FILE", type=str, help="Path to a MACE or Curator checkpoint to convert")
@@ -18,9 +18,37 @@ def _convert_parse_args(argv: Optional[List[str]] = None):
     parser.add_argument("--cueq-to-e3nn", action="store_true", help="Convert a Curator cuequivariance model checkpoint back to e3nn backend.")
     parser.add_argument("--mace-to-curator", action="store_true", help="Convert an original MACE checkpoint to a Curator MACE checkpoint.")
     parser.add_argument("--curator-to-mace", action="store_true", help="Convert a Curator MACE checkpoint back to an original MACE checkpoint.")
+    parser.add_argument("--single-to-multi", action="store_true", help="Convert a Curator single-domain model to MultiDomainPotential.")
+    parser.add_argument(
+        "--multi-to-single",
+        action="store_true",
+        help="Convert a Curator multi-domain model to single-domain. If multiple domains are selected, keep only those domains.",
+    )
+    parser.add_argument(
+        "--domains",
+        nargs="*",
+        default=None,
+        help="Domains to keep for --multi-to-single. Accepts names or positional indices, e.g. --domains replay lifepo4 or --domains 0,1.",
+    )
     if argcomplete:
         argcomplete.autocomplete(parser)
     return parser.parse_args(argv)
+
+
+def _parse_domain_selectors(values: Optional[List[str]]):
+    if not values:
+        return None
+    selectors = []
+    for value in values:
+        for token in str(value).split(","):
+            token = token.strip()
+            if token == "":
+                continue
+            try:
+                selectors.append(int(token))
+            except ValueError:
+                selectors.append(token)
+    return selectors or None
 
 
 def convert_main(argv: Optional[List[str]] = None):
@@ -29,6 +57,8 @@ def convert_main(argv: Optional[List[str]] = None):
     from ..model.checkpoint_upgrade import upgrade_checkpoint
     from ..model.conversion import (
         convert_cueq_to_e3nn,
+        convert_curator_multi_to_single,
+        convert_curator_single_to_multi,
         convert_curator_to_mace,
         convert_e3nn_to_cueq,
         convert_mace_to_curator,
@@ -37,9 +67,49 @@ def convert_main(argv: Optional[List[str]] = None):
 
     device = args.device
     target = None
+    selected_modes = [
+        args.update,
+        args.e3nn_to_cueq,
+        args.cueq_to_e3nn,
+        args.mace_to_curator,
+        args.curator_to_mace,
+        args.single_to_multi,
+        args.multi_to_single,
+    ]
+    if sum(bool(mode) for mode in selected_modes) > 1:
+        raise ValueError("Choose only one conversion mode at a time.")
+    domain_selectors = _parse_domain_selectors(args.domains)
 
     if args.update:
         target = upgrade_checkpoint(ckpt_path=args.ckpt_path, output_path=args.output, device=device)
+    elif args.single_to_multi or args.multi_to_single:
+        import torch
+
+        ckpt_path = Path(args.ckpt_path)
+        if args.output is None:
+            if args.single_to_multi:
+                suffix = "_multi"
+            else:
+                suffix = "_domains" if domain_selectors and len(domain_selectors) > 1 else "_single"
+            output_path = ckpt_path.with_name(f"{ckpt_path.stem}{suffix}{ckpt_path.suffix}")
+        else:
+            output_path = args.output
+
+        if args.single_to_multi:
+            if domain_selectors:
+                raise ValueError("--domains is only valid with --multi-to-single.")
+            target = convert_curator_single_to_multi(
+                curator_path=ckpt_path,
+                output_path=output_path,
+                device=torch.device(device),
+            )
+        else:
+            target = convert_curator_multi_to_single(
+                curator_path=ckpt_path,
+                output_path=output_path,
+                domains=domain_selectors,
+                device=torch.device(device),
+            )
     elif args.e3nn_to_cueq or args.cueq_to_e3nn:
         import torch
 
@@ -102,4 +172,4 @@ def convert_main(argv: Optional[List[str]] = None):
         target = convert_mace_to_curator(mace_path=ckpt_path, output_path=output_path, device=torch.device(device))
 
     print(f"Converted checkpoint saved to {target}")
-    return target
+    return 0

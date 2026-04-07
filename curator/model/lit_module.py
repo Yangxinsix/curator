@@ -21,7 +21,7 @@ from curator.model.base import (
     ParameterGroup,
     collect_unique_parameters,
 )
-from curator.layer.wrappers import collect_addon_parameter_groups, export_wrapper_config
+from curator.layer.wrappers import collect_adapter_parameter_groups, get_model_wrapper_config
 
 class LitNNP(pl.LightningModule):
     """ Base class for neural network potentials using PyTorch Lightning."""
@@ -514,19 +514,19 @@ class LitNNP(pl.LightningModule):
     def on_save_checkpoint(self, checkpoint):
         checkpoint['data_params'] = self.config.data
         checkpoint['model_params'] = self.config.model
-        checkpoint['wrapper_params'] = export_wrapper_config(self.model)
+        checkpoint['wrapper_config'] = get_model_wrapper_config(self.model).to_dict()
         checkpoint['outputs'] = self.outputs
         checkpoint['optimizer'] = self.optimizer
         if self.save_entire_model:
             checkpoint['model'] = self.model
 
     def _optimizer_parameter_groups(self) -> List[ParameterGroup]:
-        addon_groups = collect_addon_parameter_groups(self.model)
-        addon_param_ids = {id(param) for group in addon_groups for param in group.params}
+        adapter_groups = collect_adapter_parameter_groups(self.model)
+        adapter_param_ids = {id(param) for group in adapter_groups for param in group.params}
 
         groups: List[ParameterGroup] = []
         for group in self.model.parameter_groups():
-            params = [param for param in group.params if id(param) not in addon_param_ids]
+            params = [param for param in group.params if id(param) not in adapter_param_ids]
             if params:
                 groups.append(
                     ParameterGroup(
@@ -536,7 +536,7 @@ class LitNNP(pl.LightningModule):
                     )
                 )
 
-        groups.extend(addon_groups)
+        groups.extend(adapter_groups)
         seen = {id(param) for group in groups for param in group.params}
         extra_params = collect_unique_parameters([self.outputs], seen=seen)
         if extra_params:
@@ -582,7 +582,25 @@ class LitNNP(pl.LightningModule):
         return param_groups
     
     def configure_optimizers(self) -> Type[torch.optim.Optimizer]:
-        optimizer = self.optimizer(params=self._build_optimizer_param_groups())
+        param_groups = self._build_optimizer_param_groups()
+        trainable_groups = []
+        frozen_groups = []
+        for group in param_groups:
+            name = str(group.get("name", "<unnamed>"))
+            lr = float(group.get("lr", 0.0) or 0.0)
+            has_trainable_param = any(getattr(param, "requires_grad", False) for param in group.get("params", []))
+            if lr > 0.0 and has_trainable_param:
+                trainable_groups.append(name)
+            else:
+                frozen_groups.append(name)
+        logger.info(
+            "Trainable groups: %s",
+            ", ".join(trainable_groups) if trainable_groups else "<none>",
+        )
+        if frozen_groups:
+            logger.info("Frozen groups: %s", ", ".join(frozen_groups))
+
+        optimizer = self.optimizer(params=param_groups)
         if self.scheduler is not None:
             scheduler = self.scheduler(optimizer=optimizer)
             lr_scheduler = {"scheduler": scheduler}

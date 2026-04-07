@@ -19,5 +19,7 @@ avg_num_neighbors: auto                               # estimate neighbor stats 
 atomic_energies: auto                                 # estimate reference energies automatically
 normalization: True                                   # enable target normalization
 atomwise_normalization: True                          # normalize atomwise properties independently
+heads: [energy]                                      # shared default main readout heads
+rescale_shift_heads: []                               # shared extra properties handled by the rescale/shift module
 transforms: []                                        # optional transforms applied to each domain dataset
 domain_weights: {}                                    # optional train-loss weights per domain, e.g. replay: 0.25

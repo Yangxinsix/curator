@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 import copy
-from typing import Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Dict, Iterable, List, Literal, Optional, Union
 
 import torch
 from torch import nn
@@ -196,7 +196,88 @@ def apply_domain_set(
     return updated
 
 
+def align_model_domains(
+    model: torch.nn.Module,
+    domains,
+    logger=None,
+):
+    target_domains = [str(domain) for domain in list(domains or [])]
+    if not target_domains:
+        return model
+
+    if not isinstance(model, MultiDomainPotential):
+        from curator.model.conversion import convert_single_to_multi_domain
+
+        model = convert_single_to_multi_domain(model)
+        if logger:
+            logger.debug("Converted single-domain model to MultiDomainPotential for domain-aware training.")
+
+    readout = getattr(getattr(model, "representation", None), "readout", None)
+    current_domain_modules = getattr(readout, "domain_modules", None)
+    current_domains = [str(domain) for domain in current_domain_modules.keys()] if current_domain_modules else []
+    if not current_domains:
+        raise TypeError("Expected MultiDomainPotential to expose readout.domain_modules.")
+
+    if len(current_domains) > len(target_domains):
+        raise ValueError(
+            f"Loaded model domains {current_domains} exceed data domains {target_domains}. "
+            "Reduce model domains before training."
+        )
+
+    if len(current_domains) == len(target_domains):
+        if current_domains != target_domains:
+            raise ValueError(
+                f"Loaded model domains {current_domains} do not match data domains {target_domains}."
+            )
+        if logger:
+            logger.debug("Model domains already match data domains=%s.", target_domains)
+        return model
+
+    if not set(current_domains).issubset(set(target_domains)):
+        raise ValueError(
+            f"Loaded model domains {current_domains} are not a subset of data domains {target_domains}."
+        )
+
+    template_domain = "0" if "0" in current_domains else current_domains[-1]
+    updated = apply_domain_set(
+        model,
+        target_domains,
+        mode="extend",
+        template_domain=template_domain,
+        init_strategy="copy",
+        logger=logger,
+    )
+    if logger:
+        logger.debug(
+            "Extended model domains from %s to %s (updated_modules=%s).",
+            current_domains,
+            target_domains,
+            updated,
+        )
+    return model
+
+
+def align_model_domains_from_datamodule(
+    model: torch.nn.Module,
+    datamodule: Any,
+    logger=None,
+):
+    domain_modules = getattr(datamodule, "domain_modules", None)
+    if not domain_modules:
+        return model
+
+    domain_to_id = getattr(datamodule, "domain_to_id", {}) or {}
+    target_domains = list(
+        dict.fromkeys(str(domain_to_id.get(name, name)) for name in domain_modules.keys())
+    )
+    if not target_domains:
+        raise ValueError("Multi-domain datamodule must expose at least one target domain.")
+    return align_model_domains(model, target_domains, logger=logger)
+
+
 __all__ = [
     "MultiDomainPotential",
+    "align_model_domains",
+    "align_model_domains_from_datamodule",
     "apply_domain_set",
 ]

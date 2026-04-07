@@ -6,11 +6,6 @@ __pycache__/
 dist/
 build/
 test/*
-!test/test_external_adapters.py
-!test/test_external_training_representations.py
-!test/test_distill_output.py
-!test/test_sqlite_distill.py
-!test/test_offline_distill_cli.py
 scripts/
 
 # model files

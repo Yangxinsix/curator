@@ -237,6 +237,7 @@ class Nequip(Representation):
             "num_interactions": len(self.interactions),
             "species": species,
             "num_elements": num_elements,
+            "heads": list(self.heads),
             "hidden_irreps": self.hidden_irreps,
             "edge_sh_irreps": self.edge_sh_irreps,
             "node_irreps": self.node_irreps,
@@ -272,6 +273,11 @@ class Nequip(Representation):
             if heads_by_domain:
                 readout_kwargs["heads_by_domain"] = heads_by_domain
             rep_config["readout"] = partial(MultiDomainAtomwiseNN, **readout_kwargs)
+        elif readout is not None and hasattr(readout, "heads"):
+            rep_config["readout"] = partial(
+                readout.__class__,
+                heads=list(readout.heads),
+            )
         return rep_config
 
     def forward(

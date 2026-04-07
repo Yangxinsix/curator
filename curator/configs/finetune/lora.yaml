@@ -1,0 +1,19 @@
+# @package _global_
+
+# LoRA fine-tuning mode:
+# - keep the base checkpoint frozen while training only LoRA parameters
+# - use the current backend with a LoRA adapter attached
+finetune: lora
+lora_rank: 16
+lora_alpha: 16.0
+lora_freeze_base: true
+
+task:
+  checkpoint_mode: weights
+  optimizer:
+    lr: 0.0
+  optimizer_groups:
+    _delete_: true
+    adapter:
+      lr: 5.0e-4
+      weight_decay: 0.0

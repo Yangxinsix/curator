@@ -157,7 +157,8 @@ data:
   atomic_energies: null
   normalization: true
   atomwise_normalization: true
-  scale_forces: true
+  rescale_shift_heads:
+  - forces
   transforms:
   - _target_: curator.data.MatScipyNeighborList
     cutoff: 12.0

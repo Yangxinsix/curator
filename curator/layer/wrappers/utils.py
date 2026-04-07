@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 import math
-from typing import Iterable, List, Sequence, Tuple
+from typing import Iterable, Iterator, Sequence, Tuple
 
 import torch
 import torch.serialization as torch_serialization
@@ -17,14 +18,10 @@ def is_elora_parameter(name: str, parameter: nn.Parameter) -> bool:
     return "lora_" in name or bool(getattr(parameter, "_is_elora_parameter", False))
 
 
-def freeze_parameters(parameters: Iterable[nn.Parameter | None]) -> None:
-    for parameter in parameters:
+def freeze_module_parameters(module: nn.Module, *, recurse: bool = True) -> None:
+    for parameter in module.parameters(recurse=recurse):
         if parameter is not None:
             parameter.requires_grad_(False)
-
-
-def freeze_module_parameters(module: nn.Module, *, recurse: bool = True) -> None:
-    freeze_parameters(module.parameters(recurse=recurse))
 
 
 def ensure_torch_serialization_compat() -> None:
@@ -32,6 +29,44 @@ def ensure_torch_serialization_compat() -> None:
         torch_serialization.add_safe_globals([slice])
     except Exception:
         pass
+
+
+@contextmanager
+def temporary_default_dtype(dtype: torch.dtype | None) -> Iterator[None]:
+    if dtype is None:
+        yield
+        return
+    previous_dtype = torch.get_default_dtype()
+    if dtype == previous_dtype:
+        yield
+        return
+    try:
+        torch.set_default_dtype(dtype)
+    except TypeError:
+        yield
+        return
+    try:
+        yield
+    finally:
+        torch.set_default_dtype(previous_dtype)
+
+
+def infer_module_device_dtype(module: nn.Module) -> tuple[torch.device, torch.dtype | None]:
+    device = torch.device("cpu")
+    dtype = None
+    for parameter in module.parameters():
+        device = parameter.device
+        if parameter.is_floating_point() and dtype is None:
+            dtype = parameter.dtype
+        if dtype is not None:
+            break
+    if dtype is None:
+        for buffer in module.buffers():
+            device = buffer.device
+            if buffer.is_floating_point():
+                dtype = buffer.dtype
+                break
+    return device, dtype
 
 
 def clamp_rank(rows: int, cols: int, rank: int) -> int:
@@ -132,61 +167,3 @@ class SingleWeightLoRAModuleMixin:
         target.data = target.data + self.adapter.delta().detach()
         self._merged = True
         return True
-
-
-class PathLowRankAdapter(nn.Module):
-    def __init__(
-        self,
-        path_shapes: Iterable[Sequence[int]],
-        *,
-        rank: int,
-        alpha: float,
-        flatten_dims: int,
-    ) -> None:
-        super().__init__()
-        self.flatten_dims = int(flatten_dims)
-        self.adapters = nn.ModuleList()
-        for shape in path_shapes:
-            dims = tuple(int(v) for v in shape)
-            if len(dims) != self.flatten_dims + 1:
-                raise ValueError(
-                    f"Expected path shape of length {self.flatten_dims + 1}, got {dims}"
-                )
-            rows = int(math.prod(dims[: self.flatten_dims]))
-            cols = int(dims[self.flatten_dims])
-            self.adapters.append(
-                LowRankTensorAdapter(
-                    (rows, cols),
-                    rank=rank,
-                    alpha=alpha,
-                )
-            )
-
-    def delta(self) -> torch.Tensor:
-        if len(self.adapters) == 0:
-            return torch.zeros(0)
-        return torch.cat([adapter.delta().reshape(-1) for adapter in self.adapters], dim=-1)
-
-def collect_named_parameters(
-    module: nn.Module,
-    *,
-    include=None,
-    exclude=None,
-    seen: set[int] | None = None,
-) -> List[nn.Parameter]:
-    if seen is None:
-        seen = set()
-    params: List[nn.Parameter] = []
-    for name, param in module.named_parameters():
-        if not isinstance(param, nn.Parameter):
-            continue
-        if include is not None and not include(name, param):
-            continue
-        if exclude is not None and exclude(name, param):
-            continue
-        param_id = id(param)
-        if param_id in seen:
-            continue
-        seen.add(param_id)
-        params.append(param)
-    return params

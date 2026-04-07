@@ -82,6 +82,7 @@ class CuetSymmetricContraction(torch.nn.Module):
         super().__init__()
         if not IS_CUET_AVAILABLE:
             raise RuntimeError("cuequivariance is not available.")
+        kwargs = _apply_dtype_defaults(kwargs)
         self.sc = cuet.SymmetricContraction(
             cue.Irreps(CUEQ_GROUP, irreps_in),
             cue.Irreps(CUEQ_GROUP, irreps_out),
@@ -91,8 +92,6 @@ class CuetSymmetricContraction(torch.nn.Module):
             contraction_degree=correlation,
             num_elements=num_elements,
             original_mace=True,
-            dtype=torch.get_default_dtype(),
-            math_dtype=torch.get_default_dtype(),
             *args,
             **kwargs,
         )
@@ -144,9 +143,21 @@ def _consume_irreps_args(args, kwargs, *names):
     return values, tuple(args), kwargs
 
 
+def _apply_dtype_defaults(kwargs):
+    resolved = dict(kwargs)
+    dtype = resolved.get("dtype")
+    if dtype is None:
+        dtype = torch.get_default_dtype()
+        resolved["dtype"] = dtype
+    if resolved.get("math_dtype") is None:
+        resolved["math_dtype"] = dtype
+    return resolved
+
+
 def make_linear(*args, **kwargs):
     if not IS_CUET_AVAILABLE:
         raise RuntimeError("cuequivariance is not available.")
+    kwargs = _apply_dtype_defaults(kwargs)
     (irreps_in, irreps_out), rest, kwargs = _consume_irreps_args(
         args,
         kwargs,
@@ -165,6 +176,7 @@ def make_linear(*args, **kwargs):
 def make_tensor_product(*args, **kwargs):
     if not IS_CUET_AVAILABLE:
         raise RuntimeError("cuequivariance is not available.")
+    kwargs = _apply_dtype_defaults(kwargs)
     (irreps_in1, irreps_in2, irreps_out), rest, kwargs = _consume_irreps_args(
         args,
         kwargs,
@@ -172,12 +184,22 @@ def make_tensor_product(*args, **kwargs):
         "irreps_in2",
         "irreps_out",
     )
+    if rest:
+        # e3nn TensorProduct passes the instruction list positionally; cueq's
+        # ChannelWiseTensorProduct infers the descriptor from input irreps and
+        # a filtered set of output irreps instead.
+        rest = rest[1:]
+    if rest:
+        raise TypeError(
+            "cueq tensor product wrapper received unsupported extra positional arguments "
+            f"after dropping e3nn instructions: {rest!r}"
+        )
     kwargs.pop("instructions", None)
+    filter_irreps_out = [mul_ir.ir for mul_ir in cue.Irreps(CUEQ_GROUP, irreps_out)]
     return cuet.ChannelWiseTensorProduct(
         cue.Irreps(CUEQ_GROUP, irreps_in1),
         cue.Irreps(CUEQ_GROUP, irreps_in2),
-        cue.Irreps(CUEQ_GROUP, irreps_out),
-        *rest,
+        filter_irreps_out,
         layout=CUEQ_LAYOUT,
         **kwargs,
     )
@@ -186,6 +208,7 @@ def make_tensor_product(*args, **kwargs):
 def make_fully_connected_tensor_product(*args, **kwargs):
     if not IS_CUET_AVAILABLE:
         raise RuntimeError("cuequivariance is not available.")
+    kwargs = _apply_dtype_defaults(kwargs)
     (irreps_in1, irreps_in2, irreps_out), rest, kwargs = _consume_irreps_args(
         args,
         kwargs,

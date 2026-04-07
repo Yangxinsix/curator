@@ -1,13 +1,236 @@
 from __future__ import annotations
 
+import math
+from dataclasses import dataclass
+from typing import Iterable, Optional
+
 import torch
+from cuequivariance.group_theory.descriptors.irreps_tp import (
+    channelwise_tensor_product as cue_channelwise_tensor_product,
+    fully_connected_tensor_product as cue_fully_connected_tensor_product,
+    linear as cue_linear_descriptor,
+)
 from torch import nn
 
-from .cueq import CuetSymmetricContraction, cuet
-from .utils import SingleWeightLoRAModuleMixin, freeze_module_parameters
+from e3nn import o3
+
+from .cueq import (
+    CuetSymmetricContraction,
+    _apply_dtype_defaults,
+    cue,
+    cuet,
+    make_tensor_product as make_cueq_tensor_product,
+)
+from .utils import freeze_module_parameters, make_lora_matrix_pair
 
 
-class _BaseCueqELoRAWrapper(SingleWeightLoRAModuleMixin, nn.Module):
+@dataclass(frozen=True)
+class _CueqPathSpec:
+    key: tuple[int, ...]
+    path_shape: tuple[int, ...]
+    weight_slice: slice
+    left_dim: int
+    right_dim: int
+    init_scale: float
+
+
+def _path_dims(path_shape: Iterable[int]) -> tuple[int, int]:
+    dims = tuple(int(v) for v in path_shape)
+    if len(dims) == 0:
+        return (1, 1)
+    if len(dims) == 1:
+        return (int(dims[0]), 1)
+    return (int(math.prod(dims[:-1])), int(dims[-1]))
+
+
+def _make_path_spec(key: tuple[int, ...], path_shape: Iterable[int], weight_slice: slice) -> _CueqPathSpec:
+    shape = tuple(int(v) for v in path_shape)
+    left_dim, right_dim = _path_dims(shape)
+    return _CueqPathSpec(
+        key=tuple(int(v) for v in key),
+        path_shape=shape,
+        weight_slice=weight_slice,
+        left_dim=left_dim,
+        right_dim=right_dim,
+        init_scale=1.0 / math.sqrt(max(1, left_dim)),
+    )
+
+
+def _make_linear_reference_specs(irreps_in, irreps_out) -> list[tuple[tuple[int, ...], tuple[int, ...]]]:
+    reference = o3.Linear(
+        str(irreps_in),
+        str(irreps_out),
+        internal_weights=True,
+        shared_weights=True,
+    )
+    return [
+        ((int(ins.i_in), int(ins.i_out)), tuple(int(v) for v in ins.path_shape))
+        for ins in reference.instructions
+        if int(ins.i_in) != -1
+    ]
+
+
+def _make_fctp_reference_specs(irreps_in1, irreps_in2, irreps_out) -> list[tuple[tuple[int, ...], tuple[int, ...]]]:
+    reference = o3.FullyConnectedTensorProduct(
+        str(irreps_in1),
+        str(irreps_in2),
+        str(irreps_out),
+        internal_weights=True,
+        shared_weights=True,
+    )
+    return [
+        (
+            (int(ins.i_in1), int(ins.i_in2), int(ins.i_out)),
+            tuple(int(v) for v in ins.path_shape),
+        )
+        for ins in reference.instructions
+        if bool(ins.has_weight)
+    ]
+
+
+def _make_channelwise_reference_specs(
+    reference_instructions,
+) -> list[tuple[tuple[int, ...], tuple[int, ...]]]:
+    if reference_instructions is None:
+        return []
+    return [
+        (
+            (int(ins.i_in1), int(ins.i_in2), int(ins.i_out)),
+            tuple(int(v) for v in ins.path_shape),
+        )
+        for ins in reference_instructions
+        if bool(getattr(ins, "has_weight", True))
+    ]
+
+
+def _descriptor_specs_from_linear(irreps_in, irreps_out) -> list[_CueqPathSpec]:
+    descriptor = cue_linear_descriptor(irreps_in, irreps_out).polynomial.operations[0][1]
+    specs = []
+    for path_i, path in enumerate(descriptor.paths):
+        specs.append(
+            _make_path_spec(
+                (int(path.indices[1]), int(path.indices[2])),
+                descriptor.get_segment_shape(0, path_i),
+                descriptor.segment_slice(0, path_i),
+            )
+        )
+    return specs
+
+
+def _descriptor_specs_from_fctp(irreps_in1, irreps_in2, irreps_out) -> list[_CueqPathSpec]:
+    descriptor = cue_fully_connected_tensor_product(
+        irreps_in1,
+        irreps_in2,
+        irreps_out,
+    ).polynomial.operations[0][1]
+    specs = []
+    for path_i, path in enumerate(descriptor.paths):
+        specs.append(
+            _make_path_spec(
+                (int(path.indices[1]), int(path.indices[2]), int(path.indices[3])),
+                descriptor.get_segment_shape(0, path_i),
+                descriptor.segment_slice(0, path_i),
+            )
+        )
+    return specs
+
+
+def _descriptor_specs_from_channelwise(irreps_in1, irreps_in2, filter_irreps_out) -> list[_CueqPathSpec]:
+    descriptor = cue_channelwise_tensor_product(
+        irreps_in1,
+        irreps_in2,
+        filter_irreps_out,
+    ).polynomial.operations[0][1]
+    specs = []
+    for path_i, path in enumerate(descriptor.paths):
+        specs.append(
+            _make_path_spec(
+                (int(path.indices[1]), int(path.indices[2]), int(path.indices[3])),
+                descriptor.get_segment_shape(0, path_i),
+                descriptor.segment_slice(0, path_i),
+            )
+        )
+    return specs
+
+
+def _reorder_specs(
+    descriptor_specs: list[_CueqPathSpec],
+    reference_specs: list[tuple[tuple[int, ...], tuple[int, ...]]],
+) -> list[_CueqPathSpec]:
+    if not reference_specs:
+        return descriptor_specs
+    descriptor_by_key = {spec.key: spec for spec in descriptor_specs}
+    ordered = []
+    for key, path_shape in reference_specs:
+        spec = descriptor_by_key.get(tuple(int(v) for v in key))
+        if spec is None:
+            raise KeyError(f"Could not find cueq descriptor path for instruction {key!r}.")
+        if tuple(spec.path_shape) != tuple(int(v) for v in path_shape):
+            raise ValueError(
+                f"Path shape mismatch for instruction {key!r}: "
+                f"cueq={spec.path_shape!r} vs reference={tuple(path_shape)!r}."
+            )
+        ordered.append(spec)
+    return ordered
+
+
+class _CueqPathwiseELoRAModuleMixin:
+    lora_rank: int
+    lora_alpha: float
+    lora_scale: float
+    _merged: bool
+    _path_specs: list[_CueqPathSpec]
+
+    def _init_pathwise_elora(
+        self,
+        weight_shape: tuple[int, ...] | None,
+        path_specs: list[_CueqPathSpec],
+        *,
+        rank: int,
+        alpha: float,
+    ) -> None:
+        self.lora_rank = int(rank)
+        self.lora_alpha = float(alpha)
+        self.lora_scale = self.lora_alpha / float(max(1, self.lora_rank))
+        self._merged = False
+        self._path_specs = list(path_specs)
+        self.lora_A = nn.ParameterList()
+        self.lora_B = nn.ParameterList()
+        if weight_shape is None or self.lora_rank <= 0:
+            return
+        prefix = tuple(int(v) for v in weight_shape[:-1])
+        for spec in self._path_specs:
+            lora_a, lora_b = make_lora_matrix_pair(
+                spec.left_dim,
+                spec.right_dim,
+                rank=self.lora_rank,
+                shape_prefix=prefix,
+                init_scale=spec.init_scale,
+            )
+            self.lora_A.append(lora_a)
+            self.lora_B.append(lora_b)
+
+    def _has_unmerged_elora(self) -> bool:
+        return not self._merged and len(self.lora_A) > 0
+
+    def _apply_pathwise_elora(self, weight: torch.Tensor) -> torch.Tensor:
+        if not self._has_unmerged_elora():
+            return weight
+        delta = torch.zeros_like(weight)
+        prefix = tuple(int(v) for v in weight.shape[:-1])
+        for spec, lora_a, lora_b in zip(self._path_specs, self.lora_A, self.lora_B):
+            update = torch.matmul(lora_a, lora_b).reshape(*prefix, *spec.path_shape)
+            delta[..., spec.weight_slice] = update.flatten(start_dim=-len(spec.path_shape))
+        return weight + self.lora_scale * delta
+
+    def _merge_pathwise_elora(self, target: nn.Parameter) -> None:
+        if not self._has_unmerged_elora():
+            return
+        target.data = self._apply_pathwise_elora(target.data)
+        self._merged = True
+
+
+class _BaseCueqELoRAWrapper(_CueqPathwiseELoRAModuleMixin, nn.Module):
     def __getattr__(self, name):
         try:
             return super().__getattr__(name)
@@ -16,11 +239,12 @@ class _BaseCueqELoRAWrapper(SingleWeightLoRAModuleMixin, nn.Module):
             return getattr(base, name)
 
     def merge_elora(self) -> None:
-        self._merge_single_weight_elora(self.base.weight)
+        self._merge_pathwise_elora(self.base.weight)
 
     def _init_base_wrapper(
         self,
         base: nn.Module,
+        path_specs: list[_CueqPathSpec],
         *,
         rank: int,
         alpha: float,
@@ -30,7 +254,7 @@ class _BaseCueqELoRAWrapper(SingleWeightLoRAModuleMixin, nn.Module):
         shape = None
         if self.base.internal_weights and self.base.weight_numel > 0:
             shape = tuple(int(v) for v in self.base.weight.shape)
-        self._init_single_weight_elora(shape, rank=rank, alpha=alpha)
+        self._init_pathwise_elora(shape, path_specs, rank=rank, alpha=alpha)
         if freeze_base:
             freeze_module_parameters(self.base)
 
@@ -45,8 +269,15 @@ class CueqLoRALinear(_BaseCueqELoRAWrapper):
         **kwargs,
     ) -> None:
         super().__init__()
+        kwargs = _apply_dtype_defaults(kwargs)
+        base = cuet.Linear(*args, **kwargs)
+        path_specs = _reorder_specs(
+            _descriptor_specs_from_linear(base.irreps_in, base.irreps_out),
+            _make_linear_reference_specs(base.irreps_in, base.irreps_out),
+        )
         self._init_base_wrapper(
-            cuet.Linear(*args, **kwargs),
+            base,
+            path_specs,
             rank=rank,
             alpha=alpha,
             freeze_base=elora_freeze_base,
@@ -61,7 +292,7 @@ class CueqLoRALinear(_BaseCueqELoRAWrapper):
         if self._has_unmerged_elora() and self.base.internal_weights:
             if weight is not None:
                 raise ValueError("Internal weights are used, weight should be None")
-            effective_weight = self._apply_single_weight_elora(self.base.weight)
+            effective_weight = self._apply_pathwise_elora(self.base.weight)
             input_indices = {}
             if self.base.weight_classes > 1:
                 if weight_indices is None:
@@ -72,32 +303,10 @@ class CueqLoRALinear(_BaseCueqELoRAWrapper):
                 input_indices=input_indices,
             )
             return self.base.transpose_out(output[0])
-        if weight is None and self._has_unmerged_elora():
-            weight = self._apply_single_weight_elora(self.base.weight)
         return self.base(x, weight=weight, weight_indices=weight_indices)
 
 
 class CueqLoRATensorProduct(_BaseCueqELoRAWrapper):
-    base_ctor = None
-
-    def __init__(
-        self,
-        *args,
-        rank: int = 16,
-        alpha: float = 16.0,
-        elora_freeze_base: bool = True,
-        **kwargs,
-    ) -> None:
-        super().__init__()
-        if self.base_ctor is None:
-            raise TypeError(f"{self.__class__.__name__} must define base_ctor")
-        self._init_base_wrapper(
-            self.base_ctor(*args, **kwargs),
-            rank=rank,
-            alpha=alpha,
-            freeze_base=elora_freeze_base,
-        )
-
     def _forward_with_internal_weight(
         self,
         *inputs,
@@ -137,26 +346,67 @@ class CueqLoRATensorProduct(_BaseCueqELoRAWrapper):
         if self._has_unmerged_elora() and getattr(self.base, "weight", None) is not None:
             if weight is not None:
                 raise ValueError("Internal weights are used, weight should be None")
-            effective_weight = self._apply_single_weight_elora(self.base.weight)
+            effective_weight = self._apply_pathwise_elora(self.base.weight)
             return self._forward_with_internal_weight(
                 *inputs,
                 effective_weight=effective_weight,
                 **kwargs,
             )
-        if weight is None and self._has_unmerged_elora():
-            weight = self._apply_single_weight_elora(self.base.weight)
         return self.base(*inputs, weight=weight, **kwargs)
 
 
 class CueqLoRAFullyConnectedTensorProduct(CueqLoRATensorProduct):
-    base_ctor = cuet.FullyConnectedTensorProduct
+    def __init__(
+        self,
+        *args,
+        rank: int = 16,
+        alpha: float = 16.0,
+        elora_freeze_base: bool = True,
+        **kwargs,
+    ) -> None:
+        super().__init__()
+        kwargs = _apply_dtype_defaults(kwargs)
+        base = cuet.FullyConnectedTensorProduct(*args, **kwargs)
+        path_specs = _reorder_specs(
+            _descriptor_specs_from_fctp(base.irreps_in1, base.irreps_in2, base.irreps_out),
+            _make_fctp_reference_specs(base.irreps_in1, base.irreps_in2, base.irreps_out),
+        )
+        self._init_base_wrapper(
+            base,
+            path_specs,
+            rank=rank,
+            alpha=alpha,
+            freeze_base=elora_freeze_base,
+        )
 
 
 class CueqLoRAChannelWiseTensorProduct(CueqLoRATensorProduct):
-    base_ctor = cuet.ChannelWiseTensorProduct
+    def __init__(
+        self,
+        *args,
+        rank: int = 16,
+        alpha: float = 16.0,
+        elora_freeze_base: bool = True,
+        reference_instructions=None,
+        **kwargs,
+    ) -> None:
+        super().__init__()
+        base = make_cueq_tensor_product(*args, **kwargs)
+        filter_irreps_out = [mul_ir.ir for mul_ir in base.irreps_out]
+        path_specs = _reorder_specs(
+            _descriptor_specs_from_channelwise(base.irreps_in1, base.irreps_in2, filter_irreps_out),
+            _make_channelwise_reference_specs(reference_instructions),
+        )
+        self._init_base_wrapper(
+            base,
+            path_specs,
+            rank=rank,
+            alpha=alpha,
+            freeze_base=elora_freeze_base,
+        )
 
 
-class CueqLoRASymmetricContraction(SingleWeightLoRAModuleMixin, CuetSymmetricContraction):
+class CueqLoRASymmetricContraction(_CueqPathwiseELoRAModuleMixin, CuetSymmetricContraction):
     def __init__(
         self,
         *args,
@@ -166,8 +416,17 @@ class CueqLoRASymmetricContraction(SingleWeightLoRAModuleMixin, CuetSymmetricCon
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self._init_single_weight_elora(
+        path_specs = [
+            _make_path_spec(
+                (path_i,),
+                self.sc.get_segment_shape(0, path_i),
+                self.sc.segment_slice(0, path_i),
+            )
+            for path_i in range(self.sc.num_paths)
+        ]
+        self._init_pathwise_elora(
             tuple(int(v) for v in self.sc.weight.shape),
+            path_specs,
             rank=rank,
             alpha=alpha,
         )
@@ -175,8 +434,8 @@ class CueqLoRASymmetricContraction(SingleWeightLoRAModuleMixin, CuetSymmetricCon
             freeze_module_parameters(self.sc)
 
     def forward(self, x: torch.Tensor, attrs: torch.Tensor) -> torch.Tensor:
-        weight = self._apply_single_weight_elora(self.sc.weight)
+        weight = self._apply_pathwise_elora(self.sc.weight)
         return self.forward_with_weight(x, attrs, weight)
 
     def merge_elora(self) -> None:
-        self._merge_single_weight_elora(self.sc.weight)
+        self._merge_pathwise_elora(self.sc.weight)

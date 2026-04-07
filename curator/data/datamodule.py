@@ -30,6 +30,7 @@ class DataContext:
     species: List[str] = field(default_factory=list)
     avg_num_neighbors: Optional[float] = None
     head_scale_shift: Dict[str, Dict[str, float]] = field(default_factory=dict)  # {head: {"mean": m, "std": s}}
+    head_species_scale: Dict[str, Dict[int, float]] = field(default_factory=dict)  # {head: {Z: scale}}
     head_species_shift: Dict[str, Dict[int, float]] = field(default_factory=dict)  # {head: {Z: shift}}
 
 class _DomainTaggedDataset(Dataset):
@@ -85,7 +86,6 @@ class AtomsDataModule(pl.LightningDataModule):
         atomwise_normalization: bool = True,
         scale_by: Union[float, List[float], None] = None,
         shift_by: Union[float, List[float], None] = None,
-        scale_forces: bool = False,
         default_dtype: torch.dtype = torch.get_default_dtype(),
         head_reference_by_species: Optional[Dict[str, Dict[Union[int, str], float]]] = None,
         heads: Optional[List] = None,
@@ -156,7 +156,6 @@ class AtomsDataModule(pl.LightningDataModule):
         self.atomic_energies = atomic_energies
         self.mean = shift_by
         self.std = scale_by
-        self.scale_forces = scale_forces
         self.head_reference_by_species = head_reference_by_species or {}
         self._scale_shift_cache: Dict[str, Tuple[float, float]] = {}
         self._species_logged = False
@@ -495,9 +494,6 @@ class AtomsDataModule(pl.LightningDataModule):
         vals = torch.cat(values) if values[0].numel() > 1 else torch.stack(values).reshape(-1)
         mean = torch.mean(vals).item()
         std = torch.std(vals).item()
-        if property_key == properties.energy and self.scale_forces:
-            std = self._get_rms(property_key=properties.forces)
-            logger.debug(f"Energy scale will use forces RMS: {std:.3f}.")
 
         self._scale_shift_cache[property_key] = (mean, std if std != 0.0 else 1.0)
         msg = (
@@ -543,6 +539,14 @@ class AtomsDataModule(pl.LightningDataModule):
             atomwise_norm = h.atomwise_normalization
 
             # determine per-species shift request
+            per_species_scale_cfg = h.per_species_scale
+            per_species_scale_vals = None
+            if isinstance(per_species_scale_cfg, dict):
+                per_species_scale_vals = {
+                    atomic_numbers[k] if isinstance(k, str) else k: v
+                    for k, v in per_species_scale_cfg.items()
+                }
+
             per_species_cfg = h.per_species_shift
             is_atomwise = h.is_atomwise
             per_species_vals = None
@@ -596,6 +600,8 @@ class AtomsDataModule(pl.LightningDataModule):
 
             if per_species_vals is not None:
                 ctx.head_species_shift[key] = per_species_vals
+            if per_species_scale_vals is not None:
+                ctx.head_species_scale[key] = per_species_scale_vals
         return ctx
     
     def __repr__(self):
@@ -613,23 +619,40 @@ class AtomsDataModule(pl.LightningDataModule):
         heads = list(self.heads) if self.heads is not None else ["energy"]
         if isinstance(heads, str):
             heads = [heads]
-        if self.rescale_shift_heads:
-            for h in self.rescale_shift_heads:
-                if h not in heads:
-                    heads.append(h)
+
+        rescale_heads = [properties.energy]
+        for h in self.rescale_shift_heads or []:
+            if h not in rescale_heads:
+                rescale_heads.append(h)
+
+        display_heads = list(heads)
+        for h in rescale_heads:
+            if h not in display_heads:
+                display_heads.append(h)
 
         ctx = None
         try:
-            resolved = resolve_heads(heads)
+            resolved = resolve_heads(rescale_heads)
             ctx = self.build_context(resolved)
         except Exception:
             ctx = None
 
+        rescale_config = {}
+        try:
+            rescale_config = {h.key: h for h in resolve_heads(rescale_heads)}
+        except Exception:
+            rescale_config = {}
+
         head_parts = []
-        for h in resolve_heads(heads):
+        for h in resolve_heads(display_heads):
+            rescale_head = rescale_config.get(h.key)
+            if rescale_head is None:
+                head_parts.append(str(h.key))
+                continue
+
             stats = ctx.head_scale_shift.get(h.key, {}) if ctx is not None else {}
-            shift = stats.get("mean")
-            scale = stats.get("std")
+            scale = stats.get("std") if normalize_head_flag(rescale_head.scale_by) is not None else None
+            shift = stats.get("mean") if normalize_head_flag(rescale_head.shift_by) is not None else None
             shift_str = f"{shift:.3f}" if shift is not None else "None"
             scale_str = f"{scale:.3f}" if scale is not None else "None"
             head_parts.append(f"{h.key}(shift={shift_str},scale={scale_str})")

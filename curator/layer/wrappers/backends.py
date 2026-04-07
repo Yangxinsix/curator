@@ -13,12 +13,23 @@ from .cueq_elora import (
     CueqLoRAChannelWiseTensorProduct,
     CueqLoRAFullyConnectedTensorProduct,
     CueqLoRALinear,
-    CueqLoRASymmetricContraction,
 )
 from .elora import (
     ELoRAFullyConnectedTensorProduct,
     ELoRALinear,
     ELoRATensorProduct,
+)
+from .oeq import (
+    OeqFullyConnectedTensorProduct,
+    OeqLinear,
+    OeqSymmetricContraction,
+    OeqTensorProduct,
+    ensure_oeq_runtime_available,
+)
+from .oeq_elora import (
+    OeqLoRAFullyConnectedTensorProduct,
+    OeqLoRALinear,
+    OeqLoRATensorProduct,
 )
 from .mlp import (
     build_convnet_radial_mlp as build_scalar_convnet_radial_mlp,
@@ -73,19 +84,35 @@ class CueqBackend(E3NNBackend):
         return make_cueq_symmetric_contraction(*args, **kwargs)
 
 
-class _ConfiguredELoRABackendMixin:
+class OeqBackend(E3NNBackend):
+    name = "oeq"
+
+    def make_linear(self, *args, **kwargs):
+        return OeqLinear(*args, **kwargs)
+
+    def make_tensor_product(self, *args, **kwargs):
+        return OeqTensorProduct(*args, **kwargs)
+
+    def make_fully_connected_tensor_product(self, *args, **kwargs):
+        return OeqFullyConnectedTensorProduct(*args, **kwargs)
+
+    def make_symmetric_contraction(self, *args, **kwargs):
+        return OeqSymmetricContraction(*args, **kwargs)
+
+
+class _ConfiguredLoRABackendMixin:
     def __init__(self, *, rank: int, alpha: float, freeze_base: bool = True) -> None:
-        self.elora_rank = int(rank)
-        self.elora_alpha = float(alpha)
-        self.elora_freeze_base = bool(freeze_base)
+        self.lora_rank = int(rank)
+        self.lora_alpha = float(alpha)
+        self.lora_freeze_base = bool(freeze_base)
 
     def make_fully_connected_net(self, *args, **kwargs):
         return build_scalar_fully_connected_net(
             *args,
             use_elora=True,
-            rank=self.elora_rank,
-            alpha=self.elora_alpha,
-            elora_freeze_base=self.elora_freeze_base,
+            rank=self.lora_rank,
+            alpha=self.lora_alpha,
+            elora_freeze_base=self.lora_freeze_base,
             **kwargs,
         )
 
@@ -93,9 +120,9 @@ class _ConfiguredELoRABackendMixin:
         return build_scalar_convnet_radial_mlp(
             *args,
             use_elora=True,
-            rank=self.elora_rank,
-            alpha=self.elora_alpha,
-            elora_freeze_base=self.elora_freeze_base,
+            rank=self.lora_rank,
+            alpha=self.lora_alpha,
+            elora_freeze_base=self.lora_freeze_base,
             **kwargs,
         )
 
@@ -103,22 +130,22 @@ class _ConfiguredELoRABackendMixin:
         return build_scalar_linear(
             *args,
             use_elora=True,
-            rank=self.elora_rank,
-            alpha=self.elora_alpha,
-            freeze_base=self.elora_freeze_base,
+            rank=self.lora_rank,
+            alpha=self.lora_alpha,
+            freeze_base=self.lora_freeze_base,
             **kwargs,
         )
 
 
-class ELoRABackend(_ConfiguredELoRABackendMixin, E3NNBackend):
-    name = "elora"
+class LoRABackend(_ConfiguredLoRABackendMixin, E3NNBackend):
+    name = "lora"
 
     def make_linear(self, *args, **kwargs):
         return ELoRALinear(
             *args,
-            elora_rank=self.elora_rank,
-            elora_alpha=self.elora_alpha,
-            elora_freeze_base=self.elora_freeze_base,
+            elora_rank=self.lora_rank,
+            elora_alpha=self.lora_alpha,
+            elora_freeze_base=self.lora_freeze_base,
             **kwargs,
         )
 
@@ -126,9 +153,9 @@ class ELoRABackend(_ConfiguredELoRABackendMixin, E3NNBackend):
         if kwargs.get("internal_weights", False):
             return ELoRATensorProduct(
                 *args,
-                elora_rank=self.elora_rank,
-                elora_alpha=self.elora_alpha,
-                elora_freeze_base=self.elora_freeze_base,
+                elora_rank=self.lora_rank,
+                elora_alpha=self.lora_alpha,
+                elora_freeze_base=self.lora_freeze_base,
                 **kwargs,
             )
         return o3.TensorProduct(*args, **kwargs)
@@ -136,31 +163,35 @@ class ELoRABackend(_ConfiguredELoRABackendMixin, E3NNBackend):
     def make_fully_connected_tensor_product(self, *args, **kwargs):
         return ELoRAFullyConnectedTensorProduct(
             *args,
-            elora_rank=self.elora_rank,
-            elora_alpha=self.elora_alpha,
-            elora_freeze_base=self.elora_freeze_base,
+            elora_rank=self.lora_rank,
+            elora_alpha=self.lora_alpha,
+            elora_freeze_base=self.lora_freeze_base,
             **kwargs,
         )
 
-class CueqELoRABackend(_ConfiguredELoRABackendMixin, CueqBackend):
-    name = "cueq+elora"
+class CueqLoRABackend(_ConfiguredLoRABackendMixin, CueqBackend):
+    name = "cueq+lora"
 
     def make_linear(self, *args, **kwargs):
         return CueqLoRALinear(
             *args,
-            rank=self.elora_rank,
-            alpha=self.elora_alpha,
-            elora_freeze_base=self.elora_freeze_base,
+            rank=self.lora_rank,
+            alpha=self.lora_alpha,
+            elora_freeze_base=self.lora_freeze_base,
             **kwargs,
         )
 
     def make_tensor_product(self, *args, **kwargs):
         if kwargs.get("internal_weights", False):
+            reference_instructions = kwargs.get("instructions")
+            if reference_instructions is None and len(args) >= 4:
+                reference_instructions = args[3]
             return CueqLoRAChannelWiseTensorProduct(
                 *args,
-                rank=self.elora_rank,
-                alpha=self.elora_alpha,
-                elora_freeze_base=self.elora_freeze_base,
+                rank=self.lora_rank,
+                alpha=self.lora_alpha,
+                elora_freeze_base=self.lora_freeze_base,
+                reference_instructions=reference_instructions,
                 **kwargs,
             )
         return make_cueq_tensor_product(*args, **kwargs)
@@ -168,77 +199,98 @@ class CueqELoRABackend(_ConfiguredELoRABackendMixin, CueqBackend):
     def make_fully_connected_tensor_product(self, *args, **kwargs):
         return CueqLoRAFullyConnectedTensorProduct(
             *args,
-            rank=self.elora_rank,
-            alpha=self.elora_alpha,
-            elora_freeze_base=self.elora_freeze_base,
+            rank=self.lora_rank,
+            alpha=self.lora_alpha,
+            elora_freeze_base=self.lora_freeze_base,
             **kwargs,
         )
 
     def make_symmetric_contraction(self, *args, **kwargs):
-        return CueqLoRASymmetricContraction(
+        return make_cueq_symmetric_contraction(*args, **kwargs)
+
+
+class OeqLoRABackend(_ConfiguredLoRABackendMixin, OeqBackend):
+    name = "oeq+lora"
+
+    def make_linear(self, *args, **kwargs):
+        return OeqLoRALinear(
             *args,
-            rank=self.elora_rank,
-            alpha=self.elora_alpha,
-            elora_freeze_base=self.elora_freeze_base,
+            rank=self.lora_rank,
+            alpha=self.lora_alpha,
+            elora_freeze_base=self.lora_freeze_base,
+            **kwargs,
+        )
+
+    def make_tensor_product(self, *args, **kwargs):
+        if kwargs.get("internal_weights", False):
+            return OeqLoRATensorProduct(
+                *args,
+                rank=self.lora_rank,
+                alpha=self.lora_alpha,
+                elora_freeze_base=self.lora_freeze_base,
+                **kwargs,
+            )
+        return OeqTensorProduct(*args, **kwargs)
+
+    def make_fully_connected_tensor_product(self, *args, **kwargs):
+        return OeqLoRAFullyConnectedTensorProduct(
+            *args,
+            rank=self.lora_rank,
+            alpha=self.lora_alpha,
+            elora_freeze_base=self.lora_freeze_base,
+            **kwargs,
+        )
+
+    def make_symmetric_contraction(self, *args, **kwargs):
+        return OeqSymmetricContraction(
+            *args,
+            freeze_base=self.lora_freeze_base,
             **kwargs,
         )
 
 
-def _resolved_stack(
-    *,
-    use_cueq: bool = True,
-    use_elora: bool | None = None,
-) -> tuple[str, ...]:
+def get_backend():
     config = get_wrapper_config()
-    resolved_stack = config.resolved_stack
-    if resolved_stack in ("", "e3nn"):
-        resolved = []
-    else:
-        resolved = [part for part in resolved_stack.split("+") if part]
-    if not use_cueq:
-        resolved = [item for item in resolved if item != "cueq"]
-    if use_elora is False:
-        resolved = [item for item in resolved if item != "elora"]
-    elif use_elora is True and "elora" not in resolved:
-        resolved.append("elora")
-    if "cueq" in resolved and not IS_CUET_AVAILABLE:
-        resolved = [item for item in resolved if item != "cueq"]
-    return tuple(resolved)
-
-
-def get_backend(
-    *,
-    use_cueq: bool = True,
-    use_elora: bool | None = None,
-):
-    config = get_wrapper_config()
-    stack = _resolved_stack(use_cueq=use_cueq, use_elora=use_elora)
-    if stack == ("cueq", "elora"):
-        return CueqELoRABackend(
-            rank=config.elora_rank,
-            alpha=config.elora_alpha,
-            freeze_base=config.elora_freeze_base,
+    if config.backend == "oeq":
+        ensure_oeq_runtime_available()
+    if config.backend == "cueq" and not IS_CUET_AVAILABLE:
+        raise ImportError("backend=cueq requires cuequivariance_torch to be available.")
+    if config.backend == "oeq" and config.adapter == "lora":
+        return OeqLoRABackend(
+            rank=config.lora_rank,
+            alpha=config.lora_alpha,
+            freeze_base=config.lora_freeze_base,
         )
-    if stack == ("elora",):
-        return ELoRABackend(
-            rank=config.elora_rank,
-            alpha=config.elora_alpha,
-            freeze_base=config.elora_freeze_base,
+    if config.backend == "cueq" and config.adapter == "lora":
+        return CueqLoRABackend(
+            rank=config.lora_rank,
+            alpha=config.lora_alpha,
+            freeze_base=config.lora_freeze_base,
         )
-    if stack == ("cueq",):
+    if config.backend == "e3nn" and config.adapter == "lora":
+        return LoRABackend(
+            rank=config.lora_rank,
+            alpha=config.lora_alpha,
+            freeze_base=config.lora_freeze_base,
+        )
+    if config.backend == "cueq":
         return CueqBackend()
+    if config.backend == "oeq":
+        return OeqBackend()
     return E3NNBackend()
 
 
-def get_backend_name(*, use_cueq: bool = True, use_elora: bool | None = None) -> str:
-    return get_backend(use_cueq=use_cueq, use_elora=use_elora).name
+def get_backend_name() -> str:
+    return get_backend().name
 
 
 __all__ = [
     "E3NNBackend",
     "CueqBackend",
-    "ELoRABackend",
-    "CueqELoRABackend",
+    "OeqBackend",
+    "LoRABackend",
+    "CueqLoRABackend",
+    "OeqLoRABackend",
     "get_backend",
     "get_backend_name",
 ]

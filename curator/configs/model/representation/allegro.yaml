@@ -1,5 +1,7 @@
 _target_: curator.model.AllegroRepresentation   # trainable Allegro backbone wrapper using CURATOR readout/gradient heads
-backbone: null                                  # override with an Allegro backbone config or an instantiated module
+backbone: null                                  # optional instantiated backbone module, or nested Hydra `_target_` config that directly builds one
+backbone_builder: null                          # optional callable / import path / Hydra partial (`_partial_: true`) used to build the backbone when `backbone` is null
+backbone_kwargs: {}                             # kwargs passed to `backbone_builder`; this lets Curator build the external backbone from config
 cutoff: null                                    # inferred from backbone.edge_norm.r_max when null
 species: ${data.species}                        # species used to map atomic numbers to Allegro atom types
 type_map: null                                  # optional explicit remap, e.g. "H:H,C:C" or "1:0,6:1"

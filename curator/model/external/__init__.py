@@ -1,15 +1,23 @@
-from ..external.adapters import (
-    AllegroAdapter,
-    ESENAdapter,
+from .allegro import AllegroRepresentation
+from .backbone import ExternalBackboneRepresentation
+from .esen import ESENRepresentation
+from .registry import (
     ExternalModelSpec,
-    MatGLAdapter,
     is_external_model_spec,
     load_external_model,
     parse_external_model_spec,
     register_adapter_loader,
 )
+from .adapters import (
+    AllegroAdapter,
+    ESENAdapter,
+    MatGLAdapter,
+)
 
 __all__ = [
+    "AllegroRepresentation",
+    "ESENRepresentation",
+    "ExternalBackboneRepresentation",
     "ExternalModelSpec",
     "MatGLAdapter",
     "AllegroAdapter",

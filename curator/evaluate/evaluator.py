@@ -318,7 +318,7 @@ class Evaluator:
     ) -> None:
         import apsw
         from curator.data.sql_database import STANDARD_COLUMN_SPECS
-        from curator.model.external_utils import extract_cells
+        from curator.model.utils import extract_cells
 
         batch_columns = {} if batch_columns is None else batch_columns
         output_columns = {} if output_columns is None else output_columns

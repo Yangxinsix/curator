@@ -24,10 +24,8 @@ from curator.layer import (
     MACEAtomwiseNN,
     MultiDomainAtomwiseNN,
     MultiDomainMACEAtomwiseNN,
-    NequIPZBLPairEnergy,
     PairRepulsionEnergy,
     PairwiseDistance,
-    PerSpeciesRescaleShift,
     RealAgnosticInteractionBlock,
     RealAgnosticResidualInteractionBlock,
     SoftTransform,
@@ -93,6 +91,55 @@ def _resolve_model_domain(model: torch.nn.Module, domain: Optional[Union[str, in
     selected = str(domain)
     if selected not in domains:
         raise ValueError(f"Domain {selected!r} not found in available domains {domains}.")
+    return selected
+
+
+def _resolve_model_domains(
+    model: torch.nn.Module,
+    domains: Optional[Union[str, int, List[Union[str, int]]]] = None,
+) -> List[str]:
+    available = _available_model_domains(model)
+    if not available:
+        raise TypeError(f"Expected a multi-domain model, got {type(model)}.")
+    if domains is None:
+        return [available[-1]]
+
+    if isinstance(domains, (str, int)):
+        raw_domains: List[Union[str, int]] = [domains]
+    else:
+        raw_domains = list(domains)
+
+    selected: List[str] = []
+    for raw in raw_domains:
+        if isinstance(raw, int):
+            index = raw
+            if index < 0 or index >= len(available):
+                raise ValueError(
+                    f"Domain index {index} out of range for available domains {available}."
+                )
+            resolved = available[index]
+        else:
+            token = str(raw).strip()
+            if token == "":
+                continue
+            try:
+                index = int(token)
+            except ValueError:
+                index = None
+
+            if index is not None and 0 <= index < len(available):
+                resolved = available[index]
+            elif token in available:
+                resolved = token
+            else:
+                raise ValueError(
+                    f"Domain selector {token!r} not found in available domains {available}."
+                )
+        if resolved not in selected:
+            selected.append(resolved)
+
+    if not selected:
+        raise ValueError("At least one domain must be selected.")
     return selected
 
 
@@ -219,6 +266,69 @@ def convert_multi_to_single_domain(
     single_model._initialized = getattr(model, "_initialized", False)
     single_model.train(model.training)
     return single_model
+
+
+def convert_multi_to_selected_domains(
+    model: torch.nn.Module,
+    *,
+    domains: Optional[Union[str, int, List[Union[str, int]]]] = None,
+) -> Union[NeuralNetworkPotential, MultiDomainPotential]:
+    selected_domains = _resolve_model_domains(model, domains=domains)
+    if len(selected_domains) == 1:
+        return convert_multi_to_single_domain(model, domain=selected_domains[0])
+
+    if not isinstance(model, MultiDomainPotential):
+        raise TypeError(f"Expected MultiDomainPotential, got {type(model)}")
+
+    converted = copy.deepcopy(model)
+    apply_domain_set(
+        converted,
+        selected_domains,
+        mode="replace",
+        template_domain=selected_domains[0],
+        init_strategy="copy",
+    )
+    converted._initialized = getattr(model, "_initialized", False)
+    converted.train(model.training)
+    return converted
+
+
+def convert_curator_single_to_multi(
+    curator_path: Union[str, Path],
+    output_path: Union[str, Path],
+    *,
+    device: Optional[torch.device] = None,
+    template_domain: str = "0",
+) -> Path:
+    from curator.utils import load_model
+
+    curator_path = Path(curator_path)
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = load_model(curator_path, device=device, load_compiled=False, load_weights_only=False)
+    converted = convert_single_to_multi_domain(model, template_domain=template_domain)
+    output_path = Path(output_path)
+    torch.save(converted, output_path)
+    return output_path
+
+
+def convert_curator_multi_to_single(
+    curator_path: Union[str, Path],
+    output_path: Union[str, Path],
+    *,
+    domains: Optional[Union[str, int, List[Union[str, int]]]] = None,
+    device: Optional[torch.device] = None,
+) -> Path:
+    from curator.utils import load_model
+
+    curator_path = Path(curator_path)
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = load_model(curator_path, device=device, load_compiled=False, load_weights_only=False)
+    converted = convert_multi_to_selected_domains(model, domains=domains)
+    output_path = Path(output_path)
+    torch.save(converted, output_path)
+    return output_path
 
 
 def _resolve_mace_head_mapping(
@@ -689,30 +799,7 @@ def convert_mace_to_curator(
     head: Optional[Union[str, int]] = None,
     device: Optional[torch.device] = None,
 ) -> Path:
-    torch_serialization.add_safe_globals([slice])
-    try:
-        from mace.modules.models import ScaleShiftMACE
-
-        torch_serialization.add_safe_globals([ScaleShiftMACE])
-    except Exception:
-        pass
-
-    mace_path = Path(mace_path)
-    if device is None:
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    obj = torch.load(mace_path, map_location=device, weights_only=False)
-    mace_model = None
-    if isinstance(obj, torch.nn.Module):
-        mace_model = obj
-    elif isinstance(obj, dict):
-        mace_model = obj.get("model")
-        if mace_model is None and "state_dict" in obj:
-            raise TypeError(
-                "MACE checkpoint does not include an instantiated model; please provide a TorchScript or full model checkpoint."
-            )
-    if mace_model is None:
-        raise TypeError(f"Unsupported MACE checkpoint format at {mace_path}")
-    curator_model = create_model_from_mace(mace_model, head=head)
+    curator_model = load_official_mace_as_curator(mace_path, head=head, device=device)
     output_path = Path(output_path)
     torch.save(curator_model, output_path)
     return output_path
@@ -750,6 +837,64 @@ def _load_official_nequip_saved_model(
         load_utils = importlib.import_module("nequip.model.saved_models.load_utils")
 
     return load_utils.load_saved_model(str(model_ref), compile_mode=compile_mode)
+
+
+def _load_official_mace_model(
+    model_ref: Union[str, Path],
+    *,
+    device: Optional[torch.device] = None,
+):
+    torch_serialization.add_safe_globals([slice])
+    try:
+        from mace.modules.models import ScaleShiftMACE
+
+        torch_serialization.add_safe_globals([ScaleShiftMACE])
+    except Exception:
+        pass
+
+    model_ref = Path(model_ref)
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    obj = torch.load(model_ref, map_location=device, weights_only=False)
+    if isinstance(obj, torch.nn.Module):
+        return obj
+    if isinstance(obj, dict):
+        model = obj.get("model")
+        if model is not None:
+            return model
+        if "state_dict" in obj:
+            raise TypeError(
+                "MACE checkpoint does not include an instantiated model; please provide a TorchScript or full model checkpoint."
+            )
+    raise TypeError(f"Unsupported MACE checkpoint format at {model_ref}")
+
+
+def load_official_mace_as_curator(
+    model_ref: Union[str, Path],
+    *,
+    head: Optional[Union[str, int]] = None,
+    device: Optional[torch.device] = None,
+) -> torch.nn.Module:
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    mace_model = _load_official_mace_model(model_ref, device=device)
+    curator_model = create_model_from_mace(mace_model, head=head)
+    curator_model.to(torch.device(device))
+    return curator_model
+
+
+def load_official_nequip_as_curator(
+    model_ref: Union[str, Path],
+    *,
+    device: Optional[torch.device] = None,
+    compile_mode: str = "eager",
+) -> torch.nn.Module:
+    if device is None:
+        device = torch.device("cpu")
+    official_model = _load_official_nequip_saved_model(model_ref, compile_mode=compile_mode)
+    curator_model = create_model_from_nequip(official_model)
+    curator_model.to(torch.device(device))
+    return curator_model
 
 
 def _unwrap_official_nequip_model(nequip_model):
@@ -848,29 +993,13 @@ def _map_official_nequip_state_dict(
         (
             idx
             for idx, module in enumerate(getattr(curator_model, "output_modules", []))
-            if isinstance(module, NequIPZBLPairEnergy)
+            if isinstance(module, PairRepulsionEnergy)
+            and isinstance(getattr(module, "pair_fn", None), ZBLBasis)
+            and not bool(getattr(module.pair_fn, "cutoff_by_species", True))
+            and getattr(module.pair_fn, "scatter_to", "receiver") == "center"
         ),
         None,
     )
-
-    species = list(func.per_type_energy_scale_shift.type_names)
-    output_modules = list(getattr(curator_model, "output_modules", []))
-    if output_modules and isinstance(output_modules[0], PerSpeciesRescaleShift):
-        per_species_module = output_modules[0]
-        scales = torch.ones_like(per_species_module.scales)
-        shifts = torch.zeros_like(per_species_module.shifts)
-        official_scales = getattr(func.per_type_energy_scale_shift, "scales", None)
-        official_shifts = getattr(func.per_type_energy_scale_shift, "shifts", None)
-        if official_scales is not None:
-            official_scales = official_scales.detach().cpu().reshape(-1)
-            for idx, symbol in enumerate(species):
-                scales[chemical_symbols.index(symbol)] = official_scales[idx]
-        if official_shifts is not None:
-            official_shifts = official_shifts.detach().cpu().reshape(-1)
-            for idx, symbol in enumerate(species):
-                shifts[chemical_symbols.index(symbol)] = official_shifts[idx]
-        mapped["output_modules.0.scales"] = scales
-        mapped["output_modules.0.shifts"] = shifts
 
     for key, value in official_sd.items():
         if key == "_empty":
@@ -914,8 +1043,11 @@ def _map_official_nequip_state_dict(
             continue
         if pair_module_index is not None and key.startswith("pair_potential."):
             suffix = key.split(".", 1)[1]
-            if suffix in {"atomic_numbers", "_qqr2exesquare"}:
-                mapped[f"output_modules.{pair_module_index}.{suffix.lstrip('_')}"] = value
+            if suffix == "atomic_numbers":
+                mapped[f"output_modules.{pair_module_index}.atomic_numbers"] = value
+                continue
+            if suffix == "_qqr2exesquare":
+                mapped[f"output_modules.{pair_module_index}.pair_fn.energy_prefactor"] = value
 
     return mapped
 
@@ -965,6 +1097,15 @@ def create_model_from_nequip(nequip_model) -> torch.nn.Module:
         is_atomwise=True,
         reduction="none",
         dim=1,
+        atomwise_shift=True,
+        per_species_scale=_build_species_value_dict(
+            list(func.per_type_energy_scale_shift.type_names),
+            getattr(func.per_type_energy_scale_shift, "scales", None),
+        ),
+        per_species_shift=_build_species_value_dict(
+            list(func.per_type_energy_scale_shift.type_names),
+            getattr(func.per_type_energy_scale_shift, "shifts", None),
+        ),
     )
     power = _scalar_to_int(getattr(func.bessel_encode.cutoff, "p", None), 6)
     representation = Nequip(
@@ -988,29 +1129,26 @@ def create_model_from_nequip(nequip_model) -> torch.nn.Module:
     )
 
     output_modules: List[torch.nn.Module] = [
-        PerSpeciesRescaleShift(
-            scales=_build_species_value_dict(
-                list(func.per_type_energy_scale_shift.type_names),
-                getattr(func.per_type_energy_scale_shift, "scales", None),
-            ),
-            shifts=_build_species_value_dict(
-                list(func.per_type_energy_scale_shift.type_names),
-                getattr(func.per_type_energy_scale_shift, "shifts", None),
-            ),
-            scales_keys=[properties.atomic_energy],
-            shifts_keys=[properties.atomic_energy],
-        ),
+        GlobalRescaleShift(heads=[readout_head]),
         AtomwiseReduce(output_key=properties.energy, aggregation_mode="sum"),
     ]
 
     pair_potential = getattr(func, "pair_potential", None)
     if pair_potential is not None:
         output_modules.append(
-            NequIPZBLPairEnergy(
+            PairRepulsionEnergy(
+                pair_fn=ZBLBasis(
+                    p=_scalar_to_int(getattr(getattr(pair_potential, "cutoff", None), "p", None), power),
+                    screening_exponent=0.23,
+                    screening_length=0.46850,
+                    phi_coefficients=(0.18175, 0.50986, 0.28022, 0.02817),
+                    phi_exponents=(3.19980, 0.94229, 0.40290, 0.20162),
+                    energy_prefactor=float(pair_potential._qqr2exesquare.item()),
+                    cutoff=float(func.edge_norm.r_max),
+                    cutoff_by_species=False,
+                    scatter_to="center",
+                ),
                 atomic_numbers=pair_potential.atomic_numbers.detach().cpu(),
-                cutoff=float(func.edge_norm.r_max),
-                power=_scalar_to_int(getattr(getattr(pair_potential, "cutoff", None), "p", None), power),
-                qqr2exesquare=float(pair_potential._qqr2exesquare.item()),
             )
         )
 
@@ -1036,26 +1174,101 @@ def convert_nequip_to_curator(
     output_path: Union[str, Path],
     device: Optional[torch.device] = None,
 ) -> Path:
-    if device is None:
-        device = torch.device("cpu")
-    official_model = _load_official_nequip_saved_model(nequip_path, compile_mode="eager")
-    curator_model = create_model_from_nequip(official_model)
-    curator_model.to(torch.device(device))
+    curator_model = load_official_nequip_as_curator(nequip_path, device=device, compile_mode="eager")
     output_path = Path(output_path)
     torch.save(curator_model.cpu(), output_path)
     return output_path
 
 
-def _convert_backend(model, *, use_cueq: bool):
-    from curator.layer.wrappers import apply_wrappers, export_wrapper_config
+def _canonical_wrapper_state_key(key: str) -> str:
+    return key.replace(".base.", ".")
 
-    wrapper_cfg = export_wrapper_config(model)
-    wrapper_cfg["use_cueq"] = bool(use_cueq)
-    if use_cueq:
-        wrapper_cfg["wrapper_stack"] = "cueq+elora" if wrapper_cfg.get("use_elora") else "cueq"
-    else:
-        wrapper_cfg["wrapper_stack"] = "elora" if wrapper_cfg.get("use_elora") else "e3nn"
-    return apply_wrappers(model, wrapper_cfg)
+
+def _coerce_wrapper_state_tensor(
+    source_tensor: torch.Tensor,
+    target_tensor: torch.Tensor,
+) -> Optional[torch.Tensor]:
+    if source_tensor.shape == target_tensor.shape:
+        return source_tensor
+    if (
+        source_tensor.dim() + 1 == target_tensor.dim()
+        and target_tensor.shape[0] == 1
+        and source_tensor.shape == target_tensor.shape[1:]
+    ):
+        return source_tensor.unsqueeze(0)
+    if (
+        source_tensor.dim() == target_tensor.dim() + 1
+        and source_tensor.shape[0] == 1
+        and source_tensor.shape[1:] == target_tensor.shape
+    ):
+        return source_tensor.squeeze(0)
+    return None
+
+
+def _load_matching_wrapper_state(
+    target: torch.nn.Module,
+    source_state: Dict[str, torch.Tensor],
+) -> int:
+    target_state = target.state_dict()
+    source_aliases: Dict[str, torch.Tensor] = {}
+    for source_key, source_tensor in source_state.items():
+        source_aliases.setdefault(source_key, source_tensor)
+        source_aliases.setdefault(_canonical_wrapper_state_key(source_key), source_tensor)
+    matched: Dict[str, torch.Tensor] = {}
+    for key, target_tensor in target_state.items():
+        canonical_key = _canonical_wrapper_state_key(key)
+        for source_tensor in (
+            source_state.get(key),
+            source_state.get(canonical_key),
+            source_aliases.get(canonical_key),
+        ):
+            if source_tensor is None:
+                continue
+            compatible = _coerce_wrapper_state_tensor(source_tensor, target_tensor)
+            if compatible is None:
+                continue
+            matched[key] = compatible
+            break
+    if matched:
+        target.load_state_dict(matched, strict=False)
+    return len(matched)
+
+
+def convert_model_wrapper(
+    model: torch.nn.Module,
+    wrapper_config,
+    *,
+    target_dtype: torch.dtype | None = None,
+) -> torch.nn.Module:
+    from curator.layer.wrappers import WrapperConfig, apply_wrappers, get_model_wrapper_config
+    from curator.utils import load_cueq_weights, load_e3nn_weights
+
+    if not isinstance(wrapper_config, WrapperConfig):
+        raise TypeError(
+            f"convert_model_wrapper expects WrapperConfig, got {type(wrapper_config)!r}."
+        )
+
+    source_cfg = get_model_wrapper_config(model)
+    patched_model = apply_wrappers(model, wrapper_config, target_dtype=target_dtype)
+    if patched_model is model:
+        return model
+
+    if source_cfg.backend != wrapper_config.backend:
+        if wrapper_config.backend == "cueq":
+            load_e3nn_weights(model, patched_model)
+        elif source_cfg.backend == "cueq":
+            load_cueq_weights(model, patched_model)
+
+    _load_matching_wrapper_state(patched_model, model.state_dict())
+    return patched_model
+
+
+def _convert_backend(model, *, use_cueq: bool):
+    from curator.layer.wrappers import get_model_wrapper_config, resolve_wrapper_config
+
+    wrapper_cfg = get_model_wrapper_config(model).to_dict()
+    wrapper_cfg["backend"] = "cueq" if use_cueq else "e3nn"
+    return convert_model_wrapper(model, resolve_wrapper_config(**wrapper_cfg))
 
 
 def convert_e3nn_to_cueq(model):
@@ -1068,6 +1281,9 @@ def convert_cueq_to_e3nn(model):
 __all__ = [
     "_load_state_dict_by_shape",
     "build_mace_from_curator",
+    "convert_curator_multi_to_single",
+    "convert_curator_single_to_multi",
+    "convert_multi_to_selected_domains",
     "convert_multi_to_single_domain",
     "convert_single_to_multi_domain",
     "convert_cueq_to_e3nn",
@@ -1078,4 +1294,6 @@ __all__ = [
     "create_model_from_mace",
     "create_model_from_nequip",
     "create_multi_domain_model_from_mace",
+    "load_official_mace_as_curator",
+    "load_official_nequip_as_curator",
 ]

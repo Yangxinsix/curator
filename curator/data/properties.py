@@ -177,6 +177,7 @@ class HeadConfig:
     atomwise_shift: bool = False  # whether the shift applies on per-atom values
     atomwise_normalization: bool = True  # if shifting structure-level value, multiply by n_atoms
     domains: Optional[List[Union[str, int]]] = None  # optional domain whitelist for this head
+    per_species_scale: Union[Dict[int, float], Dict[str, float], str, None] = None  # dict, "auto", or None
     per_species_shift: Union[Dict[int, float], Dict[str, float], str, None] = None  # dict, "auto", or None
 
 

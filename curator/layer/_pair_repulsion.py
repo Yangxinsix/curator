@@ -28,23 +28,54 @@ class ZBLBasis(nn.Module):
 
     p: torch.Tensor
 
-    def __init__(self, p: int = 6, trainable: bool = False):
+    def __init__(
+        self,
+        p: int = 6,
+        trainable: bool = False,
+        screening_exponent: float = 0.300,
+        screening_length: float = 0.4543 * 0.529,
+        phi_coefficients: tuple[float, float, float, float] = (0.1818, 0.5099, 0.2802, 0.02817),
+        phi_exponents: tuple[float, float, float, float] = (3.2, 0.9423, 0.4028, 0.2016),
+        energy_prefactor: float = 14.3996 * 0.5,
+        cutoff: float | None = None,
+        cutoff_by_species: bool = True,
+        scatter_to: str = "receiver",
+    ):
         super().__init__()
         self.register_buffer(
             "c",
-            torch.tensor([0.1818, 0.5099, 0.2802, 0.02817], dtype=torch.get_default_dtype()),
+            torch.tensor(phi_coefficients, dtype=torch.get_default_dtype()),
+        )
+        self.register_buffer(
+            "phi_exponents",
+            torch.tensor(phi_exponents, dtype=torch.get_default_dtype()),
         )
         self.register_buffer("p", torch.tensor(p, dtype=torch.int))
+        self.register_buffer(
+            "energy_prefactor",
+            torch.as_tensor(float(energy_prefactor), dtype=torch.float64),
+        )
         self.register_buffer(
             "covalent_radii",
             torch.tensor(ase_data.covalent_radii, dtype=torch.get_default_dtype()),
         )
-        if trainable:
-            self.a_exp = nn.Parameter(torch.tensor(0.300, requires_grad=True))
-            self.a_prefactor = nn.Parameter(torch.tensor(0.4543, requires_grad=True))
+        self.cutoff_by_species = bool(cutoff_by_species)
+        self.scatter_to = str(scatter_to)
+        if self.scatter_to not in {"receiver", "center"}:
+            raise ValueError(f"Unsupported scatter_to={scatter_to!r}; expected 'receiver' or 'center'.")
+        if cutoff is None:
+            self.cutoff = None
         else:
-            self.register_buffer("a_exp", torch.tensor(0.300))
-            self.register_buffer("a_prefactor", torch.tensor(0.4543))
+            self.register_buffer(
+                "cutoff",
+                torch.as_tensor(float(cutoff), dtype=torch.get_default_dtype()),
+            )
+        if trainable:
+            self.screening_exponent = nn.Parameter(torch.tensor(float(screening_exponent), requires_grad=True))
+            self.screening_length = nn.Parameter(torch.tensor(float(screening_length), requires_grad=True))
+        else:
+            self.register_buffer("screening_exponent", torch.tensor(float(screening_exponent)))
+            self.register_buffer("screening_length", torch.tensor(float(screening_length)))
 
     def forward(
         self,
@@ -56,29 +87,41 @@ class ZBLBasis(nn.Module):
         if x.dim() == 1:
             x = x.unsqueeze(-1)
         if edge_index.dim() == 2 and edge_index.shape[0] == 2:
-            sender = edge_index[0]
-            receiver = edge_index[1]
+            edge_center = edge_index[0]
+            edge_neighbor = edge_index[1]
         else:
-            sender = edge_index[:, 0]
-            receiver = edge_index[:, 1]
-
-        node_atomic_numbers = atomic_numbers[torch.argmax(node_attrs, dim=1)].unsqueeze(-1)
-        Z_u = node_atomic_numbers[sender].to(torch.int64)
-        Z_v = node_atomic_numbers[receiver].to(torch.int64)
-        a = self.a_prefactor * 0.529 / (torch.pow(Z_u, self.a_exp) + torch.pow(Z_v, self.a_exp))
-        r_over_a = x / a
+            edge_center = edge_index[:, 0]
+            edge_neighbor = edge_index[:, 1]
+        if node_attrs.dim() > 1:
+            species_index = torch.argmax(node_attrs, dim=1)
+        else:
+            species_index = node_attrs.reshape(-1).to(torch.long)
+        node_atomic_numbers = atomic_numbers[species_index].reshape(-1, 1)
+        Z_u = node_atomic_numbers[edge_center].to(x.dtype)
+        Z_v = node_atomic_numbers[edge_neighbor].to(x.dtype)
+        screening_arg = (
+            torch.pow(Z_u, self.screening_exponent.to(x.dtype))
+            + torch.pow(Z_v, self.screening_exponent.to(x.dtype))
+        ) * x / self.screening_length.to(x.dtype)
         phi = (
-            self.c[0] * torch.exp(-3.2 * r_over_a)
-            + self.c[1] * torch.exp(-0.9423 * r_over_a)
-            + self.c[2] * torch.exp(-0.4028 * r_over_a)
-            + self.c[3] * torch.exp(-0.2016 * r_over_a)
+            self.c[0] * torch.exp(-self.phi_exponents[0].to(x.dtype) * screening_arg)
+            + self.c[1] * torch.exp(-self.phi_exponents[1].to(x.dtype) * screening_arg)
+            + self.c[2] * torch.exp(-self.phi_exponents[2].to(x.dtype) * screening_arg)
+            + self.c[3] * torch.exp(-self.phi_exponents[3].to(x.dtype) * screening_arg)
         )
-        v_edges = (14.3996 * Z_u * Z_v) / x * phi
-        r_max = self.covalent_radii[Z_u] + self.covalent_radii[Z_v]
+        v_edges = self.energy_prefactor.to(x.dtype) * (Z_u * Z_v) / x * phi
+        if self.cutoff_by_species:
+            r_max = self.covalent_radii[Z_u.to(torch.int64)] + self.covalent_radii[Z_v.to(torch.int64)]
+        else:
+            cutoff = getattr(self, "cutoff", None)
+            if cutoff is None:
+                raise RuntimeError("ZBLBasis requires `cutoff` when cutoff_by_species=False.")
+            r_max = cutoff.to(x.dtype)
         envelope = _poly_envelope(x, r_max, self.p)
-        v_edges = 0.5 * v_edges * envelope
+        v_edges = v_edges * envelope
         v_edges = v_edges.squeeze(-1) if v_edges.dim() > 1 and v_edges.shape[-1] == 1 else v_edges
-        v_nodes = scatter_add(v_edges, receiver, dim=0, dim_size=node_attrs.size(0))
+        scatter_index = edge_neighbor if self.scatter_to == "receiver" else edge_center
+        v_nodes = scatter_add(v_edges, scatter_index, dim=0, dim_size=node_attrs.size(0))
         return v_nodes.squeeze(-1) if v_nodes.dim() > 1 and v_nodes.shape[-1] == 1 else v_nodes
 
     def __repr__(self) -> str:
@@ -96,7 +139,11 @@ class PairRepulsionEnergy(nn.Module):
     def forward(self, data: properties.Type) -> properties.Type:
         if properties.edge_dist not in data or properties.edge_idx not in data:
             return data
-        if properties.node_attr not in data:
+        if properties.atomic_types in data:
+            node_attrs = data[properties.atomic_types]
+        elif properties.node_attr in data:
+            node_attrs = data[properties.node_attr]
+        else:
             return data
         if properties.image_idx not in data:
             data[properties.image_idx] = torch.zeros(
@@ -107,83 +154,12 @@ class PairRepulsionEnergy(nn.Module):
 
         pair_node_energy = self.pair_fn(
             data[properties.edge_dist],
-            data[properties.node_attr],
+            node_attrs,
             data[properties.edge_idx],
             self.atomic_numbers.to(data[properties.edge_dist].device),
         )
         if pair_node_energy.dim() > 1 and pair_node_energy.shape[-1] == 1:
             pair_node_energy = pair_node_energy.squeeze(-1)
-        pair_energy = scatter_add(pair_node_energy, data[properties.image_idx], dim=0)
-        if properties.energy in data:
-            data[properties.energy] = data[properties.energy] + pair_energy
-        else:
-            data[properties.energy] = pair_energy
-        return data
-
-
-class NequIPZBLPairEnergy(nn.Module):
-    """Official NequIP-style ZBL pair potential added to total energy."""
-
-    def __init__(
-        self,
-        atomic_numbers: torch.Tensor,
-        cutoff: float,
-        power: int = 6,
-        qqr2exesquare: float = 14.399645 * 0.5,
-    ):
-        super().__init__()
-        self.register_buffer(
-            "atomic_numbers",
-            torch.as_tensor(atomic_numbers, dtype=torch.get_default_dtype()),
-        )
-        self.register_buffer(
-            "cutoff",
-            torch.as_tensor(float(cutoff), dtype=torch.get_default_dtype()),
-        )
-        self.register_buffer("power", torch.tensor(int(power), dtype=torch.int))
-        self.register_buffer(
-            "qqr2exesquare",
-            torch.as_tensor(float(qqr2exesquare), dtype=torch.float64),
-        )
-
-    def forward(self, data: properties.Type) -> properties.Type:
-        if properties.edge_dist not in data or properties.edge_idx not in data:
-            return data
-        if properties.atomic_types not in data:
-            return data
-        if properties.image_idx not in data:
-            data[properties.image_idx] = torch.zeros(
-                data[properties.n_atoms].item(),
-                dtype=data[properties.edge_idx].dtype,
-                device=data[properties.edge_idx].device,
-            )
-
-        edge_idx = data[properties.edge_idx]
-        edge_center = edge_idx[:, 0]
-        edge_neighbor = edge_idx[:, 1]
-        atom_types = data[properties.atomic_types]
-        edge_dist = data[properties.edge_dist].reshape(-1, 1)
-
-        Zi = self.atomic_numbers[atom_types[edge_center]].reshape(-1, 1).to(edge_dist.dtype)
-        Zj = self.atomic_numbers[atom_types[edge_neighbor]].reshape(-1, 1).to(edge_dist.dtype)
-
-        x = ((torch.pow(Zi, 0.23) + torch.pow(Zj, 0.23)) * edge_dist) / 0.46850
-        psi = (
-            0.02817 * torch.exp(-0.20162 * x)
-            + 0.28022 * torch.exp(-0.40290 * x)
-            + 0.50986 * torch.exp(-0.94229 * x)
-            + 0.18175 * torch.exp(-3.19980 * x)
-        )
-        edge_energy = self.qqr2exesquare.to(edge_dist.dtype) * ((Zi * Zj) / edge_dist) * psi
-        edge_energy = edge_energy * _poly_envelope(edge_dist, self.cutoff, self.power)
-        edge_energy = edge_energy.squeeze(-1)
-
-        pair_node_energy = scatter_add(
-            edge_energy,
-            edge_center,
-            dim=0,
-            dim_size=atom_types.size(0),
-        )
         pair_energy = scatter_add(pair_node_energy, data[properties.image_idx], dim=0)
         if properties.energy in data:
             data[properties.energy] = data[properties.energy] + pair_energy

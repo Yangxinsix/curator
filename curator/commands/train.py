@@ -1,6 +1,8 @@
 import os
 import socket
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Optional
 
 import hydra
 from omegaconf import DictConfig, OmegaConf
@@ -17,15 +19,210 @@ from .common import (
 )
 from .deploy import deploy
 
+_ALLOWED_FINETUNE = {None, "full", "head_only", "lora"}
 
-def _resolve_checkpoint_mode(task_cfg: DictConfig) -> str:
-    mode = str(task_cfg.checkpoint_mode).strip().lower()
-    if mode not in {"weights", "model", "resume"}:
+
+@dataclass
+class LoadedModel:
+    model: Any
+    outputs: Any = None
+    resume_from: Optional[Path] = None
+    wrapper_from_checkpoint: Any = None
+
+
+def _resolve_data_dtype(datamodule: Any) -> Any:
+    if hasattr(datamodule, "default_dtype"):
+        return datamodule.default_dtype
+    if hasattr(datamodule, "domain_modules") and datamodule.domain_modules:
+        first_domain = next(iter(datamodule.domain_modules.values()))
+        return getattr(first_domain, "default_dtype", None)
+    return None
+
+
+def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
+    import torch
+    from collections import OrderedDict
+    from hydra.utils import instantiate
+
+    from ..layer.wrappers.utils import temporary_default_dtype
+    from ..layer.wrappers import get_config_wrapper_config, get_model_wrapper_config
+    from ..model.external import is_external_model_spec, load_external_model, parse_external_model_spec
+    from ..model import NeuralNetworkPotential
+    from ..utils import find_best_model
+
+    if config.model_path is None:
+        with temporary_default_dtype(build_dtype):
+            return LoadedModel(model=instantiate(config.model))
+
+    if isinstance(config.model_path, str) and is_external_model_spec(config.model_path):
+        checkpoint_mode = str(config.task.checkpoint_mode).strip().lower()
+        spec = parse_external_model_spec(config.model_path)
+        if spec is None:
+            raise ValueError(f"Invalid external model spec: {config.model_path}")
+        if spec.scheme not in {"mace", "nequip"}:
+            raise ValueError(
+                f"Fine-tuning only supports external pretrained specs for 'mace' and 'nequip', got {spec.scheme!r}."
+            )
+        if checkpoint_mode != "model":
+            raise ValueError(
+                f"External pretrained spec {config.model_path!r} requires task.checkpoint_mode='model'."
+            )
+        log.debug("Loading external pretrained model from spec %s", config.model_path)
+        with temporary_default_dtype(build_dtype):
+            model = load_external_model(config.model_path, device=torch.device("cpu"))
+        if not isinstance(model, NeuralNetworkPotential):
+            raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
+        return LoadedModel(model=model)
+
+    model_path = find_best_model(config.model_path)[0]
+    config.model_path = model_path
+    checkpoint_mode = str(config.task.checkpoint_mode).strip().lower()
+    if checkpoint_mode not in {"weights", "model", "resume"}:
         raise ValueError(
-            f"Unknown task.checkpoint_mode={mode!r}; expected one of "
+            f"Unknown task.checkpoint_mode={checkpoint_mode!r}; expected one of "
             f"['weights', 'model', 'resume']."
         )
-    return mode
+    log.debug("Loading trained model from %s", model_path)
+    log.debug("Checkpoint loading mode: %s", checkpoint_mode)
+
+    if checkpoint_mode == "resume":
+        log.debug(
+            "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
+            model_path,
+        )
+        with temporary_default_dtype(build_dtype):
+            model = instantiate(config.model)
+        return LoadedModel(
+            model=model,
+            resume_from=model_path,
+        )
+
+    checkpoint_data = torch_load_compat(torch, model_path, weights_only=False)
+    if isinstance(checkpoint_data, torch.nn.Module):
+        wrapper_from_checkpoint = get_model_wrapper_config(checkpoint_data)
+    elif isinstance(checkpoint_data, dict):
+        wrapper_from_checkpoint = get_config_wrapper_config(checkpoint_data.get("wrapper_config"))
+    else:
+        wrapper_from_checkpoint = None
+
+    if checkpoint_mode == "weights":
+        state_dict = None
+        if isinstance(checkpoint_data, torch.nn.Module):
+            state_dict = checkpoint_data.state_dict()
+        elif isinstance(checkpoint_data, dict):
+            saved_model = checkpoint_data.get("model")
+            state_dict = checkpoint_data.get("state_dict")
+            if state_dict is None and isinstance(saved_model, torch.nn.Module):
+                state_dict = saved_model.state_dict()
+        if state_dict is None:
+            raise ValueError("Checkpoint is missing a state_dict for weights loading.")
+        with temporary_default_dtype(build_dtype):
+            model = instantiate(config.model)
+        model.load_state_dict(
+            OrderedDict(
+                (name.replace("model.", "", 1), value)
+                for name, value in state_dict.items()
+            ),
+            strict=False,
+        )
+        return LoadedModel(
+            model=model,
+            wrapper_from_checkpoint=wrapper_from_checkpoint,
+        )
+
+    if isinstance(checkpoint_data, torch.nn.Module):
+        model = checkpoint_data
+        outputs = getattr(checkpoint_data, "outputs", None)
+    elif isinstance(checkpoint_data, dict):
+        outputs = checkpoint_data.get("outputs")
+        saved_model = checkpoint_data.get("model")
+        if isinstance(saved_model, torch.nn.Module):
+            model = saved_model
+        else:
+            model_config = checkpoint_data.get("model_params") or checkpoint_data.get("model_cfg")
+            state_dict = checkpoint_data.get("state_dict")
+            if model_config is None:
+                raise ValueError(
+                    "Checkpoint does not include a model object or model_params/model_cfg needed "
+                    "to reconstruct the native model."
+                )
+            if state_dict is None:
+                raise ValueError(
+                    "Checkpoint is missing state_dict needed to reconstruct the native model."
+                )
+            with temporary_default_dtype(build_dtype):
+                model = instantiate(model_config, _convert_="all")
+            model.load_state_dict(
+                OrderedDict(
+                    (name.replace("model.", "", 1), value)
+                    for name, value in state_dict.items()
+                ),
+                strict=False,
+            )
+    else:
+        raise TypeError(f"Unsupported checkpoint type: {type(checkpoint_data)}")
+
+    if not isinstance(model, NeuralNetworkPotential):
+        raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
+    return LoadedModel(
+        model=model,
+        outputs=outputs,
+        wrapper_from_checkpoint=wrapper_from_checkpoint,
+    )
+
+
+def _prepare_model(
+    loaded: LoadedModel,
+    *,
+    config: DictConfig,
+    datamodule: Any,
+    finetune_mode: Optional[str],
+):
+    import torch
+
+    from ..layer.wrappers import get_config_wrapper_config, get_model_wrapper_config, resolve_wrapper_config
+    from ..model import align_model_domains_from_datamodule
+    from ..model.conversion import convert_model_wrapper
+
+    model = loaded.model
+    checkpoint_wrapper = loaded.wrapper_from_checkpoint
+    data_dtype = _resolve_data_dtype(datamodule)
+
+    requested_wrapper = get_config_wrapper_config(config)
+    wrapper_to_apply = requested_wrapper or checkpoint_wrapper
+
+    model = align_model_domains_from_datamodule(model, datamodule, logger=log)
+
+    if finetune_mode == "lora":
+        source_wrapper = wrapper_to_apply or get_model_wrapper_config(model)
+        wrapper_to_apply = resolve_wrapper_config(
+            backend=source_wrapper.backend,
+            adapter="lora",
+            lora_rank=int(getattr(config, "lora_rank", 16)),
+            lora_alpha=float(getattr(config, "lora_alpha", 16.0)),
+            lora_freeze_base=bool(getattr(config, "lora_freeze_base", False)),
+        )
+
+    if wrapper_to_apply is None:
+        current_wrapper = get_model_wrapper_config(model)
+        if current_wrapper.backend == "cueq" and data_dtype is not None:
+            wrapper_to_apply = current_wrapper
+
+    if wrapper_to_apply is not None:
+        model = convert_model_wrapper(model, wrapper_to_apply, target_dtype=data_dtype)
+
+    model.initialize_modules(datamodule)
+    log.debug("Initialized model modules from datamodule before task setup.")
+
+    if data_dtype is not None:
+        model = model.to(dtype=data_dtype)
+        log.debug("Casting model dtype to data dtype %s", data_dtype)
+
+    if config.compile:
+        log.debug("Compiling model with torch.compile")
+        model = torch.compile(model)
+
+    return model
 
 
 @hydra.main(config_path=CONFIGS_PATH, config_name="train", version_base=None)
@@ -37,9 +234,7 @@ def train(config: DictConfig) -> None:
     from pytorch_lightning import seed_everything
     from pytorch_lightning.loggers import WandbLogger
 
-    from ..finetune import prepare_multi_domain_finetune
-    from ..layer.wrappers import apply_wrappers
-    from ..model import LitNNP, NeuralNetworkPotential
+    from ..model import LitNNP
     from ..train.distill import prepare_distillation
     from ..utils import (
         CustomFormatter,
@@ -47,7 +242,6 @@ def train(config: DictConfig) -> None:
         normalize_config_sequences,
         prune_config_targets,
         read_user_config,
-        resolve_wrapper_config_payload,
         update_config_from_datamodule,
     )
 
@@ -84,139 +278,30 @@ def train(config: DictConfig) -> None:
     datamodule = instantiate(config.data)
     datamodule.setup()
     update_config_from_datamodule(config, datamodule, logger=log)
+    data_dtype = _resolve_data_dtype(datamodule)
 
-    finetune = str(getattr(config, "finetune", "") or "").strip().lower() or None
-    use_multi_domain_finetune = finetune == "multi_domain"
-    if finetune not in {None, "full", "head_only", "multi_domain", "elora"}:
+    finetune_mode = str(getattr(config, "finetune", "") or "").strip().lower() or None
+    if finetune_mode not in _ALLOWED_FINETUNE:
         raise ValueError(
-            f"Unknown finetune mode {finetune!r}; expected one of "
-            f"[None, 'full', 'head_only', 'multi_domain', 'elora']."
+            f"Unknown finetune mode {finetune_mode!r}; expected one of "
+            f"[None, 'full', 'head_only', 'lora']."
         )
+    log.info("Finetune mode: %s", finetune_mode or "full")
 
-    resume_ckpt = None
-    checkpoint_outputs = None
-    checkpoint_wrapper_cfg = None
-    runtime_wrapper_cfg = resolve_wrapper_config_payload(getattr(config, "addon", None))
-
-    if config.model_path is not None:
-        config.model_path = find_best_model(config.model_path)[0]
-        checkpoint_mode = _resolve_checkpoint_mode(config.task)
-        log.debug("Loading trained model from %s", config.model_path)
-        log.debug("Checkpoint loading mode: %s", checkpoint_mode)
-        checkpoint_obj = torch_load_compat(torch, config.model_path, weights_only=False)
-        if isinstance(checkpoint_obj, torch.nn.Module):
-            checkpoint_wrapper_cfg = resolve_wrapper_config_payload(checkpoint_obj)
-        elif isinstance(checkpoint_obj, dict):
-            checkpoint_wrapper_cfg = resolve_wrapper_config_payload(
-                checkpoint_obj.get("wrapper_params"),
-                checkpoint_obj.get("model"),
-                checkpoint_obj.get("model_params") or checkpoint_obj.get("model_cfg"),
-            )
-        runtime_wrapper_cfg = resolve_wrapper_config_payload(
-            getattr(config, "addon", None),
-            checkpoint_wrapper_cfg,
-        )
-
-        load_native_model = (
-            checkpoint_mode == "model"
-            or use_multi_domain_finetune
-            or runtime_wrapper_cfg is not None
-        )
-        if checkpoint_mode == "resume":
-            model = instantiate(config.model)
-            resume_ckpt = config.model_path
-            log.debug(
-                "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
-                resume_ckpt,
-            )
-        elif load_native_model:
-            if isinstance(checkpoint_obj, torch.nn.Module):
-                model = checkpoint_obj
-                checkpoint_outputs = getattr(checkpoint_obj, "outputs", None)
-            elif isinstance(checkpoint_obj, dict):
-                checkpoint_outputs = checkpoint_obj.get("outputs")
-                checkpoint_model = checkpoint_obj.get("model")
-                if isinstance(checkpoint_model, torch.nn.Module):
-                    model = checkpoint_model
-                else:
-                    from collections import OrderedDict
-
-                    checkpoint_model_cfg = checkpoint_obj.get("model_params") or checkpoint_obj.get("model_cfg")
-                    raw_state_dict = checkpoint_obj.get("state_dict")
-                    if checkpoint_model_cfg is None:
-                        raise ValueError(
-                            "Checkpoint does not include a model object or model_params/model_cfg needed "
-                            "to reconstruct the native model."
-                        )
-                    if raw_state_dict is None:
-                        raise ValueError(
-                            "Checkpoint is missing state_dict needed to reconstruct the native model."
-                        )
-                    model = instantiate(checkpoint_model_cfg, _convert_="all")
-                    if checkpoint_wrapper_cfg is not None:
-                        model = apply_wrappers(model, checkpoint_wrapper_cfg)
-                    stripped_state_dict = OrderedDict(
-                        (key.replace("model.", "", 1), value) for key, value in raw_state_dict.items()
-                    )
-                    model.load_state_dict(stripped_state_dict, strict=False)
-            else:
-                raise TypeError(f"Unsupported checkpoint type: {type(checkpoint_obj)}")
-            if not isinstance(model, NeuralNetworkPotential):
-                raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
-        else:
-            from collections import OrderedDict
-
-            raw_state_dict = None
-            checkpoint_model = None
-            if isinstance(checkpoint_obj, torch.nn.Module):
-                checkpoint_model = checkpoint_obj
-                raw_state_dict = checkpoint_obj.state_dict()
-            else:
-                checkpoint_model = checkpoint_obj.get("model")
-                raw_state_dict = checkpoint_obj.get("state_dict")
-                if raw_state_dict is None and isinstance(checkpoint_model, torch.nn.Module):
-                    raw_state_dict = checkpoint_model.state_dict()
-            if raw_state_dict is None:
-                raise ValueError("Checkpoint is missing a state_dict for weights loading.")
-
-            stripped_state_dict = OrderedDict(
-                (key.replace("model.", "", 1), value) for key, value in raw_state_dict.items()
-            )
-            model = instantiate(config.model)
-            model.load_state_dict(stripped_state_dict, strict=False)
-    else:
-        model = instantiate(config.model)
-
-    if use_multi_domain_finetune:
-        model = prepare_multi_domain_finetune(config, datamodule, model, logger=log)
-
-    if runtime_wrapper_cfg is not None:
-        model = apply_wrappers(model, runtime_wrapper_cfg)
-
-    if not getattr(model, "_initialized", False):
-        model.initialize_modules(datamodule)
-        log.debug("Initialized model modules from datamodule before task setup.")
-
-    target_dtype = None
-    if hasattr(datamodule, "default_dtype"):
-        target_dtype = datamodule.default_dtype
-    elif hasattr(datamodule, "domain_modules") and datamodule.domain_modules:
-        first_dm = next(iter(datamodule.domain_modules.values()))
-        target_dtype = getattr(first_dm, "default_dtype", None)
-    if target_dtype is not None:
-        model = model.to(dtype=target_dtype)
-        log.debug("Casting model dtype to data dtype %s", target_dtype)
-
-    if config.compile:
-        log.debug("Compiling model with torch.compile")
-        model = torch.compile(model)
+    loaded = _load_model(config, build_dtype=data_dtype)
+    model = _prepare_model(
+        loaded,
+        config=config,
+        datamodule=datamodule,
+        finetune_mode=finetune_mode,
+    )
 
     log.debug(f"Instantiating task <{config.task._target_}>")
     task: LitNNP = instantiate(config.task, model=model)
-    if checkpoint_outputs is not None:
-        if not isinstance(checkpoint_outputs, torch.nn.ModuleList):
-            checkpoint_outputs = torch.nn.ModuleList(checkpoint_outputs)
-        task.outputs = checkpoint_outputs
+    if loaded.outputs is not None:
+        if not isinstance(loaded.outputs, torch.nn.ModuleList):
+            loaded.outputs = torch.nn.ModuleList(loaded.outputs)
+        task.outputs = loaded.outputs
 
     log.debug(f"Instantiating model {type(model)} with GNN representation {type(model.representation)}")
     task.save_configuration(config)
@@ -226,7 +311,7 @@ def train(config: DictConfig) -> None:
     if isinstance(trainer.logger, WandbLogger):
         os.makedirs(trainer.logger.save_dir + "/wandb", exist_ok=True)
 
-    trainer.fit(model=task, datamodule=datamodule, ckpt_path=resume_ckpt)
+    trainer.fit(model=task, datamodule=datamodule, ckpt_path=loaded.resume_from)
 
     if config.deploy_model:
         best_model = find_best_model(run_path=config.run_path + "/model_path")
@@ -257,6 +342,7 @@ def tmp_train(config: DictConfig):
     from hydra.utils import instantiate
     from pytorch_lightning import seed_everything
 
+    from ..layer.wrappers.utils import temporary_default_dtype
     from ..train import train as train_loop
     from ..utils import CustomFormatter, normalize_config_sequences, read_user_config
 
@@ -281,7 +367,8 @@ def tmp_train(config: DictConfig):
     val_loader = datamodule.val_dataloader()
     test_loader = datamodule.test_dataloader()
 
-    model = instantiate(config.model)
+    with temporary_default_dtype(_resolve_data_dtype(datamodule)):
+        model = instantiate(config.model)
     model.initialize_modules(datamodule)
     outputs = instantiate(config.task.outputs)
     optimizer = instantiate(config.task.optimizer)(model.parameters())

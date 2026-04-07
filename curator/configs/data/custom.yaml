@@ -19,7 +19,8 @@ avg_num_neighbors: auto                  # average neighbors used for model norm
 atomic_energies: null                    # per-species reference energies for offsetting
 normalization: True                      # enable global normalization of targets
 atomwise_normalization: True             # normalize atomwise properties independently
-scale_forces: True                       # scale forces by dataset statistics
+heads: [energy]                          # main readout heads
+rescale_shift_heads: []                  # extra properties handled by the rescale/shift module in addition to energy
 transforms: []                           # optional transforms applied to each structure
   # - _target_: curator.data.TypeMapper
   #   species: ${data.species}

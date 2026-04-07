@@ -13,6 +13,17 @@ except ImportError:  # pragma: no cover
 from ase.data import atomic_numbers, chemical_symbols
 
 
+def _effective_rescale_heads(dm) -> List[HeadConfig]:
+    specs: List[Any] = [properties.energy]
+    specs.extend(getattr(dm, "rescale_shift_heads", None) or [])
+
+    by_key: Dict[str, HeadConfig] = {}
+    for spec in specs:
+        head = resolve_heads([spec])[0]
+        by_key[head.key] = head
+    return list(by_key.values())
+
+
 # --------------------------------------------------------------------------- #
 # Basic transforms
 # --------------------------------------------------------------------------- #
@@ -147,6 +158,40 @@ class PerSpeciesShift(nn.Module):
         data[self.key] = data[self.key] + sign * shift_term
         return data
 
+
+class PerSpeciesScale(nn.Module):
+    """
+    Per-species multiplicative scaling for atomwise properties.
+    """
+
+    def __init__(
+        self,
+        key: str,
+        values: Optional[Dict[int, float]],
+    ):
+        super().__init__()
+        values_dict = torch.ones((119,), dtype=torch.float)
+        if values is not None:
+            for k, v in values.items():
+                idx = atomic_numbers[k] if isinstance(k, str) else k
+                values_dict[idx] = v
+        self.register_buffer("values", values_dict)
+        self.register_buffer("enabled", torch.tensor(values is not None))
+        self.key = key
+
+    def load_values(self, values: Dict[int, float]):
+        self.values.fill_(1.0)
+        for k, v in values.items():
+            idx = atomic_numbers[k] if isinstance(k, str) else k
+            self.values[idx] = v
+        self.enabled.copy_(torch.tensor(True))
+
+    def forward(self, data: properties.Type) -> properties.Type:
+        if not self.enabled or self.key not in data:
+            return data
+        data[self.key] = data[self.key] * self.values[data[properties.Z]]
+        return data
+
 # --------------------------------------------------------------------------- #
 # High-level modules
 # --------------------------------------------------------------------------- #
@@ -180,6 +225,7 @@ class GlobalRescaleShift(nn.Module):
         # build per-head transforms
         scales = []
         shifts = []
+        per_species_scales = []
         per_species_shifts = []
         self._atomwise_output_keys: Dict[str, bool] = {}
         for h in self.heads:
@@ -190,13 +236,19 @@ class GlobalRescaleShift(nn.Module):
                 s_val = h.scale_by
             scales.append(ScaleTransform(h.key, s_val, trainable=scale_trainable))
             # shift
+            shift_mode = normalize_head_flag(h.shift_by)
             sh_val = 0.0
             if isinstance(h.shift_by, (int, float)) and not isinstance(h.shift_by, bool):
                 sh_val = h.shift_by
-            if h.atomwise_shift or h.atomwise_normalization:
+            if shift_mode is not None and (h.atomwise_shift or h.atomwise_normalization):
                 shifts.append(AtomwiseShift(h.key, sh_val, atomwise_shift=h.atomwise_shift, atomwise_normalization=h.atomwise_normalization, trainable=shift_trainable))
             else:
                 shifts.append(ShiftTransform(h.key, sh_val, trainable=shift_trainable))
+
+            init_scale_values = None
+            if isinstance(h.per_species_scale, dict):
+                init_scale_values = h.per_species_scale
+            per_species_scales.append(PerSpeciesScale(h.key, values=init_scale_values))
 
             # per-species shift (e.g., atomic energies), optional
             # per-species shift: create with initial values if provided; else None (enable via context if "auto")
@@ -207,6 +259,7 @@ class GlobalRescaleShift(nn.Module):
 
         self.scales = nn.ModuleList(scales)
         self.shifts = nn.ModuleList(shifts)
+        self.atomic_scales = nn.ModuleList(per_species_scales)
         self.atomic_shifts = nn.ModuleList(per_species_shifts)
         self._initialized = not any(
             normalize_head_flag(h.scale_by) in ("default", "rms")
@@ -234,6 +287,8 @@ class GlobalRescaleShift(nn.Module):
             return data
         # scale then shifts
         for sc in self.scales:
+            data = sc(data)
+        for sc in self.atomic_scales:
             data = sc(data)
         for sh in self.atomic_shifts:
             data = sh(data)
@@ -268,6 +323,11 @@ class GlobalRescaleShift(nn.Module):
 
         for sh in self.atomic_shifts:
             data = sh.apply(data, sign=-1.0)
+
+        for sc in self.atomic_scales:
+            if not sc.enabled or sc.key not in data:
+                continue
+            data[sc.key] = data[sc.key] / sc.values[data[properties.Z]]
 
         # undo scale
         for sc in self.scales:
@@ -304,17 +364,35 @@ class GlobalRescaleShift(nn.Module):
             if hasattr(shift_module, "shift"):
                 shift_module.shift.copy_(torch.tensor([shift_by], dtype=shift_module.shift.dtype))
 
-        # per-species shift handling
-        if isinstance(head.per_species_shift, dict):
-            self.atomic_shifts[i].load_values(head.per_species_shift)
-        elif isinstance(head.per_species_shift, str) and head.per_species_shift == "auto":
-            atomic_values = ctx.head_species_shift.get(head.key, None)
-            if atomic_values is not None:
-                self.atomic_shifts[i].load_values(atomic_values)
+            if isinstance(head.per_species_scale, dict):
+                self.atomic_scales[i].load_values(head.per_species_scale)
+            elif isinstance(head.per_species_scale, str) and head.per_species_scale == "auto":
+                atomic_scale_values = ctx.head_species_scale.get(head.key, None)
+                if atomic_scale_values is not None:
+                    self.atomic_scales[i].load_values(atomic_scale_values)
+
+            if isinstance(head.per_species_shift, dict):
+                self.atomic_shifts[i].load_values(head.per_species_shift)
+            elif isinstance(head.per_species_shift, str) and head.per_species_shift == "auto":
+                atomic_values = ctx.head_species_shift.get(head.key, None)
+                if atomic_values is not None:
+                    self.atomic_shifts[i].load_values(atomic_values)
         self._initialized = True
 
     def setup_from_datamodule(self, dm):
+        if hasattr(dm, "domain_modules"):
+            return
         try:
+            scale_trainable = any(isinstance(sc.scale, nn.Parameter) for sc in getattr(self, "scales", []))
+            shift_trainable = any(
+                hasattr(sh, "shift") and isinstance(sh.shift, nn.Parameter)
+                for sh in getattr(self, "shifts", [])
+            )
+            self.heads = _effective_rescale_heads(dm)
+            self._initialize_transforms(
+                scale_trainable=scale_trainable,
+                shift_trainable=shift_trainable,
+            )
             ctx = dm.build_context(self.heads)
         except Exception:
             return
@@ -358,6 +436,25 @@ class GlobalRescaleShift(nn.Module):
                 out[shift.key] = mapping
         return out
 
+    @property
+    @torch.jit.unused
+    def per_species_scales(self) -> Dict[str, Dict[str, float]]:
+        out: Dict[str, Dict[str, float]] = {}
+        for scale in self.atomic_scales:
+            enabled = scale.enabled
+            if torch.is_tensor(enabled) and not bool(enabled.item()):
+                continue
+            values = scale.values.detach().cpu()
+            nz = torch.nonzero(values != 1.0, as_tuple=True)[0]
+            mapping = {}
+            for z in nz.tolist():
+                if z == 0:
+                    continue
+                mapping[chemical_symbols[z]] = float(values[z].item())
+            if mapping:
+                out[scale.key] = mapping
+        return out
+
     @torch.jit.unused
     def __repr__(self):
         scales = [float(f"{x:.3g}") if isinstance(x, (int, float)) else x for x in self.scale_by]
@@ -379,28 +476,22 @@ class MultiDomainRescaleShift(nn.Module):
 
     def setup_from_datamodule(self, dm):
         if hasattr(dm, "build_contexts") and hasattr(dm, "domain_modules"):
-            contexts = dm.build_contexts(self.heads)
-            for dom_id, ctx in contexts.items():
-                if dom_id == "global":
-                    continue
-                # filter heads for this domain if domains are specified
-                filtered_heads = []
-                for h in self.heads:
-                    if h.domains is None:
-                        filtered_heads.append(h)
-                    else:
-                        ds = [str(d) for d in h.domains]
-                        if dom_id in ds:
-                            filtered_heads.append(h)
-                if not filtered_heads:
-                    continue
-                grs = GlobalRescaleShift(heads=filtered_heads)
-                grs.setup_from_context(ctx)
+            merged_heads: Dict[str, HeadConfig] = {}
+            for domain_name, domain_dm in dm.domain_modules.items():
+                dom_id = str(getattr(dm, "domain_to_id", {}).get(domain_name, domain_name))
+                heads = _effective_rescale_heads(domain_dm)
+                grs = GlobalRescaleShift(heads=heads)
+                grs.setup_from_datamodule(domain_dm)
                 self.domain_modules[str(dom_id)] = grs
+                for head in heads:
+                    merged_heads[head.key] = head
+            self.heads = list(merged_heads.values()) or [HEAD_PRESETS["energy"]]
         else:
-            grs = GlobalRescaleShift(heads=self.heads)
+            heads = _effective_rescale_heads(dm)
+            grs = GlobalRescaleShift(heads=heads)
             grs.setup_from_datamodule(dm)
             self.domain_modules["0"] = grs
+            self.heads = heads
 
     def _get_domain(self, data: properties.Type) -> str:
         dom = None
@@ -489,8 +580,13 @@ class PerSpeciesRescaleShift(nn.Module):
         return data
 
     def setup_from_datamodule(self, _datamodule):
-        # no legacy support
-        raise NotImplementedError("Use setup_from_context instead.")
+        # Converted official checkpoints can arrive with per-species scales/shifts
+        # already materialized. In that case initialization is complete and this
+        # hook should be a no-op during model.initialize_modules().
+        if self._initialized:
+            return
+        # There is currently no datamodule-driven auto-fit path for this module.
+        return
 
     def __repr__(self):
         return f"{self.__class__.__name__}(scales_keys={self.scales_keys}, shifts_keys={self.shifts_keys})"
