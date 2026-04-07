@@ -84,7 +84,7 @@ def ensure_resolvers() -> None:
     global _resolvers_registered
     if _resolvers_registered:
         return
-    from ..utils import register_resolvers
+    from ..config_utils import register_resolvers
 
     register_resolvers()
     _resolvers_registered = True

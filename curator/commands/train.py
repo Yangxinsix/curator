@@ -27,13 +27,11 @@ def train(config: DictConfig) -> None:
     from pytorch_lightning import seed_everything
     from pytorch_lightning.loggers import WandbLogger
 
+    from ..config_utils import normalize_config_sequences, prune_config_targets, read_user_config
     from ..model import LitNNP, NeuralNetworkPotential
     from ..utils import (
         CustomFormatter,
         find_best_model,
-        normalize_config_sequences,
-        prune_config_targets,
-        read_user_config,
         update_config_from_datamodule,
         update_model_domains,
     )
@@ -190,7 +188,8 @@ def tmp_train(config: DictConfig):
     from pytorch_lightning import seed_everything
 
     from ..train import train as train_loop
-    from ..utils import CustomFormatter, normalize_config_sequences, read_user_config
+    from ..config_utils import normalize_config_sequences, read_user_config
+    from ..utils import CustomFormatter
 
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="train")

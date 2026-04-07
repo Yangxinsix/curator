@@ -14,8 +14,9 @@ def simulate(config: DictConfig):
     from hydra.utils import instantiate
     from pytorch_lightning import seed_everything
 
+    from ..config_utils import normalize_config_sequences, prune_config_targets, read_user_config
     from ..simulate.sim_logging import log_simulation_summary
-    from ..utils import CustomFormatter, normalize_config_sequences, prune_config_targets, read_user_config
+    from ..utils import CustomFormatter
 
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="simulate")

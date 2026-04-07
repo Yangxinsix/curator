@@ -28,8 +28,9 @@ def evaluate(config: DictConfig):
     import torch
     from hydra.utils import instantiate
 
+    from ..config_utils import prune_config_targets, read_user_config
     from ..model import EnsembleModel
-    from ..utils import load_models, prune_config_targets, read_user_config
+    from ..utils import load_models
 
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="evaluate")

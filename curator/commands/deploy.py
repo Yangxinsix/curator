@@ -258,10 +258,11 @@ def deploy(
     import torch
     from e3nn.util.jit import script
 
+    from ..config_utils import normalize_config_sequences, read_user_config
     from ..layer.utils import find_layer_by_name_recursive
     from ..model import EnsembleModel
     from ..simulate.uncertainty._deploy import prepare_deploy_uncertainty
-    from ..utils import load_models, normalize_config_sequences, read_user_config
+    from ..utils import load_models
 
     target_path = _resolve_target_path(target_path, lammps_mliap=lammps_mliap)
 
