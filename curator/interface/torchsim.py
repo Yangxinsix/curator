@@ -137,7 +137,8 @@ class CuratorTorchSimAdapter(ModelInterface):
         batch = self._prepare_inputs(inputs)
         batch = self._to_device(batch, self.device)
         try:
-            outputs = self.model(batch)
+            with torch.enable_grad():
+                outputs = self.model(batch)
         except RuntimeError as exc:
             if "does not require grad" in str(exc):
                 outputs = self._forward_with_manual_forces(batch)

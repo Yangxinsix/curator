@@ -670,6 +670,7 @@ def select(config: DictConfig):
         selection=config.method, 
         n_random_features=config.n_random_features,
         save_features=config.save_features,
+        use_faiss=getattr(config, 'use_faiss', False),
     )
     indices = al.select(models, data_dict, al_batch_size=config.batch_size, debug=config.debug)
 

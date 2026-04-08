@@ -112,13 +112,25 @@ def lcmd_greedy(matrix: KernelMatrix, batch_size: int, n_train: int) -> torch.Te
     :param n_train: Number of training structures.
     :return: Indices of the selected structures.
     """
+    import time
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    start_time = time.time()
+    
     # assumes that the matrix contains pool samples, optionally followed by train samples
     n_pool = matrix.get_number_of_columns() - n_train
     sq_dists = matrix.get_diag()
     batch_idxs = [n_pool if n_train > 0 else torch.argmax(sq_dists)]
     closest_idxs = torch.zeros((n_pool,), dtype=int, device=sq_dists.device)
     min_sq_dists = matrix.get_sq_dists(batch_idxs[-1])[:n_pool]
-
+    
+    init_time = time.time()
+    logger.info(f"[lcmd_greedy] Initialization: {init_time - start_time:.3f}s, n_pool={n_pool}, batch_size={batch_size}")
+    
+    loop_start = time.time()
+    get_sq_dists_total = 0.0
+    
     for i in range(1, batch_size + n_train):
         if i < n_train:
             batch_idxs.append(n_pool+i)
@@ -130,12 +142,124 @@ def lcmd_greedy(matrix: KernelMatrix, batch_size: int, n_train: int) -> torch.Te
                 min_sq_dists, 
                 torch.zeros_like(min_sq_dists)-float("Inf")))
             batch_idxs.append(new_idx)
+        
+        t0 = time.time()
         sq_dists = matrix.get_sq_dists(batch_idxs[-1])[:n_pool]
+        get_sq_dists_total += time.time() - t0
+        
         new_min = sq_dists < min_sq_dists
         closest_idxs = torch.where(new_min, i, closest_idxs)
         min_sq_dists = torch.where(new_min, sq_dists, min_sq_dists)
 
+    loop_time = time.time() - loop_start
+    total_time = time.time() - start_time
+    
+    logger.info(f"[lcmd_greedy] Loop time: {loop_time:.3f}s")
+    logger.info(f"[lcmd_greedy] get_sq_dists total time: {get_sq_dists_total:.3f}s ({get_sq_dists_total/loop_time*100:.1f}%)")
+    logger.info(f"[lcmd_greedy] Total time: {total_time:.3f}s")
+    
     return torch.hstack(batch_idxs[n_train:])
+
+
+def lcmd_greedy_faiss(matrix: 'FaissKernelMatrix', batch_size: int, n_train: int) -> torch.Tensor:
+    """
+    Faiss accelerated lcmd_greedy
+    
+    Args:
+        matrix: FaissKernelMatrix instance
+        batch_size: Number of points to select
+        n_train: Number of training points (last n_train columns)
+        
+    Returns:
+        Selected indices from the pool
+    """
+    import numpy as np
+    import time
+    import logging
+    logger = logging.getLogger(__name__)
+    
+    try:
+        import faiss
+    except ImportError:
+        raise RuntimeError("Faiss is required for lcmd_greedy_faiss")
+    
+    start_time = time.time()
+    
+    n_total = matrix.get_number_of_columns()
+    n_pool = n_total - n_train
+    features = matrix.get_features()
+    n_features = features.shape[1]
+    device = matrix._device
+    
+    if n_train > 0:
+        selected_global_idxs = list(range(n_pool, n_pool + n_train))
+    else:
+        sq_dists = matrix.get_diag()
+        first_idx = torch.argmax(sq_dists).item()
+        selected_global_idxs = [first_idx]
+    
+    if matrix.use_gpu:
+        selected_index = faiss.GpuIndexFlatL2(matrix.res, n_features)
+    else:
+        selected_index = faiss.IndexFlatL2(n_features)
+    
+    selected_index.add(features[selected_global_idxs])
+    
+    pool_features = features[:n_pool].astype(np.float32)
+    
+    min_sq_dists, closest_idxs = selected_index.search(pool_features, k=1)
+    min_sq_dists = min_sq_dists.flatten()
+    closest_idxs = closest_idxs.flatten()
+    
+    init_time = time.time()
+    logger.info(f"[lcmd_greedy_faiss] Initialization: {init_time - start_time:.3f}s, n_pool={n_pool}, batch_size={batch_size}")
+    
+    selected_from_pool = []
+    
+    loop_start = time.time()
+    dist_calc_total = 0.0
+    
+    for i in range(batch_size):
+        n_selected = len(selected_global_idxs)
+        bincount = np.bincount(closest_idxs, weights=min_sq_dists, minlength=n_selected)
+        
+        max_weight = np.max(bincount)
+        
+        cluster_weights = bincount[closest_idxs]
+        is_in_max_cluster = (cluster_weights == max_weight)
+        
+        masked_dists = np.where(is_in_max_cluster, min_sq_dists, -np.inf)
+        new_idx = int(np.argmax(masked_dists))
+        
+        if new_idx in selected_from_pool:
+            break
+            
+        selected_from_pool.append(new_idx)
+        selected_global_idxs.append(new_idx)
+        
+        new_feature = features[new_idx:new_idx+1].astype(np.float32)
+        selected_index.add(new_feature)
+        
+        new_idx_in_selected = len(selected_global_idxs) - 1
+        
+        t0 = time.time()
+        new_dists = np.sum((pool_features - new_feature) ** 2, axis=1)
+        dist_calc_total += time.time() - t0
+        
+        is_closer = new_dists < min_sq_dists
+        min_sq_dists = np.where(is_closer, new_dists, min_sq_dists)
+        closest_idxs = np.where(is_closer, new_idx_in_selected, closest_idxs)
+        
+        min_sq_dists[new_idx] = -np.inf
+    
+    loop_time = time.time() - loop_start
+    total_time = time.time() - start_time
+    
+    logger.info(f"[lcmd_greedy_faiss] Loop time: {loop_time:.3f}s")
+    logger.info(f"[lcmd_greedy_faiss] Distance calculation time: {dist_calc_total:.3f}s ({dist_calc_total/loop_time*100:.1f}%)")
+    logger.info(f"[lcmd_greedy_faiss] Total time: {total_time:.3f}s")
+    
+    return torch.tensor(selected_from_pool, device=device, dtype=torch.long)
 
 def deterministic_CUR(matrix: KernelMatrix, batch_size: int, lambd: float=0.1, eposilon: float=1E-3) -> torch.Tensor:
     """

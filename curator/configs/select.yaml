@@ -16,3 +16,4 @@ save_features: false         # persist computed features to disk
 save_images: false           # save selected structures
 debug: false                 # enable verbose debugging
 transforms: []               # transforms applied before feature extraction
+use_faiss: false             # use Faiss for accelerated distance computation (requires faiss-gpu or faiss-cpu)

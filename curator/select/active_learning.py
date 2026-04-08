@@ -13,38 +13,48 @@ except ImportError:
     from curator.utils import scatter_add, scatter_mean, scatter_max
 import logging
 from curator.layer._feature import FeatureExtractor, RandomProjections
+from e3nn import o3
 
 logger = logging.getLogger(__name__)
+
+# Try to import faiss, set flag if available
+try:
+    import faiss
+    FAISS_AVAILABLE = True
+except ImportError:
+    FAISS_AVAILABLE = False
+    logger.warning("Faiss not installed. FaissKernelMatrix will not be available. "
+                   "Install with: conda install -c pytorch faiss-gpu (or faiss-cpu)")
     
-class RandomProjections:
-    """Store parameters of random projections"""
-    def __init__(
-            self, 
-            model: nn.Module, 
-            num_features: int,
-            dtype = torch.get_default_dtype(),
-            target_layer: str = 'readout_mlp',
-        ):
-        self.num_features = num_features
-        self.in_feat_proj = []
-        self.out_grad_proj = []
-        device = next(model.parameters()).device
-        if self.num_features > 0:
-            layer = find_layer_by_name_recursive(model, target_layer)
-            representation = getattr(model, "representation", None)
-            if representation is not None and representation.__class__.__name__ == "MACE":
-                layer = layer[-1]
-            # Input feature projection matrices (in_features + 1 for bias term), output gradient projection matrices
-            for l in layer.children():
-                if isinstance(l, nn.Linear):
-                    self.in_feat_proj.append(torch.randn(l.in_features + 1, self.num_features, dtype=dtype, device=device))
-                    self.out_grad_proj.append(torch.randn(l.out_features, self.num_features, dtype=dtype, device=device))
-                elif isinstance(l, o3.Linear):
-                    self.in_feat_proj.append(torch.randn(l.irreps_in.dim + 1, self.num_features, dtype=dtype, device=device))
-                    self.out_grad_proj.append(torch.randn(l.irreps_out.dim, self.num_features, dtype=dtype, device=device))
+# class RandomProjections:
+#     """Store parameters of random projections"""
+#     def __init__(
+#             self, 
+#             model: nn.Module, 
+#             num_features: int,
+#             dtype = torch.get_default_dtype(),
+#             target_layer: str = 'readout_mlp',
+#         ):
+#         self.num_features = num_features
+#         self.in_feat_proj = []
+#         self.out_grad_proj = []
+#         device = next(model.parameters()).device
+#         if self.num_features > 0:
+#             layer = find_layer_by_name_recursive(model, target_layer)
+#             representation = getattr(model, "representation", None)
+#             if representation is not None and representation.__class__.__name__ == "MACE":
+#                 layer = layer[-1]
+#             # Input feature projection matrices (in_features + 1 for bias term), output gradient projection matrices
+#             for l in layer.children():
+#                 if isinstance(l, nn.Linear):
+#                     self.in_feat_proj.append(torch.randn(l.in_features + 1, self.num_features, dtype=dtype, device=device))
+#                     self.out_grad_proj.append(torch.randn(l.out_features, self.num_features, dtype=dtype, device=device))
+#                 elif isinstance(l, o3.Linear):
+#                     self.in_feat_proj.append(torch.randn(l.irreps_in.dim + 1, self.num_features, dtype=dtype, device=device))
+#                     self.out_grad_proj.append(torch.randn(l.irreps_out.dim, self.num_features, dtype=dtype, device=device))
             
-    def __repr__(self):
-        return f'{self.__class__.__name__}(num_features={self.num_features})'
+#     def __repr__(self):
+#         return f'{self.__class__.__name__}(num_features={self.num_features})'
     
 class FeatureStatistics:
     """Generate features from trained models and datasets."""
@@ -246,7 +256,7 @@ class FeatureStatistics:
         mean = torch.mean(features, dim=0)
         var = torch.var(features, dim=0)
         var = torch.where(var == 0, torch.ones_like(var), var)
-        return (features - mean) / var
+        return (features - mean) / torch.sqrt(var)
     
     def _compute_fisher(self, g: torch.Tensor) -> torch.Tensor:
         return torch.einsum('mci, mcj -> mij', g, g)
@@ -639,6 +649,7 @@ class GeneralActiveLearning:
     :param selection: Selection method, one of "max_dist_greedy", "deterministic_CUR", "lcmd_greedy", "max_det_greedy" or "max_diag".
     :param n_random_features: If "n_random_features = 0", do not use random projections.
                               Otherwise, use random projections of all linear-layer gradients.
+    :param use_faiss: If True, use Faiss for accelerated distance computation. Requires faiss to be installed.
     """
     def __init__(
         self,
@@ -646,11 +657,13 @@ class GeneralActiveLearning:
         selection = 'max_diag',
         n_random_features = 0,
         save_features = False,
+        use_faiss = False,
     ):
         self.kernel = kernel
         self.selection = selection
         self.n_random_features = n_random_features
         self.save_features = save_features
+        self.use_faiss = use_faiss
     
     def select(
         self, 
@@ -691,7 +704,13 @@ class GeneralActiveLearning:
         elif self.selection == 'max_det_greedy':
             idxs = max_det_greedy(matrix=matrix, batch_size=al_batch_size)
         elif self.selection == 'lcmd_greedy':
-            idxs = lcmd_greedy(matrix=matrix, batch_size=al_batch_size, n_train=n_train)
+            # 如果使用 Faiss，调用优化版本
+            if self.use_faiss:
+                logger.info("Using Faiss-accelerated lcmd_greedy_faiss")
+                idxs = lcmd_greedy_faiss(matrix=matrix, batch_size=al_batch_size, n_train=n_train)
+            else:
+                logger.info("Using standard lcmd_greedy")
+                idxs = lcmd_greedy(matrix=matrix, batch_size=al_batch_size, n_train=n_train)
         elif self.selection == 'max_det_greedy_local':
             idxs = max_det_greedy_local(matrix=matrix, batch_size=al_batch_size, num_atoms=num_atoms)
         elif self.selection == False:
@@ -708,22 +727,29 @@ class GeneralActiveLearning:
     def _get_kernel_matrix(self, pool_stats: FeatureStatistics, train_stats: Optional[FeatureStatistics]=None) -> KernelMatrix:
         stats_list = [pool_stats] if train_stats == None else [pool_stats, train_stats]
         
+        # Helper function to create the appropriate matrix type
+        def create_feature_matrix(features: torch.Tensor) -> KernelMatrix:
+            if self.use_faiss:
+                return FaissKernelMatrix(features, use_gpu=True)
+            else:
+                return FeatureKernelMatrix(features)
+        
         if self.kernel == 'full-g':
-            return FeatureKernelMatrix(torch.cat([s.get_features(kernel='full-gradient') for s in stats_list], dim=1))
+            return create_feature_matrix(torch.cat([s.get_features(kernel='full-gradient') for s in stats_list], dim=1))
         elif self.kernel == 'll-g':
-            return FeatureKernelMatrix(torch.cat([s.get_features(kernel='ll-gradient') for s in stats_list], dim=1))
+            return create_feature_matrix(torch.cat([s.get_features(kernel='ll-gradient') for s in stats_list], dim=1))
         elif self.kernel == 'gnn':
-            return FeatureKernelMatrix(torch.cat([s.get_features(kernel='gnn') for s in stats_list], dim=1))
+            return create_feature_matrix(torch.cat([s.get_features(kernel='gnn') for s in stats_list], dim=1))
         elif self.kernel == 'local_full-g':
-            matrix = FeatureKernelMatrix(torch.cat([s.get_features(kernel='local_full-g') for s in stats_list], dim=1))
+            matrix = create_feature_matrix(torch.cat([s.get_features(kernel='local_full-g') for s in stats_list], dim=1))
             num_atoms = torch.cat([s.get_num_atoms() for s in stats_list])
             return matrix, num_atoms
         elif self.kernel == 'local_ll-g':
-            matrix = FeatureKernelMatrix(torch.cat([s.get_features(kernel='local_ll-g') for s in stats_list], dim=1))
+            matrix = create_feature_matrix(torch.cat([s.get_features(kernel='local_ll-g') for s in stats_list], dim=1))
             num_atoms = torch.cat([s.get_num_atoms() for s in stats_list])
             return matrix, num_atoms 
         elif self.kernel == 'local_gnn':
-            matrix = FeatureKernelMatrix(torch.cat([s.get_features(kernel='local_gnn') for s in stats_list], dim=1))
+            matrix = create_feature_matrix(torch.cat([s.get_features(kernel='local_gnn') for s in stats_list], dim=1))
             num_atoms = torch.cat([s.get_num_atoms() for s in stats_list])
             return matrix, num_atoms 
         elif self.kernel == 'full-F_inv':

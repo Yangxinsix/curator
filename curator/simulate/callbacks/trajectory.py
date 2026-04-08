@@ -296,10 +296,18 @@ class TrajectoryWriter(Callback):
             self._trajs.append(Trajectory(p, self.mode))
 
     def _atoms_from_ctx(self, ctx: SimContext) -> List[Any]:
+        """Convert simulation context to a list of ASE Atoms objects.
+        
+        If using TorchSim, this also attaches velocities from momenta.
+        """
         state = ctx.state.get("sim_state")
         if state is not None and ts is not None:
             try:
-                return ts.io.state_to_atoms(state)
+                atoms_list = ts.io.state_to_atoms(state)
+                # Attach velocities from momenta if available
+                if hasattr(state, 'momenta') and state.momenta is not None:
+                    self._attach_velocities_from_state(atoms_list, state)
+                return atoms_list
             except Exception:
                 pass
         if isinstance(ctx.atoms, list):
@@ -307,6 +315,26 @@ class TrajectoryWriter(Callback):
         if ctx.atoms is not None:
             return [ctx.atoms]
         return []
+    
+    def _attach_velocities_from_state(self, atoms_list: List[Atoms], state) -> None:
+        """Attach velocities to atoms from SimState momenta.
+        
+        velocity = momentum / mass
+        """
+        try:
+            momenta = state.momenta.detach().cpu().numpy()
+            masses = state.masses.detach().cpu().numpy()
+            system_indices = state.system_idx.detach().cpu().numpy()
+            
+            for sys_idx, atoms in enumerate(atoms_list):
+                mask = system_indices == sys_idx
+                sys_momenta = momenta[mask]
+                sys_masses = masses[mask]
+                # velocity = p / m
+                velocities = sys_momenta / sys_masses[:, np.newaxis]
+                atoms.set_velocities(velocities)
+        except Exception as e:
+            logger.debug(f"Failed to attach velocities: {e}")
 
     def on_sim_start(self, ctx: SimContext):
         atoms_list = self._atoms_from_ctx(ctx)
