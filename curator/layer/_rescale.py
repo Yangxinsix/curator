@@ -6,9 +6,9 @@ from curator.data.datamodule import DataContext
 from curator.data.properties import HeadConfig, HEAD_PRESETS, resolve_heads, normalize_head_flag
 
 try:
-    from torch_scatter import scatter_add
+    from torch_scatter import scatter_add, scatter_mean
 except ImportError:  # pragma: no cover
-    from curator.utils import scatter_add
+    from curator.utils import scatter_add, scatter_mean
 
 from ase.data import atomic_numbers, chemical_symbols
 
@@ -28,7 +28,13 @@ def _effective_rescale_heads(dm) -> List[HeadConfig]:
 # Basic transforms
 # --------------------------------------------------------------------------- #
 class ScaleTransform(nn.Module):
-    def __init__(self, key: str, scale: Union[float, torch.Tensor], trainable: bool = False):
+    def __init__(
+        self,
+        key: str,
+        scale: Union[float, torch.Tensor],
+        trainable: bool = False,
+        data_key: Optional[str] = None,
+    ):
         super().__init__()
         scale = scale if torch.is_tensor(scale) else torch.tensor([scale], dtype=torch.float)
         if trainable:
@@ -36,17 +42,25 @@ class ScaleTransform(nn.Module):
         else:
             self.register_buffer("scale", scale)
         self.key = key
+        self.data_key = data_key or key
 
     def forward(self, data: properties.Type) -> properties.Type:
-        if self.key in data:
-            data[self.key] = data[self.key] * self.scale
+        target_key = self.data_key if self.data_key in data else self.key
+        if target_key in data:
+            data[target_key] = data[target_key] * self.scale
         return data
 
 
 class ShiftTransform(nn.Module):
     """Simple shift: add scalar shift to a property."""
 
-    def __init__(self, key: str, shift: Union[float, torch.Tensor], trainable: bool = False):
+    def __init__(
+        self,
+        key: str,
+        shift: Union[float, torch.Tensor],
+        trainable: bool = False,
+        data_key: Optional[str] = None,
+    ):
         super().__init__()
         shift = shift if torch.is_tensor(shift) else torch.tensor([shift], dtype=torch.float)
         if trainable:
@@ -54,11 +68,13 @@ class ShiftTransform(nn.Module):
         else:
             self.register_buffer("shift", shift)
         self.key = key
+        self.data_key = data_key or key
 
     def forward(self, data: properties.Type) -> properties.Type:
-        if self.key not in data:
+        target_key = self.data_key if self.data_key in data else self.key
+        if target_key not in data:
             return data
-        data[self.key] = data[self.key] + self.shift
+        data[target_key] = data[target_key] + self.shift
         return data
 
 
@@ -76,6 +92,8 @@ class AtomwiseShift(nn.Module):
         atomwise_shift: bool = False,
         atomwise_normalization: bool = True,
         trainable: bool = False,
+        data_key: Optional[str] = None,
+        atomwise_data_key: bool = False,
     ):
         super().__init__()
         shift = shift if torch.is_tensor(shift) else torch.tensor([shift], dtype=torch.float)
@@ -84,25 +102,35 @@ class AtomwiseShift(nn.Module):
         else:
             self.register_buffer("shift", shift)
         self.key = key
+        self.data_key = data_key or key
         self.atomwise_shift = atomwise_shift
         self.atomwise_normalization = atomwise_normalization
+        self.atomwise_data_key = atomwise_data_key
 
-    def compute_shift(self, data: properties.Type) -> torch.Tensor:
-        if self.atomwise_shift:
+    def _resolve_key(self, data: properties.Type) -> str:
+        return self.data_key if self.data_key in data else self.key
+
+    def _use_atomwise_mode(self, target_key: str) -> bool:
+        return self.atomwise_data_key and target_key == self.data_key and self.data_key != self.key
+
+    def compute_shift(self, data: properties.Type, target_key: Optional[str] = None) -> torch.Tensor:
+        target_key = self._resolve_key(data) if target_key is None else target_key
+        if self.atomwise_shift or self._use_atomwise_mode(target_key):
             return self.shift
         if self.atomwise_normalization:
             return data[properties.n_atoms] * self.shift
         return self.shift
 
     def forward(self, data: properties.Type) -> properties.Type:
-        if self.key not in data:
+        target_key = self._resolve_key(data)
+        if target_key not in data:
             return data
-        if self.atomwise_shift:
-            data[self.key] = data[self.key] + self.shift
+        if self.atomwise_shift or self._use_atomwise_mode(target_key):
+            data[target_key] = data[target_key] + self.shift
             return data
 
-        s = self.compute_shift(data)
-        data[self.key] = data[self.key] + s
+        s = self.compute_shift(data, target_key=target_key)
+        data[target_key] = data[target_key] + s
         return data
 
 
@@ -119,6 +147,8 @@ class PerSpeciesShift(nn.Module):
         key: str,
         values: Optional[Dict[int, float]],
         atomwise_shift: bool = False,
+        data_key: Optional[str] = None,
+        atomwise_data_key: bool = False,
     ):
         super().__init__()
         values_dict = torch.zeros((119,), dtype=torch.float)
@@ -129,7 +159,17 @@ class PerSpeciesShift(nn.Module):
         self.register_buffer("values", values_dict)
         self.register_buffer("enabled", torch.tensor(values is not None))
         self.key = key
+        self.data_key = data_key or key
         self.atomwise_shift = atomwise_shift
+        self.atomwise_data_key = atomwise_data_key
+
+    def _resolve_key(self, data: properties.Type) -> str:
+        return self.data_key if self.data_key in data else self.key
+
+    def _use_atomwise_mode(self, target_key: str) -> bool:
+        return self.atomwise_shift or (
+            self.atomwise_data_key and target_key == self.data_key and self.data_key != self.key
+        )
 
     def load_values(self, values: Dict[int, float]):
         self.values.zero_()
@@ -146,16 +186,19 @@ class PerSpeciesShift(nn.Module):
         data: properties.Type,
         sign: float = 1.0,
     ) -> properties.Type:
-        if not self.enabled or self.key not in data:
+        target_key = self._resolve_key(data)
+        if not self.enabled or target_key not in data:
             return data
         per_atom = self.values[data[properties.Z]]
-        if self.atomwise_shift:
-            data[self.key] = data[self.key] + sign * per_atom
+        while per_atom.dim() < data[target_key].dim():
+            per_atom = per_atom.unsqueeze(-1)
+        if self._use_atomwise_mode(target_key):
+            data[target_key] = data[target_key] + sign * per_atom
             return data
 
         # structure-level: sum over atoms
         shift_term = scatter_add(per_atom, data[properties.image_idx])
-        data[self.key] = data[self.key] + sign * shift_term
+        data[target_key] = data[target_key] + sign * shift_term
         return data
 
 
@@ -168,6 +211,7 @@ class PerSpeciesScale(nn.Module):
         self,
         key: str,
         values: Optional[Dict[int, float]],
+        data_key: Optional[str] = None,
     ):
         super().__init__()
         values_dict = torch.ones((119,), dtype=torch.float)
@@ -178,6 +222,7 @@ class PerSpeciesScale(nn.Module):
         self.register_buffer("values", values_dict)
         self.register_buffer("enabled", torch.tensor(values is not None))
         self.key = key
+        self.data_key = data_key or key
 
     def load_values(self, values: Dict[int, float]):
         self.values.fill_(1.0)
@@ -187,9 +232,15 @@ class PerSpeciesScale(nn.Module):
         self.enabled.copy_(torch.tensor(True))
 
     def forward(self, data: properties.Type) -> properties.Type:
-        if not self.enabled or self.key not in data:
+        target_key = self.data_key if self.data_key in data else self.key
+        if not self.enabled or target_key not in data:
             return data
-        data[self.key] = data[self.key] * self.values[data[properties.Z]]
+        if self.data_key != self.key and target_key == self.key:
+            return data
+        factors = self.values[data[properties.Z]]
+        while factors.dim() < data[target_key].dim():
+            factors = factors.unsqueeze(-1)
+        data[target_key] = data[target_key] * factors
         return data
 
 # --------------------------------------------------------------------------- #
@@ -230,32 +281,72 @@ class GlobalRescaleShift(nn.Module):
         self._atomwise_output_keys: Dict[str, bool] = {}
         for h in self.heads:
             self._atomwise_output_keys[h.key] = bool(h.reduction is None)
+            target_key = self._preferred_data_key(h)
+            atomwise_data_key = target_key != h.key
             # scale
             s_val = 1.0
             if isinstance(h.scale_by, (int, float)) and not isinstance(h.scale_by, bool):
                 s_val = h.scale_by
-            scales.append(ScaleTransform(h.key, s_val, trainable=scale_trainable))
+            scales.append(
+                ScaleTransform(
+                    h.key,
+                    s_val,
+                    trainable=scale_trainable,
+                    data_key=target_key,
+                )
+            )
             # shift
             shift_mode = normalize_head_flag(h.shift_by)
             sh_val = 0.0
             if isinstance(h.shift_by, (int, float)) and not isinstance(h.shift_by, bool):
                 sh_val = h.shift_by
             if shift_mode is not None and (h.atomwise_shift or h.atomwise_normalization):
-                shifts.append(AtomwiseShift(h.key, sh_val, atomwise_shift=h.atomwise_shift, atomwise_normalization=h.atomwise_normalization, trainable=shift_trainable))
+                shifts.append(
+                    AtomwiseShift(
+                        h.key,
+                        sh_val,
+                        atomwise_shift=h.atomwise_shift,
+                        atomwise_normalization=h.atomwise_normalization,
+                        trainable=shift_trainable,
+                        data_key=target_key,
+                        atomwise_data_key=atomwise_data_key,
+                    )
+                )
             else:
-                shifts.append(ShiftTransform(h.key, sh_val, trainable=shift_trainable))
+                shifts.append(
+                    ShiftTransform(
+                        h.key,
+                        sh_val,
+                        trainable=shift_trainable,
+                        data_key=target_key,
+                    )
+                )
 
             init_scale_values = None
             if isinstance(h.per_species_scale, dict):
                 init_scale_values = h.per_species_scale
-            per_species_scales.append(PerSpeciesScale(h.key, values=init_scale_values))
+            per_species_scales.append(
+                PerSpeciesScale(
+                    h.key,
+                    values=init_scale_values,
+                    data_key=target_key,
+                )
+            )
 
             # per-species shift (e.g., atomic energies), optional
             # per-species shift: create with initial values if provided; else None (enable via context if "auto")
             init_values = None
             if isinstance(h.per_species_shift, dict):
                 init_values = h.per_species_shift
-            per_species_shifts.append(PerSpeciesShift(h.key, values=init_values, atomwise_shift=h.atomwise_shift))
+            per_species_shifts.append(
+                PerSpeciesShift(
+                    h.key,
+                    values=init_values,
+                    atomwise_shift=h.atomwise_shift,
+                    data_key=target_key,
+                    atomwise_data_key=atomwise_data_key,
+                )
+            )
 
         self.scales = nn.ModuleList(scales)
         self.shifts = nn.ModuleList(shifts)
@@ -273,6 +364,51 @@ class GlobalRescaleShift(nn.Module):
             v = val.detach().cpu().reshape(-1).tolist()
             val = v[0] if len(v) == 1 else v
         return val
+
+    @staticmethod
+    def _preferred_data_key(head: HeadConfig) -> str:
+        if head.is_atomwise and head.atomwise_key:
+            return head.atomwise_key
+        return head.key
+
+    @staticmethod
+    def _ensure_image_idx(data: properties.Type, key: str) -> bool:
+        if properties.image_idx in data:
+            return True
+        if properties.n_atoms not in data:
+            return False
+        n_atoms = data[properties.n_atoms]
+        if torch.is_tensor(n_atoms):
+            if n_atoms.numel() == 0:
+                return False
+            n_atoms_val = int(n_atoms.reshape(-1)[0].item())
+            device = n_atoms.device
+        else:
+            n_atoms_val = int(n_atoms)
+            device = None
+        ref = data.get(key)
+        if torch.is_tensor(ref):
+            device = ref.device
+        data[properties.image_idx] = torch.zeros(n_atoms_val, dtype=torch.long, device=device)
+        return True
+
+    def _sync_reduced_outputs(self, data: properties.Type) -> properties.Type:
+        for head in self.heads:
+            atomwise_key = getattr(head, "atomwise_key", None)
+            reduction = getattr(head, "reduction", None)
+            if not head.is_atomwise or atomwise_key is None or atomwise_key == head.key:
+                continue
+            if reduction not in {"sum", "mean"}:
+                continue
+            if atomwise_key not in data:
+                continue
+            if not self._ensure_image_idx(data, atomwise_key):
+                continue
+            if reduction == "sum":
+                data[head.key] = scatter_add(data[atomwise_key], data[properties.image_idx], dim=0)
+            else:
+                data[head.key] = scatter_mean(data[atomwise_key], data[properties.image_idx], dim=0)
+        return data
 
     def forward(self, data: properties.Type) -> properties.Type:
         return self.scale(data, force_process=False)
@@ -297,7 +433,7 @@ class GlobalRescaleShift(nn.Module):
                 data = sh(data)
             else:
                 data = sh(data)
-        return data
+        return self._sync_reduced_outputs(data)
 
     def unscale(
         self,
@@ -310,31 +446,39 @@ class GlobalRescaleShift(nn.Module):
 
         # undo shifts (structure + atomwise)
         for sh in self.shifts:
-            if sh.key not in data:
+            target_key = sh.data_key if getattr(sh, "data_key", sh.key) in data else sh.key
+            if target_key not in data:
                 continue
             if isinstance(sh, AtomwiseShift):
-                if sh.atomwise_shift:
-                    data[sh.key] = data[sh.key] - sh.shift
+                if sh.atomwise_shift or sh._use_atomwise_mode(target_key):
+                    data[target_key] = data[target_key] - sh.shift
                 else:
-                    s = sh.compute_shift(data)
-                    data[sh.key] = data[sh.key] - s
+                    s = sh.compute_shift(data, target_key=target_key)
+                    data[target_key] = data[target_key] - s
             else:
-                data[sh.key] = data[sh.key] - sh.shift
+                data[target_key] = data[target_key] - sh.shift
 
         for sh in self.atomic_shifts:
             data = sh.apply(data, sign=-1.0)
 
         for sc in self.atomic_scales:
-            if not sc.enabled or sc.key not in data:
+            target_key = sc.data_key if getattr(sc, "data_key", sc.key) in data else sc.key
+            if not sc.enabled or target_key not in data:
                 continue
-            data[sc.key] = data[sc.key] / sc.values[data[properties.Z]]
+            if getattr(sc, "data_key", sc.key) != sc.key and target_key == sc.key:
+                continue
+            factors = sc.values[data[properties.Z]]
+            while factors.dim() < data[target_key].dim():
+                factors = factors.unsqueeze(-1)
+            data[target_key] = data[target_key] / factors
 
         # undo scale
         for sc in self.scales:
-            if sc.key in data:
-                data[sc.key] = data[sc.key] / sc.scale
+            target_key = sc.data_key if getattr(sc, "data_key", sc.key) in data else sc.key
+            if target_key in data:
+                data[target_key] = data[target_key] / sc.scale
 
-        return data
+        return self._sync_reduced_outputs(data)
 
     def setup_from_context(self, ctx: DataContext):
         if self._initialized:
