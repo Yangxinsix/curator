@@ -165,6 +165,17 @@ class LAMMPS_MLIAP(MLIAPUnified):
         if emin >= 1 and emax <= self.num_species:
             return mapping[elems - 1]
         return elems
+
+    @staticmethod
+    def _move_kernel_projectors_to_device(model: torch.nn.Module, device: torch.device) -> None:
+        for module in model.modules():
+            kernels = getattr(module, "kernels", None)
+            if not kernels:
+                continue
+            for kernel in kernels:
+                projector = getattr(kernel, "projector", None)
+                if isinstance(projector, torch.nn.Module):
+                    projector.to(device)
         
     @staticmethod
     def _retarget_rescale_module(module):
@@ -283,6 +294,7 @@ class LAMMPS_MLIAP(MLIAPUnified):
 
         self.device = device
         self.model = self.model.to(device)
+        self._move_kernel_projectors_to_device(self.model, device)
         logging.info(f"CURATOR model initialized on device: {device}")
         self.initialized = True
 

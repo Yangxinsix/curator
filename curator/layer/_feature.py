@@ -374,7 +374,9 @@ class FeatureCalculator(UncertaintyModule):
                 target_layer=self.extractor.target_layer,
                 target_domain=self.extractor.target_domain,
             )
-        _assign_non_module_attr(self, "repr_callback", None)
+        # Keep a direct model handle for code paths that bypass the extractor
+        # hooks, such as local-gnn with identity features.
+        _assign_non_module_attr(self, "repr_callback", self.extractor.repr_callback)
         self.output_features = output_features
         self.model_outputs = [properties.feature] if self.output_features else []
         self.compute_maha_dist = compute_maha_dist
