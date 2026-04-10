@@ -170,7 +170,7 @@ def load_model(
     cfg: Optional[DictConfig] = None,
 ) -> torch.nn.Module:
     if isinstance(model_file, str):
-        from curator.model.external import is_external_model_spec, load_external_model
+        from curator.model.adapter import is_external_model_spec, load_external_model
 
         if is_external_model_spec(model_file):
             return load_external_model(model_file, device=device)
@@ -215,7 +215,7 @@ def load_models(
     for m in model_like:
         if isinstance(m, (str, Path)):
             if isinstance(m, str):
-                from curator.model.external import is_external_model_spec, load_external_model
+                from curator.model.adapter import is_external_model_spec, load_external_model
 
                 if is_external_model_spec(m):
                     models.append(load_external_model(m, device=device))

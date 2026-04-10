@@ -17,8 +17,10 @@ from .conversion import (
 from .multi_domain import align_model_domains, align_model_domains_from_datamodule
 from .external import (
     AllegroRepresentation,
-    AllegroAdapter,
     ESENRepresentation,
+)
+from .adapter import (
+    AllegroAdapter,
     ESENAdapter,
     ExternalModelSpec,
     MatGLAdapter,
