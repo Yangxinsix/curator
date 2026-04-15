@@ -3,7 +3,6 @@ from __future__ import annotations
 from importlib import util
 import contextlib
 import logging
-import sys
 from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union, Literal
 from pathlib import Path
 
@@ -20,7 +19,7 @@ try:
 except ImportError:
     from curator.utils import scatter_add, scatter_mean
 try:
-    from tqdm import tqdm
+    from tqdm.auto import tqdm
     from tqdm.contrib.logging import logging_redirect_tqdm
 except ImportError:
     tqdm = None
@@ -646,7 +645,7 @@ class FeatureCalculator(UncertaintyModule):
         total = len(dataset)
         counts: List[int] = []
         iterator = range(total)
-        use_tqdm = tqdm is not None and sys.stderr.isatty()
+        use_tqdm = tqdm is not None
         log_every = max(1, total // 10) if total > 0 else None
         if use_tqdm:
             iterator = tqdm(iterator, desc="build-image-idx", total=total)
