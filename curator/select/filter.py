@@ -120,7 +120,7 @@ class ForceFilter(Filter):
     def _forces_from_item(item) -> Optional[torch.Tensor]:
         if isinstance(item, Atoms):
             try:
-                return torch.as_tensor(item.get_forces())
+                return torch.as_tensor(item.get_forces(apply_constraint=False))
             except Exception:
                 return None
         if isinstance(item, dict):
