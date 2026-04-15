@@ -105,10 +105,32 @@ void ComputeUncertaintyAtom::compute_peratom()
     vector_atom = uncertainty_array;
   }
 
-  int nvalues = 0;
-  double *values = get_pair_uncertainty_array_ptr(pair_ptr, uncertainty_name, nvalues);
   int *mask = atom->mask;
   int nlocal = atom->nlocal;
+  int nvalues = 0;
+  int columns = 0;
+  double *values = static_cast<double *>(pair_ptr->extract_peratom(uncertainty_name.c_str(), columns));
+
+  if (values != nullptr && columns != 0) {
+    error->all(
+      FLERR,
+      "Compute uncertainty/atom expects a per-atom vector, not a per-atom array"
+    );
+  }
+
+  if (values != nullptr) {
+    for (int i = 0; i < nlocal; i++) {
+      uncertainty_array[i] = (mask[i] & groupbit) ? values[i] : 0.0;
+    }
+    if (debug_mode) {
+      std::cout << "Key: " << uncertainty_name << ", Nlocal: " << nlocal << std::endl;
+    }
+    return;
+  }
+
+  // Backward-compatible fallback for pair_curator, which still stores per-atom
+  // uncertainty arrays outside Pair::extract_peratom().
+  values = get_pair_uncertainty_array_ptr(pair_ptr, uncertainty_name, nvalues);
 
   if (values == nullptr) {
     for (int i = 0; i < nlocal; i++) uncertainty_array[i] = 0.0;
