@@ -45,7 +45,8 @@ class GradientOutput(torch.nn.Module):
             edge_diff = data[properties.edge_diff]
             forces_dim = int(torch.sum(data[properties.n_atoms]))
             edge_idx = data[properties.edge_idx]
-            if 'forces' in self.model_outputs:
+            # Check for either 'forces' or 'edge_forces' in model_outputs
+            if properties.forces in self.model_outputs or properties.edge_forces in self.model_outputs:
                 grad_outputs : List[Optional[torch.Tensor]] = [torch.ones_like(energy)]    # for model deploy
                 dE_ddiff = torch.autograd.grad(
                     [energy,],
@@ -54,7 +55,7 @@ class GradientOutput(torch.nn.Module):
                     retain_graph=training,
                     create_graph=training,
                 )
-                dE_ddiff = torch.zeros_like(data[properties.positions]) if dE_ddiff is None else dE_ddiff[0]   # for torch.jit.script
+                dE_ddiff = torch.zeros_like(edge_diff) if dE_ddiff is None else dE_ddiff[0]   # for torch.jit.script
                 assert dE_ddiff is not None
                 if self.compute_edge_forces:
                     data[properties.edge_forces] = dE_ddiff  # Match LAMMPS sign convention

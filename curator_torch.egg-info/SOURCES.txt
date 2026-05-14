@@ -147,6 +147,7 @@ curator/select/active_learning.py
 curator/select/kernel.py
 curator/select/select.py
 curator/simulate/__init__.py
+curator/simulate/create_lammps_model.py
 curator/simulate/lammps_mliap_interface.py
 curator/simulate/logger.py
 curator/simulate/openmm.py
@@ -196,4 +197,5 @@ scripts/curator-select
 scripts/curator-simulate
 scripts/curator-tmptrain
 scripts/curator-train
+test/test_lammps_mliap.py
 test/test_read_user_config.py

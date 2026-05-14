@@ -17,6 +17,7 @@ class ModelOutput(nn.Module):
         metrics: Optional[Dict[str, Metric]] = None,
         target_property: Optional[str] = None,
         is_penalty: bool = False,
+        per_atom_loss: bool = False,
         # per_species_loss: bool=False,
         # per_species_metrics: bool=False,
     ) -> None:
@@ -28,6 +29,7 @@ class ModelOutput(nn.Module):
             loss_weight (float, optional): Loss weight. Defaults to 1.0.
             metrics (Optional[Dict[str, Metric]], optional): Metrics. Defaults to None.
             target_property (Optional[str], optional): Target property. Defaults to None.
+            per_atom_loss (bool, optional): Whether to normalize loss by number of atoms. Defaults to False.
         """
         super().__init__()
         self.name = name
@@ -35,6 +37,7 @@ class ModelOutput(nn.Module):
         self.is_penalty = is_penalty
         self.loss_fn = loss_fn
         self.loss_weight = loss_weight
+        self.per_atom_loss = per_atom_loss
         if metrics is not None:
             self.train_metrics = nn.ModuleDict(metrics)
             self.val_metrics = nn.ModuleDict({k: copy.copy(v) for k, v in metrics.items()})
@@ -60,9 +63,18 @@ class ModelOutput(nn.Module):
             loss = self.loss_weight * pred[self.name].square().mean()
             num_obs = 1
         elif self.loss_fn is not None:
-            loss = self.loss_weight * self.loss_fn(
-                pred[self.name], target[self.target_property]
-            )
+            pred_val = pred[self.name]
+            target_val = target[self.target_property]
+            
+            if self.per_atom_loss and 'n_atoms' in target:
+                # Match MACE's energy per-atom loss: mean(((E_pred - E_ref) / N_atoms)^2).
+                # This is different from dividing the squared total-energy error by N_atoms.
+                num_atoms = target['n_atoms'].float().view_as(pred_val)
+                raw_loss = ((pred_val - target_val) / num_atoms).square().mean()
+            else:
+                raw_loss = self.loss_fn(pred_val, target_val)
+            
+            loss = self.loss_weight * raw_loss
             num_obs = target[self.target_property].view(-1).shape[0]
         else:
             return 0.0

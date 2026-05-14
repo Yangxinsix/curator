@@ -218,6 +218,10 @@ class MACE(nn.Module):
         mask = edge_dist < self.cutoff 
         data[properties.edge_idx], data[properties.edge_diff], data[properties.edge_dist] = edge_idx[mask], edge_diff[mask], edge_dist[mask]
 
+        # Extract LAMMPS multi-GPU parameters if present
+        lammps_data = data.get(properties.lammps_data, None)
+        n_local = data.get(properties.n_local, None)
+        n_ghost = data.get(properties.n_ghost, None)
         
         for m in self.embeddings.values():
             data = m(data)
@@ -225,27 +229,52 @@ class MACE(nn.Module):
         data[properties.node_embedding] = data[properties.node_feat]        # store node embedding for some modules (charge equilibration)
         
         node_feat = data[properties.node_feat]
+        node_attr = data[properties.node_attr]  # full node attributes
         node_feat_list = []
         
-        for interaction, product in zip(
+        for i, (interaction, product) in enumerate(zip(
             self.interactions, self.products
-        ):
+        )):
+            is_first_layer = (i == 0)
             node_feat, sc = interaction(
                 node_feat, 
-                data[properties.node_attr],
+                node_attr,
                 data[properties.edge_idx], 
                 data[properties.edge_dist_embedding],
                 data[properties.edge_diff_embedding],
+                lammps_data=lammps_data,
+                n_local=n_local,
+                n_ghost=n_ghost,
+                is_first_layer=is_first_layer,
             )
+            # After first interaction layer, node_feat is truncated to local atoms only (if n_local is set)
+            # We also need to truncate node_attr to match for subsequent layers and product operation
+            if is_first_layer and n_local is not None:
+                node_attr = node_attr[:n_local]
             node_feat = product(
                 node_feats=node_feat,
                 sc=sc,
-                node_attrs=data[properties.node_attr],
+                node_attrs=node_attr,
             )
             node_feat_list.append(node_feat)
         
         node_feat_list = torch.cat(node_feat_list, dim=-1)
         data[properties.node_feat] = node_feat_list
+        
+        # For LAMMPS mode, truncate various tensors to match local atoms only
+        # This is needed for:
+        # - scatter operations in readout
+        # - E0 shift in scale()
+        # - ChargeEquilibration which uses node_embedding
+        if n_local is not None:
+            if properties.image_idx in data:
+                data[properties.image_idx] = data[properties.image_idx][:n_local]
+            if properties.Z in data:
+                data[properties.Z] = data[properties.Z][:n_local]
+            # Truncate node_feat and node_embedding for ChargeEquilibration
+            data[properties.node_feat] = data[properties.node_feat][:n_local]
+            if properties.node_embedding in data:
+                data[properties.node_embedding] = data[properties.node_embedding][:n_local]
 
         # get properties
         data = self.readout(data)

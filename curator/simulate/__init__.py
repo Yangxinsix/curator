@@ -9,7 +9,13 @@ except ImportError:
     TorchSimThermoLogger = None
     _HAS_TORCHSIM = False
 from .uncertainty import BaseUncertainty, EnsembleUncertainty, MahalanobisUncertainty, MCDropoutUncertainty
-from .lammps_mliap_interface import *
+from .lammps_mliap_interface import (
+    LAMMPS_MLIAP, 
+    LAMMPS_MLIAP_QEQ, 
+    prepare_model_for_qeq_inference,
+    CURATORLammpsConfig,
+)
+from .create_lammps_model import create_lammps_model
 from .openmm import CuratorOpenMM, export_curator_to_openmm_torchscript
 
 __all__ = [
@@ -24,6 +30,12 @@ __all__ = [
     "TorchSimThermoLogger",
     "CuratorOpenMM",
     "export_curator_to_openmm_torchscript",
+    # LAMMPS MLIAP
+    "LAMMPS_MLIAP",
+    "LAMMPS_MLIAP_QEQ",
+    "prepare_model_for_qeq_inference",
+    "create_lammps_model",
+    "CURATORLammpsConfig",
 ]
 
 # prune missing optional components

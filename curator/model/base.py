@@ -11,6 +11,7 @@ import pytorch_lightning as pl
 from pytorch_lightning import LightningDataModule
 from omegaconf import DictConfig
 import logging
+import os
 from collections import OrderedDict, defaultdict
 try:
     from torch_scatter import scatter_add, scatter_mean
@@ -41,6 +42,7 @@ class NeuralNetworkPotential(nn.Module):
         self.input_modules = CallbackModuleList(input_modules, on_register_callback=None)
         self.output_modules = CallbackModuleList(output_modules, on_register_callback=self.register_callbacks)
         self._initialized: bool = False
+        self._return_all_outputs: bool = False  # When True, bypass extract_outputs and return all data
         self.collect_outputs()
         self.register_callbacks()
         self.rescale_layers = []
@@ -62,9 +64,10 @@ class NeuralNetworkPotential(nn.Module):
                 scaled_data = data.copy()
                 for layer in self.rescale_layers[::-1]:
                     scaled_data = layer.scale(scaled_data, force_process=True)
-                data[properties.atomic_charge] = scaled_data[properties.atomic_charge]
-                data[properties.energy] = scaled_data[properties.energy]
-                data[properties.forces] = scaled_data[properties.forces]
+                # Copy scaled values back before QEQ.
+                # This must include LAMMPS-specific aliases such as atomic_energy and edge_forces,
+                # not only the structure-level energy/forces keys.
+                data.update(scaled_data)
                 # import pdb; pdb.set_trace()
                 data = m(data)
                 # import pdb; pdb.set_trace()
@@ -91,10 +94,12 @@ class NeuralNetworkPotential(nn.Module):
         self.model_outputs = list(set(self.model_outputs + model_outputs))
     
     def extract_outputs(self, data: properties.Type) -> properties.Type:
-        if 'all' in self.model_outputs:
+        # Handle models saved before _return_all_outputs was added
+        return_all = getattr(self, '_return_all_outputs', False)
+        if return_all or 'all' in self.model_outputs:
             return data
         else: 
-            return {k: data[k] for k in self.model_outputs}
+            return {k: data[k] for k in self.model_outputs if k in data}
     
     # used to update model outputs
     def register_callbacks(self, target_module: Union[nn.Module, List[nn.Module], None]=None) -> None:
@@ -193,8 +198,20 @@ class LitNNP(pl.LightningModule):
             for layer in self.model.output_modules:
                 if hasattr(layer, "unscale"):
                     self.rescale_layers.append(layer)
-        logger.info(self.model)
-        logger.debug(f"Model parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad):,d}")
+
+        if getattr(self.trainer, "is_global_zero", True):
+            trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+            total_params = sum(p.numel() for p in self.model.parameters())
+            logger.info(
+                "Model summary: %s(representation=%s, trainable_parameters=%s, total_parameters=%s)",
+                type(self.model).__name__,
+                type(self.model.representation).__name__,
+                f"{trainable_params:,d}",
+                f"{total_params:,d}",
+            )
+            if os.environ.get("CURATOR_LOG_FULL_MODEL", "0") == "1":
+                logger.info(self.model)
+            logger.debug(f"Model parameters: {trainable_params:,d}")
     
     def loss_fn(self, pred: Dict, batch: Dict, subset: str):
         loss_dict = OrderedDict()
@@ -211,7 +228,8 @@ class LitNNP(pl.LightningModule):
     def on_train_start(self):
         logger.info("\n")
         logger.debug("Start training model")
-        logger.info(f"{self.optimizers()}")
+        if getattr(self.trainer, "is_global_zero", True):
+            logger.info(f"{self.optimizers()}")
     
     # def on_validation_start(self):
     #     logger.info("\nStart validating model")

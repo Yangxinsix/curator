@@ -21,6 +21,137 @@ except ImportError:
         def __init__(self):
             pass
 
+
+def prepare_model_for_qeq_inference(
+    model: Union[NeuralNetworkPotential, LitNNP],
+    return_all: bool = False,
+) -> NeuralNetworkPotential:
+    """
+    Prepare a QEQ model for inference, exposing all energy components.
+    
+    This function modifies the model to output all necessary components for QEQ
+    energy decomposition and LAMMPS MLIAP integration:
+    
+    Per-atom outputs (needed for LAMMPS MLIAP):
+    - atomic_energy: per-atom ML short-range energy (E_ML_i)
+    - atomic_residual_energy: per-atom residual energy (χ·q_i + η·q_i²)
+    - atomic_charge: equilibrated atomic charges
+    - edge_forces: per-edge short-range forces
+    
+    Per-structure outputs (for analysis):
+    - short_energy: total ML short-range energy = sum(atomic_energy)
+    - residual_energy: total residual energy = sum(atomic_residual_energy)  
+    - ewald_energy: Ewald summation energy
+    - energy: total energy (short + residual + ewald)
+    - forces: total forces
+    
+    For LAMMPS MLIAP, the per-atom energy should be:
+        eatoms[i] = atomic_energy[i] + atomic_residual_energy[i]
+    
+    And LAMMPS kspace will add the Ewald energy separately.
+    
+    Args:
+        model: Curator MACE-QEQ model (NeuralNetworkPotential or LitNNP)
+        return_all: If True, set model._return_all_outputs = True to bypass 
+                   extract_outputs filtering entirely
+    
+    Returns:
+        Configured model
+        
+    Example:
+        >>> model = prepare_model_for_qeq_inference(model)
+        >>> outputs = model(batch)
+        >>> # For LAMMPS MLIAP:
+        >>> eatoms = outputs['atomic_energy'] + outputs['atomic_residual_energy']
+    """
+    # Handle LitNNP wrapper
+    if isinstance(model, LitNNP):
+        model = model.model
+    
+    # Set comprehensive model outputs for QEQ analysis
+    model.model_outputs = [
+        # Per-atom outputs (needed for LAMMPS MLIAP)
+        properties.atomic_energy,           # Per-atom ML short-range energy
+        properties.atomic_residual_energy,  # Per-atom residual energy (χ·q + η·q²)
+        properties.atomic_charge,           # Equilibrated atomic charges
+        properties.edge_forces,             # Per-edge short-range forces
+        # Per-structure outputs (for analysis)
+        properties.short_energy,            # Total ML short-range energy
+        properties.residual_energy,         # Total residual energy
+        properties.ewald_energy,            # Ewald summation energy
+        properties.ewald_forces,            # Forces from Ewald (for debugging)
+        properties.residual_forces,         # Forces from residual (should be ~0)
+        properties.energy,                  # Total energy
+        properties.forces,                  # Total forces
+        properties.virial,                  # Virial tensor (if computed)
+    ]
+    
+    # Optionally return ALL data without filtering
+    if return_all:
+        model._return_all_outputs = True
+    
+    # Configure readout to output per-atom energies
+    for i, key in enumerate(model.representation.readout.model_outputs):
+        if key == properties.energy:
+            model.representation.readout.per_atom_flags[i] = True
+            model.representation.readout.per_atom_keys[i] = properties.atomic_energy
+    
+    # Configure output modules for LAMMPS mode
+    from curator.layer._charge_equilibration import ChargeEquilibration
+    for m in model.output_modules:
+        if isinstance(m, GradientOutput):
+            # CRITICAL: For LAMMPS mode, we compute gradients via edge_diff, not positions
+            # LAMMPS provides edge_diff directly (rij vectors), so we don't have positions
+            m.grad_on_edge_diff = True
+            m.grad_on_positions = False
+            m.compute_edge_forces = True
+            # MUST set compute_edge_forces_only=True for LAMMPS!
+            # Otherwise index_add_ will fail because edge_idx contains ghost atom indices
+            # LAMMPS will compute atomic forces from edge forces itself
+            m.compute_edge_forces_only = True
+            m.model_outputs = [properties.edge_forces]
+        elif isinstance(m, ChargeEquilibration):
+            # For LAMMPS mode with kspace, don't compute forces in Python
+            # LAMMPS kspace will compute Ewald forces using the charges we provide
+            # This also avoids the need for 'positions' and 'forces' in data
+            m.compute_forces = False
+        elif isinstance(m, GlobalRescaleShift):
+            m.atomwise_shift = True
+            # Note: scale_by/shift_by dict uses 'energy'/'forces' keys, but we output 'atomic_energy'/'edge_forces'
+            # Add aliases for the per-atom/per-edge versions
+            # Use .clone() to avoid shared tensor references
+            if properties.energy in m.scale_by:
+                m.scale_by[properties.atomic_energy] = m.scale_by[properties.energy].clone()
+            if properties.forces in m.scale_by:
+                m.scale_by[properties.edge_forces] = m.scale_by[properties.forces].clone()
+            # Also add shift_by alias for atomic_energy
+            if properties.energy in m.shift_by:
+                m.shift_by[properties.atomic_energy] = m.shift_by[properties.energy].clone()
+            m.scale_keys = [properties.energy, properties.atomic_energy, properties.edge_forces]
+            m.shift_keys = [properties.energy, properties.atomic_energy]
+            m.model_outputs = [
+                properties.atomic_energy, 
+                properties.atomic_residual_energy,
+                properties.edge_forces, 
+                properties.atomic_charge,
+                properties.short_energy,
+                properties.residual_energy,
+                properties.ewald_energy,
+            ]
+    
+    model.eval()
+    return model
+
+
+# Module exports
+__all__ = [
+    "LAMMPS_MLIAP",
+    "LAMMPS_MLIAP_QEQ", 
+    "prepare_model_for_qeq_inference",
+    "CURATORLammpsConfig",
+]
+
+
 class CURATORLammpsConfig:
     """Configuration settings for CURATOR-LAMMPS integration."""
 
@@ -70,10 +201,21 @@ class LAMMPS_MLIAP(MLIAPUnified):
         self.rcutfac = 0.5 * float(model.representation.cutoff)
         self.ndescriptors = 1
         self.nparams = 1
-        self.dtype = torch.get_default_dtype()
+        # Get dtype from model parameters, not from default
+        # This ensures input data matches model's trained precision
+        self._model_ref = model.model if isinstance(model, LitNNP) else model
+        self.dtype = next(self._model_ref.parameters()).dtype
         self.device = "cpu"
         self.initialized = False
         self.step = 0
+        
+        # Create mapping from LAMMPS type index to atomic number
+        # LAMMPS type indices are 0-based, element_types is ordered as in pair_coeff
+        from ase.data import atomic_numbers as ase_atomic_numbers
+        self.type_to_atomic_number = torch.tensor(
+            [ase_atomic_numbers[elem] for elem in self.element_types],
+            dtype=torch.int64
+        )
 
         self.model = model.model if isinstance(model, LitNNP) else model
         self._convert_model(self.model)
@@ -91,13 +233,23 @@ class LAMMPS_MLIAP(MLIAPUnified):
         # output edge forces
         for m in model.output_modules:
             if isinstance(m, GradientOutput):
+                # CRITICAL: For LAMMPS mode, we compute gradients via edge_diff, not positions
+                # LAMMPS provides edge_diff directly (rij vectors), so we don't have positions
+                m.grad_on_edge_diff = True
+                m.grad_on_positions = False
                 m.compute_edge_forces = True
                 m.compute_edge_forces_only = True
                 m.model_outputs = [properties.forces, properties.edge_forces]
             elif isinstance(m, GlobalRescaleShift):
                 m.atomwise_shift = True
-                m.scale_keys = [properties.atomic_energy, properties.edge_forces]
-                m.shift_keys = [properties.atomic_energy]
+                if properties.energy in m.scale_by:
+                    m.scale_by[properties.atomic_energy] = m.scale_by[properties.energy].clone()
+                if properties.forces in m.scale_by:
+                    m.scale_by[properties.edge_forces] = m.scale_by[properties.forces].clone()
+                if properties.energy in m.shift_by:
+                    m.shift_by[properties.atomic_energy] = m.shift_by[properties.energy].clone()
+                m.scale_keys = [properties.energy, properties.atomic_energy, properties.edge_forces]
+                m.shift_keys = [properties.energy, properties.atomic_energy]
                 m.model_outputs = [properties.atomic_energy, properties.edge_forces]
         
         model.eval()
@@ -138,7 +290,7 @@ class LAMMPS_MLIAP(MLIAPUnified):
 
             with timer("model_forward", enabled=self.config.debug_time):
                 out = self.model(batch)
-                atom_energies, pair_forces = out['atomic_energy'], out['edge_forces']
+                atom_energies, pair_forces = out[properties.atomic_energy], out[properties.edge_forces]
 
                 if self.device.type != "cpu":
                     torch.cuda.synchronize()
@@ -147,21 +299,39 @@ class LAMMPS_MLIAP(MLIAPUnified):
                 self._update_lammps_data(data, atom_energies, pair_forces, natoms)
 
     def _prepare_batch(self, data):
-        """Prepare the input batch for the CURATOR model."""
+        """Prepare the input batch for the CURATOR model.
         
-        return {
-            "n_atoms": torch.as_tensor(data.nlocal, dtype=torch.int64).unsqueeze(0),
-            "_n_pairs": torch.as_tensor(data.npairs, dtype=torch.int64).unsqueeze(0),
-            "_edge_index": torch.stack(
+        For multi-GPU LAMMPS simulations, this includes:
+        - Standard batch data (positions, edge indices, etc.)
+        - LAMMPS data object for forward/reverse exchange operations
+        - Local/ghost atom counts for message passing
+        """
+        n_local = data.nlocal
+        n_ghost = data.ntotal - data.nlocal
+        
+        # Convert LAMMPS type indices to atomic numbers
+        # data.elems contains LAMMPS type indices (0-based)
+        lammps_types = torch.as_tensor(data.elems, dtype=torch.int64)
+        atomic_numbers = self.type_to_atomic_number.to(self.device)[lammps_types.to(self.device)]
+        
+        batch = {
+            properties.n_atoms: torch.as_tensor(n_local, dtype=torch.int64).unsqueeze(0),
+            properties.n_pairs: torch.as_tensor(data.npairs, dtype=torch.int64).unsqueeze(0),
+            properties.edge_idx: torch.stack(
                 [
                     torch.as_tensor(data.pair_j, dtype=torch.int64).to(self.device),
                     torch.as_tensor(data.pair_i, dtype=torch.int64).to(self.device),
                 ],
                 dim=0,
             ).T,
-            "_edge_difference": torch.as_tensor(data.rij).to(self.dtype).to(self.device),
-            "atomic_numbers": torch.as_tensor(data.elems, dtype=torch.int64).to(self.device),
-        }, data, data.nlocal, data.ntotal - data.nlocal
+            properties.edge_diff: torch.as_tensor(data.rij).to(self.dtype).to(self.device),
+            properties.atomic_numbers: atomic_numbers,
+            # LAMMPS multi-GPU support
+            properties.lammps_data: data,
+            properties.n_local: n_local,
+            properties.n_ghost: n_ghost,
+        }
+        return batch
 
     def _update_lammps_data(self, data, atom_energies, pair_forces, natoms):
         """Update LAMMPS data structures with computed energies and forces."""
@@ -235,10 +405,21 @@ class LAMMPS_MLIAP_QEQ(MLIAPUnified):
         self.rcutfac = 0.5 * float(model.representation.cutoff)
         self.ndescriptors = 1
         self.nparams = 1
-        self.dtype = torch.get_default_dtype()
+        # Get dtype from model parameters, not from default
+        # This ensures input data matches model's trained precision  
+        self._model_ref = model.model if isinstance(model, LitNNP) else model
+        self.dtype = next(self._model_ref.parameters()).dtype
         self.device = "cpu"
         self.initialized = False
         self.step = 0
+        
+        # Create mapping from LAMMPS type index to atomic number
+        # LAMMPS type indices are 0-based, element_types is ordered as in pair_coeff
+        from ase.data import atomic_numbers as ase_atomic_numbers
+        self.type_to_atomic_number = torch.tensor(
+            [ase_atomic_numbers[elem] for elem in self.element_types],
+            dtype=torch.int64
+        )
         
         # QEQ specific settings
         self.use_lammps_kspace = use_lammps_kspace
@@ -246,56 +427,18 @@ class LAMMPS_MLIAP_QEQ(MLIAPUnified):
         self.total_charge = total_charge
 
         self.model = model.model if isinstance(model, LitNNP) else model
-        self._convert_model_qeq(self.model)
         
-    @staticmethod
-    def _convert_model_qeq(model):
-        """
-        Convert model to output for LAMMPS integration:
+        # Use the shared function to configure model outputs
+        prepare_model_for_qeq_inference(self.model, return_all=False)
         
-        Energy/Force components:
-        - short_energy: pure ML short-range energy (no Ewald)
-        - residual_energy: χ·q + η·q² electronegativity/hardness terms
-        - edge_forces: per-pair forces (short-range ML only)
-        - residual_forces: forces from residual energy (should be ~0)
-        - atomic_charge: predicted atomic charges
-        
-        NOT included (computed by LAMMPS):
-        - ewald_energy: real + recip + self (computed by coul/long + kspace)
-        - ewald_forces: forces from Ewald energy
-        
-        Architecture:
-        - LAMMPS receives: (short_energy + residual_energy), (edge_forces + residual_forces), charges
-        - LAMMPS computes: Ewald energy/forces using charges via coul/long + kspace ewald/pppm
-        """
-        # Set model outputs - we need short energy, residual energy, and charges
-        model.model_outputs = [
-            properties.atomic_energy,      # Will be converted to short_energy
-            properties.edge_forces,        # Short-range ML forces
-            properties.atomic_charge,      # For LAMMPS kspace
-            properties.residual_energy,    # χ·q + η·q² terms
-            properties.residual_forces,    # Forces from residual (should be ~0)
+        # For LAMMPS MLIAP, we only need minimal outputs (not all analysis outputs)
+        # Override to keep only what LAMMPS needs
+        self.model.model_outputs = [
+            properties.atomic_energy,           # Per-atom ML short-range energy
+            properties.atomic_residual_energy,  # Per-atom χ·q + η·q²
+            properties.edge_forces,             # Per-edge short-range forces
+            properties.atomic_charge,           # Equilibrated charges for LAMMPS kspace
         ]
-
-        # Output atomic energy (will become short_energy before ChargeEquilibration adds Ewald)
-        for i, key in enumerate(model.representation.readout.model_outputs):
-            if key == properties.energy:
-                model.representation.readout.per_atom_flags[i] = True
-                model.representation.readout.per_atom_keys[i] = properties.atomic_energy
-
-        # Output edge forces
-        for m in model.output_modules:
-            if isinstance(m, GradientOutput):
-                m.compute_edge_forces = True
-                m.compute_edge_forces_only = True
-                m.model_outputs = [properties.forces, properties.edge_forces]
-            elif isinstance(m, GlobalRescaleShift):
-                m.atomwise_shift = True
-                m.scale_keys = [properties.atomic_energy, properties.edge_forces]
-                m.shift_keys = [properties.atomic_energy]
-                m.model_outputs = [properties.atomic_energy, properties.edge_forces, properties.atomic_charge]
-        
-        model.eval()
 
     def _initialize_device(self, data):
         using_kokkos = "kokkos" in data.__class__.__module__.lower()
@@ -319,13 +462,26 @@ class LAMMPS_MLIAP_QEQ(MLIAPUnified):
         """
         Main compute function called by LAMMPS pair_mliap.
         
-        Energy/Force flow:
-        1. ML model computes: short_energy, edge_forces, atomic_charge
-        2. QEQ layer adds: residual_energy (χ·q + η·q²), residual_forces (~0)
-        3. We output to LAMMPS: (short_energy + residual_energy), edge_forces, charges
-        4. LAMMPS kspace computes: Ewald real + recip + self using our charges
+        Energy/Force flow for LAMMPS MLIAP with QEQ:
         
-        Note: We do NOT include ewald_energy/ewald_forces since LAMMPS handles that.
+        1. ML model computes:
+           - atomic_energy[i]: per-atom ML short-range energy
+           - edge_forces[ij]: per-edge ML forces
+           - atomic_charge[i]: equilibrated charges
+           
+        2. ChargeEquilibration adds:
+           - atomic_residual_energy[i]: per-atom χ·q_i + η·q_i²
+           
+        3. We output to LAMMPS:
+           - eatoms[i] = atomic_energy[i] + atomic_residual_energy[i]
+           - pair_forces[ij] = edge_forces[ij]
+           - charges[i] = atomic_charge[i]
+           
+        4. LAMMPS kspace computes:
+           - Ewald energy (real + recip + self) using our charges
+           - Ewald forces
+        
+        Total energy in LAMMPS = sum(eatoms) + E_coul_real + E_recip + E_self
         """
         natoms = data.nlocal
         npairs = data.npairs
@@ -343,21 +499,38 @@ class LAMMPS_MLIAP_QEQ(MLIAPUnified):
             with timer("prepare_batch", enabled=self.config.debug_time):
                 batch = self._prepare_batch(data)
 
+            # DEBUG: print batch shapes
+            if self.step <= 2:
+                print(f"\n=== DEBUG QEQ STEP {self.step} ===")
+                for k, v in batch.items():
+                    if isinstance(v, torch.Tensor):
+                        print(f"  {k}: shape={v.shape}, dtype={v.dtype}")
+                    else:
+                        print(f"  {k}: type={type(v).__name__}")
+                print(f"  data.nlocal={data.nlocal}, data.ntotal={data.ntotal}, data.npairs={data.npairs}")
+
             with timer("model_forward", enabled=self.config.debug_time):
                 out = self.model(batch)
                 
-                # Short-range ML outputs
-                atom_energies = out[properties.atomic_energy]
-                pair_forces = out[properties.edge_forces]
+                # DEBUG: print output keys
+                if self.step <= 2:
+                    print(f"\n=== DEBUG MODEL OUTPUT (step {self.step}) ===")
+                    print(f"  output keys: {list(out.keys())}")
+                    for k, v in out.items():
+                        if isinstance(v, torch.Tensor):
+                            print(f"  {k}: shape={v.shape}")
                 
-                # QEQ outputs
-                predicted_charges = out.get(properties.atomic_charge, None)
-                residual_energy = out.get(properties.residual_energy, None)
-                residual_forces = out.get(properties.residual_forces, None)
+                # Per-atom ML short-range energies
+                atomic_energy = out[properties.atomic_energy]
                 
-                # We explicitly DO NOT use:
-                # - out[properties.ewald_energy] (LAMMPS kspace will compute this)
-                # - out[properties.ewald_forces] (LAMMPS kspace will compute this)
+                # Per-atom residual energy (χ·q + η·q²)
+                atomic_residual_energy = out.get(properties.atomic_residual_energy, None)
+                
+                # Per-edge forces
+                edge_forces = out[properties.edge_forces]
+                
+                # Equilibrated charges for LAMMPS kspace
+                atomic_charge = out.get(properties.atomic_charge, None)
 
                 if self.device.type != "cpu":
                     torch.cuda.synchronize()
@@ -365,19 +538,33 @@ class LAMMPS_MLIAP_QEQ(MLIAPUnified):
             with timer("update_lammps", enabled=self.config.debug_time):
                 self._update_lammps_data(
                     data, 
-                    atom_energies, 
-                    pair_forces, 
-                    predicted_charges, 
-                    natoms,
-                    residual_energy=residual_energy,
-                    residual_forces=residual_forces,
+                    atomic_energy=atomic_energy,
+                    atomic_residual_energy=atomic_residual_energy,
+                    edge_forces=edge_forces, 
+                    atomic_charge=atomic_charge, 
+                    natoms=natoms,
                 )
 
     def _prepare_batch(self, data):
-        """Prepare the input batch for the CURATOR-QEQ model."""
+        """Prepare the input batch for the CURATOR-QEQ model.
+        
+        For multi-GPU LAMMPS simulations, this includes:
+        - Standard batch data (positions, edge indices, etc.)
+        - LAMMPS data object for forward/reverse exchange operations
+        - Local/ghost atom counts for message passing
+        """
+        n_local = data.nlocal
+        n_ghost = data.ntotal - data.nlocal
+        n_total = data.ntotal
+        
+        # Convert LAMMPS type indices to atomic numbers
+        # data.elems contains LAMMPS type indices (0-based)
+        lammps_types = torch.as_tensor(data.elems, dtype=torch.int64)
+        atomic_numbers = self.type_to_atomic_number.to(self.device)[lammps_types.to(self.device)]
+        
         batch = {
-            properties.n_atoms: torch.as_tensor(data.nlocal, dtype=torch.int64).unsqueeze(0),
-            properties.n_pairs: torch.as_tensor(data.npairs, dtype=torch.int64).unsqueeze(0),
+            properties.n_atoms: torch.as_tensor(n_local, dtype=torch.int64, device=self.device).unsqueeze(0),
+            properties.n_pairs: torch.as_tensor(data.npairs, dtype=torch.int64, device=self.device).unsqueeze(0),
             properties.edge_idx: torch.stack(
                 [
                     torch.as_tensor(data.pair_j, dtype=torch.int64).to(self.device),
@@ -386,14 +573,30 @@ class LAMMPS_MLIAP_QEQ(MLIAPUnified):
                 dim=0,
             ).T,
             properties.edge_diff: torch.as_tensor(data.rij).to(self.dtype).to(self.device),
-            properties.atomic_numbers: torch.as_tensor(data.elems, dtype=torch.int64).to(self.device),
+            properties.atomic_numbers: atomic_numbers,
+            # image_idx: all atoms belong to the same image (batch index 0)
+            # This is required by scatter operations in the model
+            properties.image_idx: torch.zeros(n_total, dtype=torch.int64, device=self.device),
+            # LAMMPS multi-GPU support
+            properties.lammps_data: data,
+            properties.n_local: n_local,
+            properties.n_ghost: n_ghost,
         }
         
         # If we have existing charges from LAMMPS, use them as initial guess
+        # Note: data.charges may be a cupy array on GPU or None
         if hasattr(data, 'charges') and data.charges is not None:
-            batch[properties.atomic_charge] = torch.as_tensor(data.charges).to(self.dtype).to(self.device)
+            try:
+                # Try to convert charges (handles both numpy and cupy arrays)
+                charges_arr = data.charges
+                if hasattr(charges_arr, 'get'):  # cupy array
+                    charges_arr = charges_arr.get()  # Convert to numpy
+                batch[properties.atomic_charge] = torch.as_tensor(charges_arr).to(self.dtype).to(self.device)
+            except Exception as e:
+                logging.debug(f"Could not convert LAMMPS charges to tensor: {e}")
+                # Charges will be computed fresh by the model
         
-        return batch, data, data.nlocal, data.ntotal - data.nlocal
+        return batch
 
     def _normalize_charges(self, charges: torch.Tensor, natoms: int) -> torch.Tensor:
         """Normalize charges to ensure sum = total_charge."""
@@ -406,57 +609,78 @@ class LAMMPS_MLIAP_QEQ(MLIAPUnified):
         charges[:natoms] = local_charges + correction
         return charges
 
-    def _update_lammps_data(self, data, atom_energies, pair_forces, predicted_charges, natoms, residual_energy=None, residual_forces=None):
+    def _update_lammps_data(self, data, atomic_energy, atomic_residual_energy, edge_forces, atomic_charge, natoms):
         """
         Update LAMMPS data structures with computed energies, forces, and charges.
         
-        Energy breakdown:
-        - LAMMPS receives: E_short (ML) + E_residual (χ·q + η·q²)
-        - LAMMPS will add: E_coul_real (pair coul/long) + E_recip + E_self (kspace)
+        Per-atom energy for LAMMPS:
+            eatoms[i] = atomic_energy[i] + atomic_residual_energy[i]
         
-        Force breakdown:
-        - LAMMPS receives: F_short (edge forces) (F_residual should be ~0 for well-trained model)
-        - LAMMPS will add: F_coul_real (pair coul/long) + F_recip (kspace)
+        Where:
+        - atomic_energy: ML short-range per-atom energy
+        - atomic_residual_energy: χ·q_i + η·q_i² per-atom
+        
+        LAMMPS kspace will add Ewald energy (real + recip + self) using the charges.
+        
+        Forces:
+        - We provide edge_forces (per-edge ML short-range forces)
+        - LAMMPS kspace will add Coulomb forces
         
         Charges:
         - Written to atom->q for LAMMPS kspace to use
         """
         # Convert to double if needed
         if self.dtype == torch.float32:
-            pair_forces = pair_forces.double()
+            edge_forces = edge_forces.double()
         
-        # Update atomic energies (short-range ML energy)
+        # Compute per-atom energies: E_ML + E_residual
         eatoms = torch.as_tensor(data.eatoms)
-        local_energies = atom_energies[:natoms].detach()
+        local_ml_energy = atomic_energy[:natoms].detach()
         
-        # Add residual energy if provided (distributed evenly across atoms)
-        if residual_energy is not None:
-            # residual_energy is per-structure, distribute to atoms
-            residual_per_atom = residual_energy.detach() / natoms
-            local_energies = local_energies + residual_per_atom
+        if atomic_residual_energy is not None:
+            local_residual_energy = atomic_residual_energy[:natoms].detach()
+            local_total_energy = local_ml_energy + local_residual_energy
+        else:
+            local_total_energy = local_ml_energy
         
-        eatoms.copy_(local_energies)
-        data.energy = local_energies.sum().item()
+        eatoms.copy_(local_total_energy)
+        data.energy = local_total_energy.sum().item()
         
-        # Update pair forces (short-range ML forces)
-        # Note: residual_forces should be ~0 for well-trained QEQ model
-        # They come from χ·q + η·q² which has zero gradient w.r.t. positions
-        # if charges are predicted correctly (charge equilibration condition)
-        data.update_pair_forces_gpu(pair_forces)
+        # Update pair forces (short-range ML forces only)
+        # LAMMPS kspace will add Coulomb forces
+        data.update_pair_forces_gpu(edge_forces)
         
         # Update atomic charges for LAMMPS kspace
-        if predicted_charges is not None and self.use_lammps_kspace:
+        if atomic_charge is not None and self.use_lammps_kspace:
             # Normalize charges to ensure sum = total_charge
-            predicted_charges = self._normalize_charges(predicted_charges, natoms)
+            atomic_charge = self._normalize_charges(atomic_charge, natoms)
             
             # Write charges to LAMMPS atom->q
-            # This requires the extended MLIAP interface with charges property
             if hasattr(data, 'charges'):
-                charges_np = predicted_charges[:natoms].detach().cpu().numpy()
-                if self.dtype == torch.float32:
-                    charges_np = charges_np.astype('float64')
-                data.charges[:natoms] = charges_np
-                logging.debug(f"Step {self.step}: Updated {natoms} atomic charges, sum={charges_np.sum():.6f}")
+                local_charges = atomic_charge[:natoms].detach()
+                charges_arr = data.charges
+                if hasattr(charges_arr, 'get'):
+                    charges_np = local_charges.cpu().numpy()
+                    if self.dtype == torch.float32:
+                        charges_np = charges_np.astype('float64')
+                    charges_np = charges_np.copy(order='C')
+                    charges_arr[:natoms].set(charges_np)
+                    charge_sum = float(charges_np.sum())
+                else:
+                    charges_np = local_charges.cpu().numpy()
+                    if self.dtype == torch.float32:
+                        charges_np = charges_np.astype('float64')
+                    charges_arr[:natoms] = charges_np
+                    charge_sum = float(charges_np.sum())
+                if hasattr(data, 'modified_charges_device'):
+                    data.modified_charges_device()
+                if hasattr(data, 'forward_comm_charges'):
+                    data.forward_comm_charges()
+                if hasattr(data, 'sync_charges_host'):
+                    data.sync_charges_host()
+                if hasattr(data, 'update_kspace_qsum_qsq'):
+                    data.update_kspace_qsum_qsq()
+                logging.debug(f"Step {self.step}: Updated {natoms} atomic charges, sum={charge_sum:.6f}")
             else:
                 if self.step == 1:
                     logging.warning(

@@ -40,10 +40,16 @@ atomic_energy: Final[str] = "atomic_energy"
 fermi_level: Final[str] = "fermi_level"
 ewald_energy: Final[str] = "ewald_energy"
 residual_energy: Final[str] = "residual_energy"
+atomic_residual_energy: Final[str] = "atomic_residual_energy"  # per-atom residual energy (χ·q + η·q²) for LAMMPS MLIAP
 electrostatic_energy: Final[str] = "electrostatic_energy"
 short_energy: Final[str] = "short_energy"
 ewald_forces: Final[str] = "ewald_forces"
-residual_forces: Final[str] = "residual_forces"     # residual forces from chi and hardness, this is meaningless
+residual_forces: Final[str] = "residual_forces"     # QEq charge-response derivative residual used as a zero-target loss
+
+# LAMMPS MLIAP integration properties (for multi-GPU message passing)
+lammps_data: Final[str] = "_lammps_data"          # LAMMPS MLIAPData object for forward/reverse exchange
+n_local: Final[str] = "_n_local"                  # Number of local atoms (real atoms on this GPU)
+n_ghost: Final[str] = "_n_ghost"                  # Number of ghost atoms (from neighboring domains)
 
 # uncertainties
 e_var: Final[str] = "energy_var"      # energy variance

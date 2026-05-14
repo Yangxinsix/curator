@@ -66,7 +66,9 @@ def train(config: DictConfig) -> None:
     from e3nn.util.jit import script
 
     # set up logger
-    fh = logging.FileHandler(os.path.join(config.run_path, "training.log"), mode="w")
+    local_rank = os.environ.get("LOCAL_RANK")
+    log_name = "training.log" if local_rank in (None, "0") else f"training_rank{local_rank}.log"
+    fh = logging.FileHandler(os.path.join(config.run_path, log_name), mode="w")
     fh.setFormatter(CustomFormatter())
     log.addHandler(fh)
     

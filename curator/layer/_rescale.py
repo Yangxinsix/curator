@@ -62,24 +62,36 @@ class GlobalRescaleShift(torch.nn.Module):
         
         if not self.training or force_process:
             for key in keys:
+                # Skip if key not in data or scale_by
+                if key not in data or key not in self.scale_by:
+                    continue
                 # scale
-                if key == properties.energy and not self.atomwise_scale and self.atomwise_normalization:
-                    data[key] = data[key] * (self.scale_by[key] * data[properties.n_atoms])  # because scale_by is the std of pre-atom energies
+                # For structure-level energy (not atomwise), scale by n_atoms
+                # For atomic_energy or atomwise_scale, just multiply by scale factor
+                is_structure_energy = (key == properties.energy and not self.atomwise_scale and self.atomwise_normalization)
+                if is_structure_energy:
+                    data[key] = data[key] * (self.scale_by[key] * data[properties.n_atoms])  # because scale_by is the std of per-atom energies
                 else:
                     data[key] = data[key] * self.scale_by[key]
                 # shift (forces should not be shifted, as they are derivatives of energy)
                 if key not in self.shift_keys:
                     continue
-                if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
+                # For structure-level energy (not atomwise), shift by n_atoms * shift
+                is_structure_shift = (key == properties.energy and not self.atomwise_shift and self.atomwise_normalization)
+                if is_structure_shift:
                     shift_by = data[properties.n_atoms] * self.shift_by[key]
                 else:
                     shift_by = self.shift_by[key]
                 # get atomic energy and charge
-                if self.shift_by_E0 and key == properties.energy:
+                # E0 shift applies to both 'energy' (structure-level) and 'atomic_energy' (per-atom)
+                is_energy_key = (key == properties.energy or key == properties.atomic_energy)
+                if self.shift_by_E0 and is_energy_key:
                     node_e0 = self.atomic_energies[data[properties.Z]]
-                    if self.atomwise_shift:
+                    if self.atomwise_shift or key == properties.atomic_energy:
+                        # For atomic_energy, always add per-atom E0
                         shift_by = shift_by + node_e0
                     else:
+                        # For structure-level energy, aggregate E0
                         e0 = scatter_add(node_e0, data[properties.image_idx])
                         shift_by = shift_by + e0
                 elif self.shift_by_q0 and key == properties.atomic_charge:
@@ -100,18 +112,26 @@ class GlobalRescaleShift(torch.nn.Module):
             # inverse scale and shift for unscale
             # First unshift, then unscale
             for key in keys:
+                # Skip if key not in data or scale_by
+                if key not in data or key not in self.scale_by:
+                    continue
                 # unshift (forces should not be shifted, as they are derivatives of energy)
                 if key in self.shift_keys:
-                    if key == properties.energy and not self.atomwise_shift and self.atomwise_normalization:
+                    is_structure_shift = (key == properties.energy and not self.atomwise_shift and self.atomwise_normalization)
+                    if is_structure_shift:
                         shift_by = data[properties.n_atoms] * self.shift_by[key]
                     else:
                         shift_by = self.shift_by[key]
                     # get atomic energy and charge
-                    if self.shift_by_E0 and key == properties.energy:
+                    # E0 shift applies to both 'energy' (structure-level) and 'atomic_energy' (per-atom)
+                    is_energy_key = (key == properties.energy or key == properties.atomic_energy)
+                    if self.shift_by_E0 and is_energy_key:
                         node_e0 = self.atomic_energies[data[properties.Z]]
-                        if self.atomwise_shift:
+                        if self.atomwise_shift or key == properties.atomic_energy:
+                            # For atomic_energy, always add per-atom E0
                             shift_by = shift_by + node_e0
                         else:
+                            # For structure-level energy, aggregate E0
                             e0 = scatter_add(node_e0, data[properties.image_idx])
                             shift_by = shift_by + e0
                     elif self.shift_by_q0 and key == properties.atomic_charge:
@@ -120,7 +140,8 @@ class GlobalRescaleShift(torch.nn.Module):
 
                     data[key] = data[key] - shift_by
                 # unscale
-                if key == properties.energy and not self.atomwise_scale and self.atomwise_normalization:
+                is_structure_energy = (key == properties.energy and not self.atomwise_scale and self.atomwise_normalization)
+                if is_structure_energy:
                     data[key] = data[key] / (self.scale_by[key] * data[properties.n_atoms])
                 else:
                     data[key] = data[key] / self.scale_by[key]

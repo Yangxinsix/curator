@@ -7,6 +7,11 @@ class Strain(torch.nn.Module):
     see https://github.com/atomistic-machine-learning/schnetpack/blob/master/src/schnetpack/atomistic/response.py
     """
     def forward(self, data: properties.Type) -> properties.Type:
+        # Skip strain calculation in LAMMPS mode (no cell data available)
+        # LAMMPS provides edge_diff (rij) directly, so strain is not needed for forces
+        if properties.cell not in data or data.get(properties.lammps_data) is not None:
+            return data
+            
         cell = data[properties.cell].view(-1, 3, 3)
         strain = torch.zeros_like(cell, requires_grad=True)
         data[properties.strain] = strain
