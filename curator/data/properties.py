@@ -34,6 +34,8 @@ forces: Final[str] = "forces"
 energy_hessian: Final[str] = "energy_hessian"
 energy_hessian_sampled: Final[str] = "energy_hessian_sampled"
 energy_hessian_sample_indices: Final[str] = "energy_hessian_sample_indices"
+energy_hessian_projected: Final[str] = "energy_hessian_projected"
+energy_hessian_probe_vectors: Final[str] = "energy_hessian_probe_vectors"
 edge_forces: Final[str] = "edge_forces"
 strain: Final[str] = "strain"
 stress: Final[str] = "stress"
@@ -163,6 +165,7 @@ activation_fn = {
 class HeadConfig:
     key: str  # property key in curator.data.properties
     dim: int = 1
+    irreps_out: Optional[str] = None  # optional e3nn irreps for the head output, e.g. "1x1o"
     is_atomwise: bool = False  # whether the readout is per-atom before reduction
     reduction: Optional[Literal["sum", "mean", "none"]] = "sum"  # "sum", "mean", "none", or None
     atomwise_key: Optional[str] = None  # optional key for per-atom output, e.g. atomic_energy
@@ -189,6 +192,7 @@ HEAD_PRESETS: Dict[str, HeadConfig] = {
         atomwise_key=atomic_energy,
         write_atomwise=False,
         dim=1,
+        irreps_out="1x0e",
         scale_by=True,
         shift_by=True,
     ),
@@ -197,6 +201,7 @@ HEAD_PRESETS: Dict[str, HeadConfig] = {
         is_atomwise=True,
         reduction=None,
         dim=3,
+        irreps_out="1x1o",
         write_atomwise=True,
         scale_by="rms",
         shift_by=False,
@@ -206,6 +211,7 @@ HEAD_PRESETS: Dict[str, HeadConfig] = {
         is_atomwise=True,
         reduction=None,
         dim=1,
+        irreps_out="1x0e",
         write_atomwise=True,
     ),
     "total_charge": HeadConfig(
@@ -213,12 +219,14 @@ HEAD_PRESETS: Dict[str, HeadConfig] = {
         is_atomwise=False,
         reduction=None,
         dim=1,
+        irreps_out="1x0e",
     ),
     "atomic_charge": HeadConfig(
         key=atomic_charge,
         is_atomwise=True,
         reduction=None,
         dim=1,
+        irreps_out="1x0e",
         write_atomwise=True,
     ),
 }
@@ -253,7 +261,7 @@ def resolve_heads(heads: List[Union[str, HeadConfig, Dict]]) -> List[HeadConfig]
         elif isinstance(h, str):
             if h not in HEAD_PRESETS:
                 raise KeyError(f"Unknown head preset '{h}'. Available: {list(HEAD_PRESETS.keys())}")
-            resolved.append(HEAD_PRESETS[h])
+            resolved.append(HeadConfig(**HEAD_PRESETS[h].__dict__.copy()))
         elif isinstance(h, dict):
             key = h.get("key")
             if key in HEAD_PRESETS:

@@ -5,7 +5,7 @@ train_path: null                         # explicit training data path (override
 val_path: null                           # explicit validation data path
 test_path: null                          # explicit test data path
 batch_size: 8                            # training batch size
-compute_neighbor_list: False             # precompute neighbor lists during loading
+compute_neighbor_list: True              # precompute neighbor lists during loading
 cutoff: 5.0                              # cutoff radius used for neighbor finding
 num_train: 0.9                           # fraction or count of samples for training split
 num_val: 0.1                             # fraction or count of samples for validation split
@@ -19,6 +19,7 @@ avg_num_neighbors: auto                  # average neighbors used for model norm
 atomic_energies: null                    # per-species reference energies for offsetting
 normalization: True                      # enable global normalization of targets
 atomwise_normalization: True             # normalize atomwise properties independently
+scale_forces: True                       # use forces RMS as the energy scaling statistic
 heads: [energy]                          # main readout heads
 rescale_shift_heads: []                  # extra properties handled by the rescale/shift module in addition to energy
 transforms: []                           # optional transforms applied to each structure

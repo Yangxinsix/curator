@@ -9,6 +9,7 @@ import pytorch_lightning as pl
 from omegaconf import DictConfig
 import logging
 from collections import OrderedDict
+from ase.data import atomic_numbers, chemical_symbols
 
 logger = logging.getLogger(__name__)    # console output
 try:
@@ -90,6 +91,7 @@ class LitNNP(pl.LightningModule):
                 if hasattr(layer, "unscale"):
                     self.rescale_layers.append(layer)
             self._domain_loss_scales = self._build_domain_loss_scales()
+            self._log_runtime_configuration()
         logger.info(self.model)
         logger.debug(f"Model parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad):,d}")
     
@@ -213,7 +215,7 @@ class LitNNP(pl.LightningModule):
 
     def on_train_epoch_start(self):
         self._write_log_only("\n")
-        self._write_log_only("Training")
+        self._write_log_and_console("Training", level=logging.DEBUG, progress=False)
         self._debug_rescale_logged["train"] = False
         if self.metric_names is not None:
             self._write_log_only(self._format_header(include_loader=True))
@@ -221,7 +223,7 @@ class LitNNP(pl.LightningModule):
     def on_validation_epoch_start(self):
         torch.set_grad_enabled(True)
         self._write_log_only("\n")
-        self._write_log_only("Validation")
+        self._write_log_and_console("Validation", level=logging.DEBUG, progress=False)
         self._debug_rescale_logged["val"] = False
         if self.metric_names is not None:
             self._write_log_only(self._format_header(include_loader=True))
@@ -447,7 +449,7 @@ class LitNNP(pl.LightningModule):
                 self.log("val_total_loss", total / weight_sum, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         
         self._write_log_only("\n")
-        self._write_log_and_console("Epoch summary")
+        self._write_log_and_console("Epoch summary", level=logging.DEBUG, progress=False)
         header = self._format_epoch_header()
         self._write_log_only(header)
         self._write_console(header)
@@ -488,7 +490,7 @@ class LitNNP(pl.LightningModule):
         if self.trainer.sanity_checking:
             return
         self._write_log_only("\n")
-        self._write_log_and_console("Epoch summary")
+        self._write_log_and_console("Epoch summary", level=logging.DEBUG, progress=False)
         header = self._format_epoch_header()
         self._write_log_only(header)
         self._write_console(header)
@@ -583,13 +585,15 @@ class LitNNP(pl.LightningModule):
     
     def configure_optimizers(self) -> Type[torch.optim.Optimizer]:
         param_groups = self._build_optimizer_param_groups()
+        default_lr = self._resolve_optimizer_default_lr()
         trainable_groups = []
         frozen_groups = []
         for group in param_groups:
             name = str(group.get("name", "<unnamed>"))
-            lr = float(group.get("lr", 0.0) or 0.0)
+            lr = group.get("lr", default_lr)
+            lr = None if lr is None else float(lr)
             has_trainable_param = any(getattr(param, "requires_grad", False) for param in group.get("params", []))
-            if lr > 0.0 and has_trainable_param:
+            if has_trainable_param and (lr is None or lr > 0.0):
                 trainable_groups.append(name)
             else:
                 frozen_groups.append(name)
@@ -625,12 +629,145 @@ class LitNNP(pl.LightningModule):
         else:
             return optimizer
 
+    def _resolve_optimizer_default_lr(self) -> Optional[float]:
+        optimizer_factory = self.optimizer
+        keywords = getattr(optimizer_factory, "keywords", None)
+        if isinstance(keywords, dict) and keywords.get("lr") is not None:
+            return float(keywords["lr"])
+        defaults = getattr(optimizer_factory, "defaults", None)
+        if isinstance(defaults, dict) and defaults.get("lr") is not None:
+            return float(defaults["lr"])
+        return None
+
     # ------------------------------------------------------------------ #
     # Logging and debug helpers
     # ------------------------------------------------------------------ #
-    def _write_log_only(self, message: str) -> None:
+    def _log_runtime_configuration(self) -> None:
+        wrapper_cfg = get_model_wrapper_config(self.model)
+        logger.info(
+            "Model wrapper backend: %s (adapter=%s)",
+            wrapper_cfg.backend,
+            wrapper_cfg.adapter,
+        )
+        self._log_rescale_configuration()
+
+    @staticmethod
+    def _format_numeric_sequence(values: List[float]) -> str:
+        return "[" + ", ".join(f"{float(value):.6g}" for value in values) + "]"
+
+    @staticmethod
+    def _format_species_values(
+        values: torch.Tensor,
+        *,
+        default: float,
+        species_numbers: Optional[List[int]] = None,
+    ) -> str:
+        entries = []
+        values_cpu = values.detach().cpu().reshape(-1)
+        if species_numbers is None:
+            indices = range(1, min(len(values_cpu), len(chemical_symbols)))
+        else:
+            indices = species_numbers
+        for z in indices:
+            if z <= 0 or z >= min(len(values_cpu), len(chemical_symbols)):
+                continue
+            value = float(values_cpu[z].item())
+            entries.append(f"{chemical_symbols[z]}={value:.10g}")
+        if not entries:
+            for z in range(1, min(len(values_cpu), len(chemical_symbols))):
+                value = float(values_cpu[z].item())
+                if abs(value - default) <= 1e-12:
+                    continue
+                entries.append(f"{chemical_symbols[z]}={value:.10g}")
+        return ", ".join(entries) if entries else "<none>"
+
+    def _current_species_numbers(self) -> Optional[List[int]]:
+        datamodule = getattr(self.trainer, "datamodule", None)
+        if datamodule is None:
+            return None
+        species = getattr(datamodule, "species", None)
+        if species in (None, "auto"):
+            get_species = getattr(datamodule, "_get_species", None)
+            if callable(get_species):
+                species = get_species()
+        if not isinstance(species, list):
+            return None
+        numbers = []
+        for symbol in species:
+            if isinstance(symbol, str) and symbol in atomic_numbers:
+                numbers.append(int(atomic_numbers[symbol]))
+        return numbers or None
+
+    def _describe_global_rescale_head(self, layer: nn.Module, head_idx: int) -> str:
+        head = layer.heads[head_idx]
+        scale = layer.scales[head_idx].scale.detach().cpu().view(-1).tolist()
+        shift_module = layer.shifts[head_idx]
+        if hasattr(shift_module, "shift"):
+            shift = shift_module.shift.detach().cpu().view(-1).tolist()
+        else:
+            shift = [0.0]
+
+        scale_module = layer.atomic_scales[head_idx]
+        shift_species_module = layer.atomic_shifts[head_idx]
+        species_numbers = self._current_species_numbers()
+        if hasattr(scale_module, "enabled") and bool(scale_module.enabled):
+            per_species_scale = self._format_species_values(
+                scale_module.values,
+                default=1.0,
+                species_numbers=species_numbers,
+            )
+        else:
+            per_species_scale = "<disabled>"
+        if hasattr(shift_species_module, "enabled") and bool(shift_species_module.enabled):
+            per_species_shift = self._format_species_values(
+                shift_species_module.values,
+                default=0.0,
+                species_numbers=species_numbers,
+            )
+        else:
+            per_species_shift = "<disabled>"
+
+        target_key = getattr(scale_module, "data_key", head.key)
+        return (
+            f"head={head.key} target={target_key} "
+            f"scale={self._format_numeric_sequence(scale)} "
+            f"shift={self._format_numeric_sequence(shift)} "
+            f"per_species_scale={per_species_scale} per_species_shift={per_species_shift}"
+        )
+
+    def _log_rescale_configuration(self) -> None:
+        if not hasattr(self, "rescale_layers"):
+            return
+        logger.info("Rescale layers: %d", len(self.rescale_layers))
+        for layer_idx, layer in enumerate(self.rescale_layers):
+            layer_name = layer.__class__.__name__
+            logger.info("Rescale[%d]: %s", layer_idx, layer_name)
+            if layer_name == "GlobalRescaleShift":
+                for head_idx in range(len(layer.heads)):
+                    logger.info(
+                        "Rescale[%d] %s",
+                        layer_idx,
+                        self._describe_global_rescale_head(layer, head_idx),
+                    )
+            elif layer_name == "MultiDomainRescaleShift":
+                for domain, domain_layer in layer.domain_modules.items():
+                    logger.info("Rescale[%d] domain=%s", layer_idx, domain)
+                    for head_idx in range(len(domain_layer.heads)):
+                        logger.info(
+                            "Rescale[%d] domain=%s %s",
+                            layer_idx,
+                            domain,
+                            self._describe_global_rescale_head(domain_layer, head_idx),
+                        )
+
+    def _write_log_only(
+        self,
+        message: str,
+        level: int = logging.INFO,
+        progress: bool = True,
+    ) -> None:
         # Log progress lines to file only; console stream filters these out.
-        logger.info(message, extra={"progress": True})
+        logger.log(level, message, extra={"progress": progress})
 
     def _write_console(self, message: str) -> None:
         # Write to the terminal without breaking tqdm progress bars.
@@ -641,9 +778,14 @@ class LitNNP(pl.LightningModule):
         else:
             tqdm.write(message)
 
-    def _write_log_and_console(self, message: str) -> None:
+    def _write_log_and_console(
+        self,
+        message: str,
+        level: int = logging.INFO,
+        progress: bool = False,
+    ) -> None:
         # Keep a log record and echo to the terminal.
-        self._write_log_only(message)
+        self._write_log_only(message, level=level, progress=progress)
         self._write_console(message)
 
     def log_head(self, loss_dict, metrics_dict, stage='train'):

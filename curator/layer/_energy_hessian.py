@@ -138,6 +138,50 @@ def sample_hessian_rows(
     return samples_per_structure, rows_per_structure
 
 
+def sample_hessian_projections(
+    forces: torch.Tensor,
+    positions: torch.Tensor,
+    num_probes: int,
+    probe_vectors: Optional[torch.Tensor] = None,
+    create_graph: bool = False,
+    vectorize: bool = True,
+    normalize_probes: bool = False,
+    probe_distribution: str = "gaussian",
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Project the energy Hessian along dense probe vectors.
+
+    ``forces = -dE/dR``, so ``-d(forces)/dR @ probe`` gives ``H_E @ probe``.
+    The returned tensors both have shape ``[num_probes, n_atoms, 3]``.
+    """
+    if probe_vectors is None:
+        shape = (int(num_probes), positions.shape[0], positions.shape[1])
+        if str(probe_distribution).lower() in {"rademacher", "sign"}:
+            probe_vectors = torch.empty(shape, device=positions.device, dtype=positions.dtype)
+            probe_vectors.bernoulli_(0.5).mul_(2).sub_(1)
+        else:
+            probe_vectors = torch.randn(shape, device=positions.device, dtype=positions.dtype)
+    else:
+        probe_vectors = probe_vectors.to(device=positions.device, dtype=positions.dtype)
+        if probe_vectors.dim() != 3 or probe_vectors.shape[1:] != positions.shape:
+            raise ValueError(
+                "Energy Hessian probe vectors must have shape "
+                f"[num_probes, {positions.shape[0]}, {positions.shape[1]}], got {tuple(probe_vectors.shape)}."
+            )
+
+    if normalize_probes:
+        denom = probe_vectors.flatten(1).norm(dim=1).clamp_min(1e-12).view(-1, 1, 1)
+        probe_vectors = probe_vectors / denom
+
+    projected = -get_jacobian(
+        forces,
+        positions,
+        probe_vectors,
+        create_graph=create_graph,
+        vectorize=vectorize,
+    )
+    return probe_vectors, projected
+
+
 def sample_hessian_indices(
     n_atoms: torch.Tensor,
     num_samples: int,
@@ -228,14 +272,22 @@ class EnergyHessianOutput(torch.nn.Module):
         self,
         vectorize: bool = True,
         num_samples: Optional[int] = None,
+        num_probes: Optional[int] = None,
         mask_key: Optional[str] = None,
+        probe_key: str = properties.energy_hessian_probe_vectors,
+        normalize_probes: bool = False,
+        probe_distribution: str = "gaussian",
         model_outputs: Optional[List[str]] = None,
         update_callback: Optional[Callable] = None,
     ) -> None:
         super().__init__()
         self.vectorize = vectorize
         self.num_samples = num_samples
+        self.num_probes = num_probes
         self.mask_key = mask_key
+        self.probe_key = probe_key
+        self.normalize_probes = bool(normalize_probes)
+        self.probe_distribution = str(probe_distribution)
         self.update_callback = update_callback
         self.model_outputs = model_outputs if model_outputs is not None else [properties.energy_hessian]
 
@@ -257,6 +309,8 @@ class EnergyHessianOutput(torch.nn.Module):
             properties.energy_hessian not in self.model_outputs
             and properties.energy_hessian_sampled not in self.model_outputs
             and properties.energy_hessian_sample_indices not in self.model_outputs
+            and properties.energy_hessian_projected not in self.model_outputs
+            and properties.energy_hessian_probe_vectors not in self.model_outputs
         ):
             return data
         if properties.forces not in data:
@@ -294,10 +348,31 @@ class EnergyHessianOutput(torch.nn.Module):
                 data[properties.energy_hessian_sample_indices] = row_indices
             if properties.energy_hessian_sampled in self.model_outputs:
                 data[properties.energy_hessian_sampled] = rows
+        if properties.energy_hessian_projected in self.model_outputs or properties.energy_hessian_probe_vectors in self.model_outputs:
+            probe_vectors = data.get(self.probe_key)
+            if probe_vectors is None and self.num_probes is None:
+                raise ValueError("EnergyHessianOutput requires `num_probes` or input probe vectors to output Hessian projections.")
+            probe_vectors, projected = sample_hessian_projections(
+                forces,
+                positions,
+                num_probes=int(self.num_probes or probe_vectors.shape[0]),
+                probe_vectors=probe_vectors,
+                create_graph=create_graph,
+                vectorize=self.vectorize,
+                normalize_probes=self.normalize_probes,
+                probe_distribution=self.probe_distribution,
+            )
+            if properties.energy_hessian_probe_vectors in self.model_outputs:
+                data[properties.energy_hessian_probe_vectors] = probe_vectors
+            if properties.energy_hessian_projected in self.model_outputs:
+                data[properties.energy_hessian_projected] = projected
         return data
 
     def __repr__(self):
         return (
             f"{self.__class__.__name__}(vectorize={self.vectorize}, "
-            f"num_samples={self.num_samples}, mask_key={self.mask_key}, model_outputs={self.model_outputs})"
+            f"num_samples={self.num_samples}, num_probes={self.num_probes}, "
+            f"mask_key={self.mask_key}, probe_key={self.probe_key}, "
+            f"normalize_probes={self.normalize_probes}, "
+            f"probe_distribution={self.probe_distribution}, model_outputs={self.model_outputs})"
         )

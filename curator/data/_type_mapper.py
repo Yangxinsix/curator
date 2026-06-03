@@ -56,6 +56,12 @@ class TypeMapper(Transform):
         return self.index_to_Z[types]
     
     def __repr__(self) -> str:
+        items = list((self.symbol_to_type or {}).items())
+        shown = items[:8]
+        mapping = ", ".join(f"{key}: {value}" for key, value in shown)
+        if len(items) > 8:
+            mapping = f"{mapping}, ..."
         return (
-            f"{self.__class__.__name__}(symbol_to_type={self.symbol_to_type}"
+            f"{self.__class__.__name__}(num_species={len(items)}, "
+            f"symbol_to_type={{ {mapping} }})"
         )

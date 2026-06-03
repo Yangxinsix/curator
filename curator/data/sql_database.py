@@ -41,6 +41,8 @@ OPTIONAL_COLUMN_SPECS = {
     properties.energy: {"sql_type": "FLOAT", "storage": "scalar", "dtype": "float32"},
     properties.forces: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["n_atoms", 3]},
     properties.energy_hessian: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["n_atoms", 3, "n_atoms", 3]},
+    properties.energy_hessian_projected: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["num_probes", "n_atoms", 3]},
+    properties.energy_hessian_probe_vectors: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["num_probes", "n_atoms", 3]},
     properties.virial: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": [1, 6]},
     properties.stress: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": [1, 6]},
     properties.total_charge: {"sql_type": "FLOAT", "storage": "scalar", "dtype": "float32"},
@@ -125,9 +127,7 @@ class QMDatabase:
                 scalar = bool(value) if spec["dtype"] == "bool" else value
                 atoms_data[key] = np.array([scalar], dtype=np.dtype(spec["dtype"]))
                 continue
-            shape = None if spec.get("shape") is None else tuple(
-                n_atoms if dim == "n_atoms" else dim for dim in spec["shape"]
-            )
+            shape = self._resolve_blob_shape(spec.get("shape"), value, spec["dtype"], n_atoms)
             atoms_data[key] = self._deblob(value, dtype=np.dtype(spec["dtype"]), shape=shape)
 
         if properties.atomic_numbers in atoms_data:
@@ -243,6 +243,36 @@ class QMDatabase:
         if not np.little_endian:
             array = array.byteswap()
         return memoryview(np.ascontiguousarray(array))
+
+    @staticmethod
+    def _resolve_blob_shape(shape_spec, buf, dtype, n_atoms):
+        if shape_spec is None:
+            return None
+        dtype = np.dtype(dtype)
+        flat_size = len(buf) // dtype.itemsize
+        shape = []
+        unknown_idx = None
+        known = 1
+        for idx, dim in enumerate(shape_spec):
+            if dim == "n_atoms":
+                value = int(n_atoms)
+            elif dim in {"num_probes", "n_probes"}:
+                if unknown_idx is not None:
+                    raise ValueError(f"Only one inferred dimension is supported in SQLite shape specs: {shape_spec}")
+                unknown_idx = idx
+                value = -1
+            else:
+                value = int(dim)
+            shape.append(value)
+            if value != -1:
+                known *= value
+        if unknown_idx is not None:
+            if known == 0 or flat_size % known != 0:
+                raise ValueError(
+                    f"Cannot infer SQLite blob shape {shape_spec} from flat size {flat_size} and n_atoms={n_atoms}."
+                )
+            shape[unknown_idx] = flat_size // known
+        return tuple(shape)
 
     def _deblob(self, buf, dtype=np.float32, shape=None):
         """Convert blob/buffer object to numpy array."""

@@ -86,6 +86,7 @@ class AtomsDataModule(pl.LightningDataModule):
         atomwise_normalization: bool = True,
         scale_by: Union[float, List[float], None] = None,
         shift_by: Union[float, List[float], None] = None,
+        scale_forces: bool = False,
         default_dtype: torch.dtype = torch.get_default_dtype(),
         head_reference_by_species: Optional[Dict[str, Dict[Union[int, str], float]]] = None,
         heads: Optional[List] = None,
@@ -115,6 +116,7 @@ class AtomsDataModule(pl.LightningDataModule):
         if heads is None or (isinstance(heads, str) and heads.lower() == "auto"):
             heads = ["energy"]
         self.heads = heads
+        self.scale_forces = bool(scale_forces)
         self.rescale_shift_heads = rescale_shift_heads or []
         
         # splitting parameters
@@ -158,6 +160,8 @@ class AtomsDataModule(pl.LightningDataModule):
         self.std = scale_by
         self.head_reference_by_species = head_reference_by_species or {}
         self._scale_shift_cache: Dict[str, Tuple[float, float]] = {}
+        self._rms_cache: Dict[str, float] = {}
+        self._head_shift_cache: Dict[Tuple[str, bool], Optional[Dict[int, float]]] = {}
         self._species_logged = False
         
     def setup(self, stage: Optional[str] = None) -> None:
@@ -318,13 +322,60 @@ class AtomsDataModule(pl.LightningDataModule):
         self._val_dataset = self._val_dataset or torch.utils.data.Subset(self.dataset, self.val_idx)
         self._test_dataset = self._test_dataset or torch.utils.data.Subset(self.dataset, self.test_idx) if self.num_test != 0 else None
 
+    def _get_train_ase_source(self):
+        dataset = self.train_dataset
+        if dataset is None:
+            return None, None
+
+        indices = None
+        while isinstance(dataset, torch.utils.data.Subset):
+            subset_indices = dataset.indices.tolist() if hasattr(dataset.indices, "tolist") else list(dataset.indices)
+            indices = subset_indices if indices is None else [indices[i] for i in subset_indices]
+            dataset = dataset.dataset
+
+        if not isinstance(dataset, AseDataset):
+            return None, None
+        return dataset, (indices if indices is not None else range(len(dataset)))
+
+    def _get_ase_target(self, atoms, property_key: str):
+        try:
+            if property_key == properties.energy:
+                return torch.tensor([atoms.get_potential_energy()], dtype=self.default_dtype)
+            if property_key == properties.forces:
+                return torch.tensor(atoms.get_forces(apply_constraint=False), dtype=self.default_dtype)
+            if property_key == properties.stress:
+                return torch.tensor(atoms.get_stress(apply_constraint=False), dtype=self.default_dtype).unsqueeze(0)
+        except (AttributeError, RuntimeError):
+            return None
+
+        if property_key == properties.virial:
+            virial = atoms.info.get("virial")
+            if virial is not None:
+                if virial.ndim == 2:
+                    virial = virial.flatten()
+                return torch.tensor(virial[[0, 4, 8, 5, 2, 1]], dtype=self.default_dtype).unsqueeze(0)
+            try:
+                stress = atoms.get_stress(apply_constraint=False)
+                return torch.tensor(-stress * atoms.get_volume(), dtype=self.default_dtype).unsqueeze(0)
+            except (AttributeError, RuntimeError):
+                return None
+        return None
+
     def _get_species(self, force_process=False) -> Optional[List[str]]:
         if self.species == "auto" or force_process:
-            numbers = []
-            for sample in self.train_dataset:
-                atoms = get_sample_atoms(sample)
-                numbers.append(torch.unique(atoms[properties.Z]))
-            numbers = torch.unique(torch.cat(numbers))
+            ase_dataset, ase_indices = self._get_train_ase_source()
+            if ase_dataset is not None:
+                numbers = sorted({
+                    int(z)
+                    for idx in ase_indices
+                    for z in ase_dataset.db[idx].numbers
+                })
+            else:
+                numbers = []
+                for sample in self.train_dataset:
+                    atoms = get_sample_atoms(sample)
+                    numbers.append(torch.unique(atoms[properties.Z]))
+                numbers = torch.unique(torch.cat(numbers)).tolist()
             self.species = [chemical_symbols[int(n)] for n in numbers]
             if not self._species_logged:
                 logger.debug(f"Detected training species: {self.species}.")
@@ -333,17 +384,45 @@ class AtomsDataModule(pl.LightningDataModule):
             
     def _get_avg_num_neighbors(self) -> Optional[float]:
         if self.avg_num_neighbors == "auto":
+            ase_dataset, ase_indices = self._get_train_ase_source()
             n_atoms = 0
             n_neighbors = 0
-            for sample in self.train_dataset:
-                atoms = get_sample_atoms(sample)
-                n_atoms += atoms[properties.n_atoms].sum()
-                # TODO: add compute_neighbor_list here if neighbors are not computed
-                if not self.compute_neighbor_list and not any(isinstance(t, NeighborListTransform) for t in self.transforms):
-                    torch_nl = TorchNeighborList(cutoff=self.cutoff, wrap_atoms=True, requires_grad=False, return_distance=False)
-                    atoms = torch_nl(atoms)
-                n_neighbors += atoms[properties.n_pairs].sum()
-            self.avg_num_neighbors = n_neighbors.sum() / n_atoms.item()
+            if ase_dataset is not None and all(isinstance(t, NeighborListTransform) for t in self.transforms):
+                try:
+                    from matscipy.neighbours import neighbour_list
+
+                    for idx in ase_indices:
+                        ase_atoms = ase_dataset.db[idx]
+                        n_atoms += len(ase_atoms)
+                        n_neighbors += len(neighbour_list("i", ase_atoms, self.cutoff))
+                except Exception:
+                    for idx in ase_indices:
+                        ase_atoms = ase_dataset.db[idx]
+                        atoms = {
+                            properties.positions: torch.tensor(ase_atoms.get_positions(), dtype=self.default_dtype),
+                        }
+                        if ase_atoms.pbc.any():
+                            atoms[properties.cell] = torch.tensor(ase_atoms.cell[:], dtype=self.default_dtype)
+                        atoms = TorchNeighborList(
+                            cutoff=self.cutoff,
+                            wrap_atoms=True,
+                            requires_grad=False,
+                            return_distance=False,
+                        )(atoms)
+                        n_atoms += len(ase_atoms)
+                        n_neighbors += int(atoms[properties.n_pairs].item())
+            else:
+                for sample in self.train_dataset:
+                    atoms = get_sample_atoms(sample)
+                    n_atoms += atoms[properties.n_atoms].sum()
+                    # TODO: add compute_neighbor_list here if neighbors are not computed
+                    if not self.compute_neighbor_list and not any(isinstance(t, NeighborListTransform) for t in self.transforms):
+                        torch_nl = TorchNeighborList(cutoff=self.cutoff, wrap_atoms=True, requires_grad=False, return_distance=False)
+                        atoms = torch_nl(atoms)
+                    n_neighbors += atoms[properties.n_pairs].sum()
+            n_atoms_value = float(n_atoms.item()) if isinstance(n_atoms, torch.Tensor) else float(n_atoms)
+            n_neighbors_value = float(n_neighbors.item()) if isinstance(n_neighbors, torch.Tensor) else float(n_neighbors)
+            self.avg_num_neighbors = n_neighbors_value / n_atoms_value
             logger.debug(f"The average number of neighbors is calculated to be: {self.avg_num_neighbors:.3f}")
         return self.avg_num_neighbors
     
@@ -362,6 +441,12 @@ class AtomsDataModule(pl.LightningDataModule):
         Returns None when the property is missing or cannot be reduced to a
         scalar per species.
         """
+        if is_atomwise is None:
+            is_atomwise = False
+        cache_key = (property_key, bool(is_atomwise))
+        if cache_key in self._head_shift_cache:
+            return self._head_shift_cache[cache_key]
+
         numbers = [atomic_numbers[s] for s in self._get_species(force_process=True)]
         if len(numbers) == 0:
             return None
@@ -376,18 +461,22 @@ class AtomsDataModule(pl.LightningDataModule):
         # user-provided override per head
         if property_key in self.head_reference_by_species:
             shifts = _normalize_keys(self.head_reference_by_species[property_key])
-            logger.debug(f"Using user-specified per-species reference for '{property_key}': {shifts}.")
+            logger.debug(
+                f"Using user-specified per-species reference for '{property_key}': "
+                f"{{{', '.join(f'{k}: {float(v):.3g}' for k, v in shifts.items())}}}."
+            )
+            self._head_shift_cache[cache_key] = shifts
             return shifts
 
         # user-provided atomic_energies acts as a default per-species shift for energy
         if property_key == properties.energy and isinstance(self.atomic_energies, Dict):
-            return _normalize_keys(self.atomic_energies)
+            shifts = _normalize_keys(self.atomic_energies)
+            self._head_shift_cache[cache_key] = shifts
+            return shifts
 
         # auto-compute only when explicitly requested by the caller
         if property_key == properties.energy and self.atomic_energies == "auto":
             is_atomwise = False if is_atomwise is None else is_atomwise
-        if is_atomwise is None:
-            is_atomwise = False
 
         if is_atomwise:
             sums = torch.zeros(len(numbers), dtype=self.default_dtype)
@@ -412,29 +501,55 @@ class AtomsDataModule(pl.LightningDataModule):
                 if counts[idx] > 0:
                     shifts[z_val] = (sums[idx] / counts[idx]).item()
             if shifts:
-                logger.debug(f"Computed per-species reference for atomwise '{property_key}': {shifts}.")
+                logger.debug(
+                    f"Computed per-species reference for atomwise '{property_key}': "
+                    f"{{{', '.join(f'{k}: {float(v):.3g}' for k, v in shifts.items())}}}."
+                )
+                self._head_shift_cache[cache_key] = shifts
                 return shifts
+            self._head_shift_cache[cache_key] = None
             return None
 
         # structure-level additive property: solve least squares on counts
-        len_train = len(self.train_dataset)
-        A = torch.zeros((len_train, len(numbers)), dtype=self.default_dtype)
-        B = torch.zeros((len_train,), dtype=self.default_dtype)
-        row = 0
-        for sample in self.train_dataset:
-            atoms = get_sample_atoms(sample)
-            value = get_sample_target(sample, property_key)
-            if value is None or properties.Z not in atoms:
-                continue
-            if value.ndim > 0:
-                logger.debug(f"Skip per-species shift for '{property_key}' with shape {tuple(value.shape)}.")
-                continue
-            B[row] = value
-            for j, z in enumerate(numbers):
-                A[row, j] = torch.count_nonzero(atoms[properties.Z] == z)
-            row += 1
+        ase_dataset, ase_indices = self._get_train_ase_source()
+        if ase_dataset is not None:
+            len_train = len(list(ase_indices)) if not isinstance(ase_indices, range) else len(ase_indices)
+            A = torch.zeros((len_train, len(numbers)), dtype=self.default_dtype)
+            B = torch.zeros((len_train,), dtype=self.default_dtype)
+            row = 0
+            for idx in ase_indices:
+                ase_atoms = ase_dataset.db[idx]
+                value = self._get_ase_target(ase_atoms, property_key)
+                if value is None:
+                    continue
+                if value.ndim > 0 and value.numel() != 1:
+                    logger.debug(f"Skip per-species shift for '{property_key}' with shape {tuple(value.shape)}.")
+                    continue
+                B[row] = value.reshape(-1)[0]
+                z_numbers = ase_atoms.numbers
+                for j, z in enumerate(numbers):
+                    A[row, j] = int((z_numbers == z).sum())
+                row += 1
+        else:
+            len_train = len(self.train_dataset)
+            A = torch.zeros((len_train, len(numbers)), dtype=self.default_dtype)
+            B = torch.zeros((len_train,), dtype=self.default_dtype)
+            row = 0
+            for sample in self.train_dataset:
+                atoms = get_sample_atoms(sample)
+                value = get_sample_target(sample, property_key)
+                if value is None or properties.Z not in atoms:
+                    continue
+                if value.ndim > 0 and value.numel() != 1:
+                    logger.debug(f"Skip per-species shift for '{property_key}' with shape {tuple(value.shape)}.")
+                    continue
+                B[row] = value.reshape(-1)[0]
+                for j, z in enumerate(numbers):
+                    A[row, j] = torch.count_nonzero(atoms[properties.Z] == z)
+                row += 1
 
         if row == 0:
+            self._head_shift_cache[cache_key] = None
             return None
         A = A[:row]
         B = B[:row]
@@ -444,7 +559,11 @@ class AtomsDataModule(pl.LightningDataModule):
             logger.warning(f"Failed to compute per-species shift for '{property_key}' via lstsq; using zeros.")
             coeffs = torch.zeros_like(A[0])
         shifts = {z: coeffs[i].item() for i, z in enumerate(numbers)}
-        logger.debug(f"Computed per-species reference for '{property_key}': {shifts}.")
+        logger.debug(
+            f"Computed per-species reference for '{property_key}': "
+            f"{{{', '.join(f'{k}: {float(v):.3g}' for k, v in shifts.items())}}}."
+        )
+        self._head_shift_cache[cache_key] = shifts
         return shifts
     
     def _get_scale_shift(
@@ -473,20 +592,38 @@ class AtomsDataModule(pl.LightningDataModule):
                 per_species_tensor[atomic_numbers[k] if isinstance(k, str) else k] = v
 
         values = []
-        for sample in self.train_dataset:
-            atoms = get_sample_atoms(sample)
-            v = get_sample_target(sample, property_key)
-            if v is None:
-                continue
-            if per_species_tensor is not None and properties.Z in atoms:
-                node_shift = per_species_tensor[atoms[properties.Z]]
-                if v.shape[:1] == node_shift.shape[:1]:
-                    v = v - node_shift
-                else:
-                    v = v - node_shift.sum()
-            if use_atomwise_norm and properties.n_atoms in atoms and ((not isinstance(v, torch.Tensor)) or v.numel() == 1):
-                v = v / atoms[properties.n_atoms]
-            values.append(v)
+        ase_dataset, ase_indices = self._get_train_ase_source()
+        if ase_dataset is not None:
+            for idx in ase_indices:
+                ase_atoms = ase_dataset.db[idx]
+                v = self._get_ase_target(ase_atoms, property_key)
+                if v is None:
+                    continue
+                z_numbers = torch.tensor(ase_atoms.numbers, dtype=torch.long)
+                if per_species_tensor is not None:
+                    node_shift = per_species_tensor[z_numbers]
+                    if v.shape[:1] == node_shift.shape[:1]:
+                        v = v - node_shift
+                    else:
+                        v = v - node_shift.sum()
+                if use_atomwise_norm and v.numel() == 1:
+                    v = v / len(ase_atoms)
+                values.append(v)
+        else:
+            for sample in self.train_dataset:
+                atoms = get_sample_atoms(sample)
+                v = get_sample_target(sample, property_key)
+                if v is None:
+                    continue
+                if per_species_tensor is not None and properties.Z in atoms:
+                    node_shift = per_species_tensor[atoms[properties.Z]]
+                    if v.shape[:1] == node_shift.shape[:1]:
+                        v = v - node_shift
+                    else:
+                        v = v - node_shift.sum()
+                if use_atomwise_norm and properties.n_atoms in atoms and ((not isinstance(v, torch.Tensor)) or v.numel() == 1):
+                    v = v / atoms[properties.n_atoms]
+                values.append(v)
 
         if len(values) == 0:
             raise KeyError(f"Property '{property_key}' not found in training dataset samples.")
@@ -494,6 +631,9 @@ class AtomsDataModule(pl.LightningDataModule):
         vals = torch.cat(values) if values[0].numel() > 1 else torch.stack(values).reshape(-1)
         mean = torch.mean(vals).item()
         std = torch.std(vals).item()
+        if property_key == properties.energy and self.scale_forces:
+            std = self._get_rms(property_key=properties.forces)
+            logger.debug(f"Energy scale will use forces RMS: {std:.3f}.")
 
         self._scale_shift_cache[property_key] = (mean, std if std != 0.0 else 1.0)
         msg = (
@@ -510,15 +650,26 @@ class AtomsDataModule(pl.LightningDataModule):
         """
         Compute RMS for a given property key.
         """
+        if property_key in self._rms_cache:
+            return self._rms_cache[property_key]
+
         values = []
-        for sample in self.train_dataset:
-            v = get_sample_target(sample, property_key)
-            if v is not None:
-                values.append(v)
+        ase_dataset, ase_indices = self._get_train_ase_source()
+        if ase_dataset is not None:
+            for idx in ase_indices:
+                v = self._get_ase_target(ase_dataset.db[idx], property_key)
+                if v is not None:
+                    values.append(v)
+        else:
+            for sample in self.train_dataset:
+                v = get_sample_target(sample, property_key)
+                if v is not None:
+                    values.append(v)
         if not values:
             raise KeyError(f"Property '{property_key}' not found in training dataset samples.")
         values = torch.cat(values)
         rms = torch.sqrt(torch.mean(values * values)).item()
+        self._rms_cache[property_key] = rms
         logger.debug(f"Computed root mean square for '{property_key}': {rms:.3f}.")
         return rms
 
@@ -548,7 +699,15 @@ class AtomsDataModule(pl.LightningDataModule):
                 }
 
             per_species_cfg = h.per_species_shift
-            is_atomwise = h.is_atomwise
+            if key == properties.energy and per_species_cfg is None:
+                if self.atomic_energies == "auto":
+                    h.per_species_shift = "auto"
+                    per_species_cfg = h.per_species_shift
+                elif isinstance(self.atomic_energies, Dict):
+                    h.per_species_shift = dict(self.atomic_energies)
+                    per_species_cfg = h.per_species_shift
+            # check if we need to calculate per_species_shift with structure-based property (e.g., energy) or atom-based property (e.g., atomic_energy)
+            is_atomwise = bool(h.is_atomwise and h.reduction is None)
             per_species_vals = None
             if isinstance(per_species_cfg, dict):
                 per_species_vals = {atomic_numbers[k] if isinstance(k, str) else k: v for k, v in per_species_cfg.items()}

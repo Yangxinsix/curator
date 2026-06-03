@@ -1,19 +1,21 @@
 # @package _global_
 
 # LoRA fine-tuning mode:
-# - keep the base checkpoint frozen while training only LoRA parameters
-# - use the current backend with a LoRA adapter attached
+# - enable the LoRA wrapper on supported modules
+# - rely on each LoRA-wrapped module to freeze its own base weights when
+#   `lora_freeze_base=true`
+# - do not globally zero the learning rate for non-adapter parameter groups;
+#   unwrapped modules keep their normal optimizer settings
+# - set `model_path.mode: weights` when you want checkpoint weight loading
 finetune: lora
-lora_rank: 16
-lora_alpha: 16.0
-lora_freeze_base: true
+wrapper:
+  adapter: lora
+  lora_rank: 16
+  lora_alpha: 16.0
+  lora_freeze_base: true
 
 task:
-  checkpoint_mode: weights
-  optimizer:
-    lr: 0.0
   optimizer_groups:
-    _delete_: true
     adapter:
-      lr: 5.0e-4
+      lr: ${task.optimizer.lr}   # default: inherit the main optimizer lr; override here to tune LoRA separately
       weight_decay: 0.0

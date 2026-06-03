@@ -66,6 +66,7 @@ class AtomwiseNN(nn.Module):
         use_e3nn: bool = False,
         activation: Union[Callable, nn.Module, str, List[Callable], List[nn.Module], List[str]] = 'silu',
         heads: Optional[List[Union[HeadConfig, Dict, str]]] = None,
+        separate_heads: bool = False,
         *args,
         **kwargs,
     ):
@@ -80,6 +81,14 @@ class AtomwiseNN(nn.Module):
         self.out_features = out_features
         self.use_e3nn = use_e3nn
         self.n_hidden_layers = n_hidden_layers
+        self.separate_heads = bool(separate_heads)
+
+        # Prepare and store output specifications using HeadConfig.
+        self.heads: List[HeadConfig] = resolve_heads(heads) if heads is not None else []
+        if not self.heads:
+            self.heads = [HeadConfig(key="energy", is_atomwise=True, reduction="sum", atomwise_key="atomic_energy")]
+        if self.separate_heads and not self.use_e3nn:
+            self.out_features = sum(int(h.dim) for h in self.heads)
 
         # Setup neuron sizes
         n_neurons = [in_features]
@@ -102,17 +111,16 @@ class AtomwiseNN(nn.Module):
             acts = [activation_fn[activation] if isinstance(activation, str) else activation for _ in range(self.n_hidden_layers)] + [None]
 
         self._n_neurons = n_neurons
+        self._hidden_neurons = list(n_neurons[1:-1])
         self._acts = acts
 
-        self.readout_mlp = self._make_readout()
+        if self.separate_heads:
+            self.shared_mlp, self.head_modules, self.shared_out_features = self._make_separate_readout()
+            self.readout_mlp = self.shared_mlp
+        else:
+            self.readout_mlp = self._make_readout()
 
-        n_out = out_features if isinstance(out_features, int) else out_features.dim
-        self._n_out = int(n_out)
-
-        # Prepare and store output specifications using HeadConfig
-        self.heads: List[HeadConfig] = resolve_heads(heads) if heads is not None else []
-        if not self.heads:
-            self.heads = [HeadConfig(key="energy", is_atomwise=True, reduction="sum", atomwise_key="atomic_energy")]
+        self._n_out = sum(int(h.dim) for h in self.heads)
 
         self.model_outputs = [h.key for h in self.heads]
         self.per_atom_flags = [bool(h.write_atomwise) for h in self.heads]
@@ -123,9 +131,13 @@ class AtomwiseNN(nn.Module):
         self.per_atom_keys = [(h.atomwise_key or (h.key + "_pa")) for h in self.heads]
         self.split_size = [int(h.dim) for h in self.heads]
 
-        assert sum(self.split_size) == n_out, "Output feature dimensions do not match split sizes!"
+        assert sum(self.split_size) == self._n_out, "Output feature dimensions do not match split sizes!"
 
     def _compute(self, input: torch.Tensor) -> torch.Tensor:
+        if self.separate_heads:
+            shared = self.shared_mlp(input)
+            outputs = [self.head_modules[h.key](shared) for h in self.heads]
+            return torch.cat(outputs, dim=-1)
         return self.readout_mlp(input)
 
     def _parse_outputs(self, out: torch.Tensor, index: Optional[torch.Tensor] = None) -> Dict[str, torch.Tensor]:
@@ -173,10 +185,75 @@ class AtomwiseNN(nn.Module):
         return data
 
     def _make_readout(self) -> nn.Sequential:
-        return nn.Sequential(*[
-            Dense(self._n_neurons[i], self._n_neurons[i + 1], self._acts[i], use_e3nn=self.use_e3nn)
-            for i in range(self.n_hidden_layers + 1)
-        ])
+        return self._make_mlp(self.in_features, self.out_features)
+
+    def _make_mlp(
+        self,
+        in_features: Union[int, o3.Irreps],
+        out_features: Union[int, o3.Irreps],
+        hidden_neurons: Optional[List[Union[int, o3.Irreps]]] = None,
+    ) -> nn.Sequential:
+        hidden = list(self._hidden_neurons if hidden_neurons is None else hidden_neurons)
+        dims: List[Union[int, o3.Irreps]] = [in_features] + hidden + [out_features]
+        modules = [
+            Dense(dims[i], dims[i + 1], self._acts[i] if i < len(hidden) else None, use_e3nn=self.use_e3nn)
+            for i in range(len(dims) - 1)
+        ]
+        return nn.Sequential(*modules)
+
+    def _resolve_head_out_features(self, head: HeadConfig) -> Union[int, o3.Irreps]:
+        if not self.use_e3nn:
+            return int(head.dim)
+
+        irreps_out = getattr(head, "irreps_out", None)
+        if irreps_out is None:
+            return o3.Irreps(f"{int(head.dim)}x0e")
+        if isinstance(irreps_out, str):
+            irreps_out = o3.Irreps(irreps_out)
+        if irreps_out.dim != int(head.dim):
+            raise ValueError(
+                f"Head '{head.key}' declares dim={head.dim} but irreps_out={irreps_out} has dim={irreps_out.dim}."
+            )
+        return irreps_out
+
+    def _supports_projection(
+        self,
+        in_features: Union[int, o3.Irreps],
+        out_features: Union[int, o3.Irreps],
+    ) -> bool:
+        if not self.use_e3nn or not isinstance(in_features, o3.Irreps) or not isinstance(out_features, o3.Irreps):
+            return True
+        input_irreps = {ir for _, ir in in_features}
+        return all(ir in input_irreps for _, ir in out_features)
+
+    def _make_head_projection(
+        self,
+        in_features: Union[int, o3.Irreps],
+        head: HeadConfig,
+    ) -> nn.Module:
+        head_out = self._resolve_head_out_features(head)
+        if not self._supports_projection(in_features, head_out):
+            raise ValueError(
+                f"Head '{head.key}' with output irreps {head_out} is incompatible with readout input {in_features}."
+            )
+        return Dense(in_features, head_out, activation=None, use_e3nn=self.use_e3nn)
+
+    def _make_separate_readout(self) -> Tuple[nn.Module, nn.ModuleDict, Union[int, o3.Irreps]]:
+        if len(self._hidden_neurons) == 0:
+            shared = nn.Identity()
+            shared_out = self.in_features
+        else:
+            shared_out = self._hidden_neurons[-1]
+            shared = self._make_mlp(
+                self.in_features,
+                shared_out,
+                hidden_neurons=self._hidden_neurons[:-1],
+            )
+
+        head_modules = nn.ModuleDict()
+        for head in self.heads:
+            head_modules[head.key] = self._make_head_projection(shared_out, head)
+        return shared, head_modules, shared_out
 
     def _get_domain(self, data: properties.Type) -> Optional[str]:
         return None
@@ -188,6 +265,21 @@ class MACEAtomwiseNN(AtomwiseNN):
         num_layers: number of message-passing layers in MACE
         hidden_irreps: hidden_irreps in MACE
     """
+    def _make_separate_readout(self) -> Tuple[nn.Module, nn.ModuleDict, Union[int, o3.Irreps]]:
+        # MACE handles per-head projections in its own layerwise readouts. Keep a
+        # shared scalar trunk alias for feature extraction / legacy access only.
+        if len(self._hidden_neurons) == 0:
+            shared = nn.Identity()
+            shared_out = self.in_features
+        else:
+            shared_out = self._hidden_neurons[-1]
+            shared = self._make_mlp(
+                self.in_features,
+                shared_out,
+                hidden_neurons=self._hidden_neurons[:-1],
+            )
+        return shared, nn.ModuleDict(), shared_out
+
     def __init__(
         self,
         num_interactions: int,
@@ -233,25 +325,65 @@ class MACEAtomwiseNN(AtomwiseNN):
         )
         self.num_interactions = num_interactions
 
-        self.readouts = nn.ModuleList()
         self.in_features_list = []
-        for _ in range(num_interactions - 1):
-            self.in_features_list.append(self.hidden_irreps.dim)
-            self.readouts.append(Dense(self.hidden_irreps, self.out_features, activation=None, use_e3nn=True))
-
-        self.readouts.append(self.readout_mlp)
         self.in_features_list.append(self.hidden_irreps[0].dim)
+        if self.separate_heads:
+            self.readouts_by_head = nn.ModuleDict()
+            self.final_readouts = nn.ModuleDict()
+            final_scalar_irreps = o3.Irreps(str(self.hidden_irreps[0]))
+            for head in self.heads:
+                per_layer = nn.ModuleList()
+                head_out = self._resolve_head_out_features(head)
+                supports_hidden = self._supports_projection(self.hidden_irreps, head_out)
+                if not supports_hidden and num_interactions > 1:
+                    raise ValueError(
+                        f"Head '{head.key}' with output irreps {head_out} is incompatible with MACE hidden irreps {self.hidden_irreps}."
+                    )
+                for _ in range(num_interactions - 1):
+                    self.in_features_list.insert(-1, self.hidden_irreps.dim)
+                    per_layer.append(Dense(self.hidden_irreps, head_out, activation=None, use_e3nn=True))
+                self.readouts_by_head[head.key] = per_layer
+                if self._supports_projection(final_scalar_irreps, head_out):
+                    self.final_readouts[head.key] = self._make_mlp(final_scalar_irreps, head_out)
+                elif num_interactions == 1:
+                    raise ValueError(
+                        f"Head '{head.key}' with output irreps {head_out} cannot be predicted from the final scalar-only MACE layer."
+                    )
+            primary_head = self.heads[0].key
+            self.readouts = nn.ModuleList(list(self.readouts_by_head[primary_head]))
+            if primary_head in self.final_readouts:
+                self.readouts.append(self.final_readouts[primary_head])
+            self.in_features_list = [self.hidden_irreps.dim for _ in range(num_interactions - 1)] + [self.hidden_irreps[0].dim]
+        else:
+            self.readouts = nn.ModuleList()
+            for _ in range(num_interactions - 1):
+                self.in_features_list.insert(-1, self.hidden_irreps.dim)
+                self.readouts.append(Dense(self.hidden_irreps, self.out_features, activation=None, use_e3nn=True))
+            self.readouts.append(self.readout_mlp)
 
     def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None, domain: Optional[str] = None) -> properties.Type:
         # split node features to list then calculate contributions from different parts
         node_feat_list = torch.split(input, self.in_features_list, dim=-1)
 
-        readouts = self.readouts
-        out_list = []
-        for readout, node_feat in zip(readouts, node_feat_list):
-            out_list.append(readout(node_feat))
-        out = torch.sum(torch.stack(out_list, dim=0), dim=0)
-        return out
+        if not self.separate_heads:
+            out_list = []
+            for readout, node_feat in zip(self.readouts, node_feat_list):
+                out_list.append(readout(node_feat))
+            return torch.sum(torch.stack(out_list, dim=0), dim=0)
+
+        outputs = []
+        scalar_node_feat = node_feat_list[-1]
+        for head in self.heads:
+            contribs = [
+                readout(node_feat)
+                for readout, node_feat in zip(self.readouts_by_head[head.key], node_feat_list[:-1])
+            ]
+            if head.key in self.final_readouts:
+                contribs.append(self.final_readouts[head.key](scalar_node_feat))
+            if not contribs:
+                raise ValueError(f"Head '{head.key}' has no compatible MACE readout contributions.")
+            outputs.append(torch.sum(torch.stack(contribs, dim=0), dim=0))
+        return torch.cat(outputs, dim=-1)
 
 
 class MultiDomainAtomwiseNN(nn.Module):

@@ -15,6 +15,8 @@ from .conversion import convert_single_to_multi_domain
 
 def _upgrade_legacy_atomwise_module(module: AtomwiseNN) -> None:
     if getattr(module, "heads", None):
+        if not hasattr(module, "separate_heads"):
+            module.separate_heads = False
         return
 
     heads = [
@@ -25,6 +27,7 @@ def _upgrade_legacy_atomwise_module(module: AtomwiseNN) -> None:
             atomwise_key=properties.atomic_energy,
         )
     ]
+    module.separate_heads = False
     module.heads = heads
     module.model_outputs = [head.key for head in heads]
     module.per_atom_flags = [bool(head.write_atomwise) for head in heads]
@@ -36,8 +39,31 @@ def _upgrade_legacy_atomwise_module(module: AtomwiseNN) -> None:
     module.split_size = [int(head.dim) for head in heads]
 
 
+def _upgrade_legacy_rescale_transforms(module: GlobalRescaleShift) -> None:
+    heads = list(getattr(module, "heads", []) or [])
+    transform_groups = [
+        getattr(module, "scales", []),
+        getattr(module, "shifts", []),
+        getattr(module, "atomic_scales", []),
+        getattr(module, "atomic_shifts", []),
+    ]
+    for transforms in transform_groups:
+        for idx, transform in enumerate(transforms):
+            if hasattr(transform, "data_key"):
+                continue
+            if idx < len(heads):
+                head = heads[idx]
+                data_key = head.atomwise_key if head.is_atomwise and head.atomwise_key else head.key
+                transform.data_key = data_key
+            elif hasattr(transform, "key"):
+                transform.data_key = transform.key
+            if not hasattr(transform, "atomwise_data_key"):
+                transform.atomwise_data_key = getattr(transform, "data_key", None) != getattr(transform, "key", None)
+
+
 def _upgrade_legacy_rescale_module(module: GlobalRescaleShift) -> None:
-    if all(hasattr(module, name) for name in ("heads", "scales", "shifts", "atomic_shifts")):
+    if all(hasattr(module, name) for name in ("heads", "scales", "shifts", "atomic_scales", "atomic_shifts")):
+        _upgrade_legacy_rescale_transforms(module)
         return
 
     raw_state = vars(module)
@@ -139,10 +165,16 @@ def _upgrade_legacy_rescale_module(module: GlobalRescaleShift) -> None:
         if torch.is_floating_point(reference_tensor) or torch.is_complex(reference_tensor):
             to_kwargs["dtype"] = reference_tensor.dtype
         module.to(**to_kwargs)
+    _upgrade_legacy_rescale_transforms(module)
 
 
 def _upgrade_legacy_checkpoint_model(model: torch.nn.Module) -> torch.nn.Module:
     for module in model.modules():
+        if module.__class__.__name__ == "Painn":
+            if not hasattr(module, "cutoff_fn"):
+                module.cutoff_fn = None
+            if not hasattr(module, "radial_basis"):
+                module.radial_basis = None
         if isinstance(module, AtomwiseNN):
             _upgrade_legacy_atomwise_module(module)
         if isinstance(module, GlobalRescaleShift):

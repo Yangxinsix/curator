@@ -79,7 +79,11 @@ class Representation(nn.Module):
         )
 
         def maybe(name, value):
-            return {name: value} if value is not None and (accepts_kwargs or name in sig.parameters) else {}
+            if value is None:
+                return {}
+            if name == "heads" and len(value) == 0:
+                return {}
+            return {name: value} if accepts_kwargs or name in sig.parameters else {}
 
         if accepts_kwargs:
             init_kwargs = {key: value for key, value in kwargs.items() if value is not None}

@@ -272,12 +272,15 @@ class Nequip(Representation):
             readout_kwargs: Dict[str, object] = {"domains": [str(domain) for domain in domains]}
             if heads_by_domain:
                 readout_kwargs["heads_by_domain"] = heads_by_domain
+            template_module = next(iter(domain_modules.values()))
+            if getattr(template_module, "separate_heads", False):
+                readout_kwargs["separate_heads"] = True
             rep_config["readout"] = partial(MultiDomainAtomwiseNN, **readout_kwargs)
         elif readout is not None and hasattr(readout, "heads"):
-            rep_config["readout"] = partial(
-                readout.__class__,
-                heads=list(readout.heads),
-            )
+            readout_kwargs: Dict[str, object] = {"heads": list(readout.heads)}
+            if getattr(readout, "separate_heads", False):
+                readout_kwargs["separate_heads"] = True
+            rep_config["readout"] = partial(readout.__class__, **readout_kwargs)
         return rep_config
 
     def forward(

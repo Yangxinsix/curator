@@ -175,13 +175,15 @@ class Evaluator:
                             f"Known keys: {sorted(STANDARD_COLUMN_SPECS)}"
                         )
                     if column_name in STANDARD_COLUMN_SPECS:
-                        raise ValueError(
-                            f"{name} target '{column_name}' conflicts with a standard SQLite column."
-                        )
-                    if column_name in used_columns:
+                        if column_name != source_key:
+                            raise ValueError(
+                                f"{name} target '{column_name}' conflicts with a standard SQLite column."
+                            )
+                    elif column_name in used_columns:
                         raise ValueError(f"Duplicate SQLite column mapping for '{column_name}'.")
                     used_columns.add(column_name)
-                    extra_columns[column_name] = dict(STANDARD_COLUMN_SPECS[source_key])
+                    if column_name not in STANDARD_COLUMN_SPECS:
+                        extra_columns[column_name] = dict(STANDARD_COLUMN_SPECS[source_key])
 
             sqlite_output = Path(sqlite_output).expanduser()
             if sqlite_output.exists():

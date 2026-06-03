@@ -101,7 +101,7 @@ class MACE(Representation):
         # hidden feature irreps
         if hidden_irreps is not None:
             self.hidden_irreps = o3.Irreps(hidden_irreps) if isinstance(hidden_irreps, str) else hidden_irreps
-            self.lmax = hidden_irreps.lmax
+            self.lmax = self.hidden_irreps.lmax
         else:
             self.hidden_irreps = o3.Irreps(
                 [
@@ -302,7 +302,15 @@ class MACE(Representation):
             readout_kwargs: Dict[str, Any] = {"domains": [str(domain) for domain in domains]}
             if heads_by_domain:
                 readout_kwargs["heads_by_domain"] = heads_by_domain
+            template_module = next(iter(domain_modules.values()))
+            if getattr(template_module, "separate_heads", False):
+                readout_kwargs["separate_heads"] = True
             rep_config["readout"] = partial(MultiDomainMACEAtomwiseNN, **readout_kwargs)
+        elif readout is not None and hasattr(readout, "heads"):
+            readout_kwargs: Dict[str, Any] = {"heads": list(readout.heads)}
+            if getattr(readout, "separate_heads", False):
+                readout_kwargs["separate_heads"] = True
+            rep_config["readout"] = partial(readout.__class__, **readout_kwargs)
         return rep_config
             
     def forward(

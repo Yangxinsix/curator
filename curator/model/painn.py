@@ -79,7 +79,7 @@ class Painn(Representation):
         )
 
     def export_init_kwargs(self) -> Dict[str, Any]:
-        return {
+        rep_config = {
             "num_interactions": self.num_interactions,
             "num_features": self.num_features,
             "cutoff": self.cutoff,
@@ -87,6 +87,13 @@ class Painn(Representation):
             "cutoff_fn": self.cutoff_fn,
             "radial_basis": self.radial_basis,
         }
+        readout = getattr(self, "readout", None)
+        if readout is not None and hasattr(readout, "heads"):
+            readout_kwargs: Dict[str, Any] = {"heads": list(readout.heads)}
+            if getattr(readout, "separate_heads", False):
+                readout_kwargs["separate_heads"] = True
+            rep_config["readout"] = partial(readout.__class__, **readout_kwargs)
+        return rep_config
 
     def forward(
         self, 

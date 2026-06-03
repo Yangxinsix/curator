@@ -64,6 +64,7 @@ def get_model_wrapper_config(model: nn.Module) -> WrapperConfig:
         "lora_freeze_base": bool(
             getattr(rep, "lora_freeze_base", defaults["lora_freeze_base"])
         ),
+        "lora_target_groups": getattr(rep, "lora_target_groups", defaults["lora_target_groups"]),
     }
     from .config import resolve_wrapper_config
 
@@ -123,8 +124,47 @@ def apply_wrappers(
             f"{model.representation.__class__.__name__}.export_init_kwargs() must return a dict "
             f"for wrapper rebuilds, got {type(rep_kwargs)!r}."
         )
-    with temporary_wrapper_config(wrapper_cfg), temporary_default_dtype(build_dtype):
-        patched_rep = model.representation.__class__(**rep_kwargs)
+    if wrapper_cfg.adapter == "lora" and wrapper_cfg.lora_target_groups:
+        # selective lora patch
+        from .config import resolve_wrapper_config
+
+        plain_cfg = resolve_wrapper_config(backend=wrapper_cfg.backend, adapter="none")
+        with temporary_wrapper_config(plain_cfg), temporary_default_dtype(build_dtype):
+            patched_rep = model.representation.__class__(**rep_kwargs)
+        with temporary_wrapper_config(wrapper_cfg), temporary_default_dtype(build_dtype):
+            lora_rep = model.representation.__class__(**rep_kwargs)
+        target_groups_fn = getattr(patched_rep, "module_groups", None)
+        source_groups_fn = getattr(lora_rep, "module_groups", None)
+        target_groups = target_groups_fn() if callable(target_groups_fn) else None
+        source_groups = source_groups_fn() if callable(source_groups_fn) else None
+        if not target_groups or not source_groups:
+            raise TypeError(
+                f"{patched_rep.__class__.__name__} must implement module_groups() for selective LoRA rebuilds."
+            )
+        for group_name in wrapper_cfg.lora_target_groups:
+            if group_name not in target_groups or group_name not in source_groups:
+                raise ValueError(
+                    f"Unknown LoRA target group {group_name!r} for {patched_rep.__class__.__name__}; "
+                    f"available groups: {list(target_groups.keys())}."
+                )
+            target_modules = list(target_groups[group_name])
+            source_modules = list(source_groups[group_name])
+            if len(target_modules) != len(source_modules):
+                raise ValueError(
+                    f"Group {group_name!r} has mismatched module counts between plain and LoRA rebuilds."
+                )
+            for target_module, source_module in zip(target_modules, source_modules):
+                for child_name, child in patched_rep.named_children():
+                    if child is target_module:
+                        setattr(patched_rep, child_name, source_module)
+                        break
+                else:
+                    raise ValueError(
+                        f"Group {group_name!r} is not a direct representation child in {patched_rep.__class__.__name__}."
+                    )
+    else:
+        with temporary_wrapper_config(wrapper_cfg), temporary_default_dtype(build_dtype):
+            patched_rep = model.representation.__class__(**rep_kwargs)
     patched_model = model.clone_with_representation(patched_rep)
 
     patched_model.to(device=device)

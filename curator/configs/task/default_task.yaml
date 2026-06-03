@@ -8,8 +8,8 @@ _target_: curator.model.LitNNP       # LightningModule wrapper around the model
 scheduler_monitor: val_total_loss    # metric monitored by the scheduler
 warmup_steps: 0                      # optional linear warmup steps for optimizer
 save_entire_model: True              # save full model object (not just state dict)
-checkpoint_mode: weights             # checkpoint loading mode: weights | model | resume
 optimizer_groups: null               # optional per-group optimizer overrides, e.g. backbone/readout/output_modules
+normalize_domain_loss: null          # auto-enable for multi-domain training when unset; set false to disable explicitly
 
 # optional task-side loss overrides keyed by output name, e.g. {energy: 2, forces: 98}
 loss_weights: {}

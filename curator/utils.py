@@ -83,11 +83,26 @@ def load_trained_model(
     cfg: Optional[DictConfig] = None,
 ) -> torch.nn.Module:
     """Load a trained model or checkpoint and return a torch.nn.Module."""
+    from curator.layer.wrappers import get_config_wrapper_config, get_model_wrapper_config
+    from curator.model.conversion import convert_model_wrapper
 
     model_file = Path(model_file)
 
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def _to_container(config_like):
+        if isinstance(config_like, DictConfig):
+            return OmegaConf.to_container(config_like, resolve=False)
+        return config_like
+
+    def _compose_model_config(model_config, *, data_config=None, task_config=None):
+        bundle = OmegaConf.create({"model": _to_container(model_config)})
+        if data_config is not None:
+            bundle.data = _to_container(data_config)
+        if task_config is not None:
+            bundle.task = _to_container(task_config)
+        return bundle.model
 
     def _torch_load(model_file: Path, device, load_weights_only: bool):
         try:
@@ -120,6 +135,10 @@ def load_trained_model(
         else:
             raise
 
+    cfg_copy = _copy_config(cfg)
+    if cfg_copy is not None:
+        normalize_config_sequences(cfg_copy)
+
     if isinstance(obj, torch.nn.Module):
         obj.to(device)
         return obj
@@ -128,19 +147,32 @@ def load_trained_model(
         raise TypeError(f"Unsupported checkpoint format at {model_file}.")
 
     stored_model = obj.get("model")
+    if isinstance(stored_model, torch.nn.Module):
+        stored_wrapper = get_model_wrapper_config(stored_model)
+    else:
+        stored_wrapper = get_config_wrapper_config(obj.get("wrapper_config"))
+
     if not load_weights_only and isinstance(stored_model, torch.nn.Module):
         stored_model.to(device)
         return stored_model
 
-    model_cfg = cfg.model if cfg is not None else obj.get("model_params") or obj.get("model_cfg")
+    model_cfg = cfg_copy.model if cfg_copy is not None else obj.get("model_params") or obj.get("model_cfg")
     model_cfg = _copy_config(model_cfg)
     if model_cfg is None:
         raise ValueError("Checkpoint does not contain model parameters to instantiate.")
+    model_cfg = _compose_model_config(
+        model_cfg,
+        data_config=(cfg_copy.data if cfg_copy is not None else obj.get("data_params")),
+        task_config=(cfg_copy.task if cfg_copy is not None and "task" in cfg_copy else None),
+    )
     _listify_config_field(model_cfg, "input_modules")
     _listify_config_field(model_cfg, "output_modules")
     model = instantiate(model_cfg, _convert_="all")
 
-    data_cfg = cfg.data if cfg is not None else obj.get('data_params') if isinstance(obj, dict) else None
+    if stored_wrapper is not None:
+        model = convert_model_wrapper(model, stored_wrapper)
+
+    data_cfg = cfg_copy.data if cfg_copy is not None else obj.get('data_params') if isinstance(obj, dict) else None
     data_cfg = _copy_config(data_cfg)
     if data_cfg is not None:
         datamodule = instantiate(data_cfg, _convert_="all")
@@ -491,6 +523,13 @@ def update_config_from_datamodule(
             return [value]
         return list(value)
 
+    def _unique_preserve_order(values: List) -> List:
+        unique: List = []
+        for value in values:
+            if value not in unique:
+                unique.append(value)
+        return unique
+
     def _update_heads_cfg(cfg: DictConfig, keypath: str, heads: List) -> None:
         heads_cfg = OmegaConf.select(cfg, keypath)
         if isinstance(heads_cfg, DictConfig) and "_target_" in heads_cfg:
@@ -541,8 +580,9 @@ def update_config_from_datamodule(
         OmegaConf.update(cfg, "model.representation.heads", merged_heads or ["energy"], force_add=True)
         if logger is not None and len(heads_by_domain) > 1:
             logger.warning(
-                "Per-domain heads requested but model.representation.readout is not configurable; "
-                "falling back to merged representation heads %s.",
+                "Per-domain heads requested but model.representation.readout is not configurable in the "
+                "config snapshot; storing merged representation heads %s in config while domain-specific "
+                "readout heads will be applied when the model is promoted to multi-domain.",
                 merged_heads or ["energy"],
             )
 
@@ -597,7 +637,7 @@ def update_config_from_datamodule(
         for domain_name, domain_dm in domain_modules.items():
             domain_key = str(domain_to_id.get(domain_name, domain_name))
             domain_heads = _ensure_list(getattr(domain_dm, "heads", None), default=data_heads)
-            heads_by_domain[domain_key] = list(dict.fromkeys(domain_heads))
+            heads_by_domain[domain_key] = _unique_preserve_order(domain_heads)
 
             domain_rescale = [properties.energy]
             for key in _ensure_list(
@@ -1077,25 +1117,6 @@ def transfer_symmetric_contractions(
         target_dict[f"products.{i}.symmetric_contractions.sc.weight"] = wm
 
 
-def get_transfer_keys(num_layers: int) -> List[str]:
-    return [
-        "embeddings.chemical_embedding.linear.weight",
-        *[f"readout.readouts.{j}.linear.weight" for j in range(num_layers - 1)],
-        *[f"readout.readout_mlp.{i}.linear.weight" for i in range(2)],
-        *[f"readout.readouts.{num_layers - 1}.{i}.linear.weight" for i in range(2)],
-    ] + [
-        s
-        for j in range(num_layers)
-        for s in [
-            f"interactions.{j}.linear_up.weight",
-            *[f"interactions.{j}.conv_tp_weights.layer{i}.weight" for i in range(4)],
-            f"interactions.{j}.linear.weight",
-            f"interactions.{j}.skip_tp.weight",
-            f"products.{j}.linear.weight",
-        ]
-    ]
-
-
 def _squeeze_if_compatible(src: torch.Tensor, target_shape: torch.Size) -> torch.Tensor:
     if src.shape != target_shape and src.dim() == len(target_shape) + 1 and src.shape[0] == 1:
         return src.squeeze(0)
@@ -1139,7 +1160,12 @@ def load_e3nn_weights(source_model, target_model):
     target_shapes = {k: v.shape for k, v in target_dict.items()}
 
     num_layers = len(source_model.representation.interactions)
-    transfer_keys = get_transfer_keys(num_layers)
+    transfer_keys = sorted(
+        key
+        for key in set(source_dict.keys()) & set(target_dict.keys())
+        if key.startswith(("embeddings.", "interactions.", "products.", "readout."))
+        and "symmetric_contraction" not in key
+    )
     for key in transfer_keys:
         target_shape = target_shapes.get(key)
         if target_shape is None:
@@ -1185,7 +1211,12 @@ def load_cueq_weights(source_model, target_model):
     target_shapes = {k: v.shape for k, v in target_dict.items()}
 
     num_layers = len(target_model.representation.interactions)
-    transfer_keys = get_transfer_keys(num_layers)
+    transfer_keys = sorted(
+        key
+        for key in set(source_dict.keys()) & set(target_dict.keys())
+        if key.startswith(("embeddings.", "interactions.", "products.", "readout."))
+        and "symmetric_contraction" not in key
+    )
     for key in transfer_keys:
         target_shape = target_shapes.get(key)
         if target_shape is None:
@@ -1194,12 +1225,6 @@ def load_cueq_weights(source_model, target_model):
             target_dict[key] = _squeeze_if_compatible(source_dict[key], target_shape)
         else:
             logging.warning("Key %s not found in source cueq model", key)
-
-    for key in source_dict.keys():
-        if "weight" in key and any(x in key for x in ["linear", "skip_tp"]):
-            target_shape = target_shapes.get(key)
-            if target_shape is not None:
-                target_dict[key] = _squeeze_if_compatible(source_dict[key], target_shape)
 
     lmax = getattr(source_model.representation, "lmax", None)
     try:

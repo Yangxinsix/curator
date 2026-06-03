@@ -57,13 +57,13 @@ def convert_main(argv: Optional[List[str]] = None):
     from ..model.checkpoint_upgrade import upgrade_checkpoint
     from ..model.conversion import (
         convert_cueq_to_e3nn,
-        convert_curator_multi_to_single,
-        convert_curator_single_to_multi,
-        convert_curator_to_mace,
         convert_e3nn_to_cueq,
-        convert_mace_to_curator,
+        convert_multi_to_selected_domains,
+        convert_single_to_multi_domain,
+        build_mace_from_curator,
+        load_official_mace_as_curator,
     )
-    from ..utils import load_models
+    from ..utils import load_model, load_models
 
     device = args.device
     target = None
@@ -98,18 +98,13 @@ def convert_main(argv: Optional[List[str]] = None):
         if args.single_to_multi:
             if domain_selectors:
                 raise ValueError("--domains is only valid with --multi-to-single.")
-            target = convert_curator_single_to_multi(
-                curator_path=ckpt_path,
-                output_path=output_path,
-                device=torch.device(device),
-            )
+            model = load_model(ckpt_path, device=torch.device(device), load_compiled=False, load_weights_only=False)
+            torch.save(convert_single_to_multi_domain(model), output_path)
+            target = output_path
         else:
-            target = convert_curator_multi_to_single(
-                curator_path=ckpt_path,
-                output_path=output_path,
-                domains=domain_selectors,
-                device=torch.device(device),
-            )
+            model = load_model(ckpt_path, device=torch.device(device), load_compiled=False, load_weights_only=False)
+            torch.save(convert_multi_to_selected_domains(model, domains=domain_selectors), output_path)
+            target = output_path
     elif args.e3nn_to_cueq or args.cueq_to_e3nn:
         import torch
 
@@ -161,15 +156,19 @@ def convert_main(argv: Optional[List[str]] = None):
             suffix = "_mace" if args.curator_to_mace else "_converted"
             output_path = ckpt_path.with_name(f"{ckpt_path.stem}{suffix}{ckpt_path.suffix}")
         if args.curator_to_mace:
-            target = convert_curator_to_mace(curator_path=ckpt_path, output_path=output_path, device=torch.device(device))
+            model = load_model(ckpt_path, device=torch.device(device), load_compiled=False, load_weights_only=False)
+            torch.save(build_mace_from_curator(model), output_path)
+            target = output_path
         else:
-            target = convert_mace_to_curator(mace_path=ckpt_path, output_path=output_path, device=torch.device(device))
+            torch.save(load_official_mace_as_curator(ckpt_path, device=torch.device(device)), output_path)
+            target = output_path
     else:
         import torch
 
         ckpt_path = Path(args.ckpt_path)
         output_path = args.output or ckpt_path.with_name(f"{ckpt_path.stem}_converted{ckpt_path.suffix}")
-        target = convert_mace_to_curator(mace_path=ckpt_path, output_path=output_path, device=torch.device(device))
+        torch.save(load_official_mace_as_curator(ckpt_path, device=torch.device(device)), output_path)
+        target = output_path
 
     print(f"Converted checkpoint saved to {target}")
     return 0

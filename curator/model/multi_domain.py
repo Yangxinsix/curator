@@ -199,6 +199,7 @@ def apply_domain_set(
 def align_model_domains(
     model: torch.nn.Module,
     domains,
+    heads_by_domain: Optional[Dict[str, List[object]]] = None,
     logger=None,
 ):
     target_domains = [str(domain) for domain in list(domains or [])]
@@ -208,9 +209,16 @@ def align_model_domains(
     if not isinstance(model, MultiDomainPotential):
         from curator.model.conversion import convert_single_to_multi_domain
 
-        model = convert_single_to_multi_domain(model)
+        template_domain = "0" if "0" in target_domains else target_domains[0]
+        model = convert_single_to_multi_domain(
+            model,
+            template_domain=template_domain,
+            domains=target_domains,
+            heads_by_domain=heads_by_domain,
+        )
         if logger:
             logger.debug("Converted single-domain model to MultiDomainPotential for domain-aware training.")
+        return model
 
     readout = getattr(getattr(model, "representation", None), "readout", None)
     current_domain_modules = getattr(readout, "domain_modules", None)
@@ -270,9 +278,13 @@ def align_model_domains_from_datamodule(
     target_domains = list(
         dict.fromkeys(str(domain_to_id.get(name, name)) for name in domain_modules.keys())
     )
+    heads_by_domain = {
+        str(domain_to_id.get(name, name)): list(getattr(domain_dm, "heads", None) or [])
+        for name, domain_dm in domain_modules.items()
+    }
     if not target_domains:
         raise ValueError("Multi-domain datamodule must expose at least one target domain.")
-    return align_model_domains(model, target_domains, logger=logger)
+    return align_model_domains(model, target_domains, heads_by_domain=heads_by_domain, logger=logger)
 
 
 __all__ = [

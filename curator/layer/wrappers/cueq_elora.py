@@ -21,7 +21,8 @@ from .cueq import (
     cuet,
     make_tensor_product as make_cueq_tensor_product,
 )
-from .utils import freeze_module_parameters, make_lora_matrix_pair
+from .._symmetric_contraction import SymmetricContraction as E3NNSymmetricContraction
+from .utils import clamp_rank, freeze_module_parameters, make_lora_matrix_pair
 
 
 @dataclass(frozen=True)
@@ -174,12 +175,45 @@ def _reorder_specs(
     return ordered
 
 
+def _make_symmetric_contraction_reference_specs(
+    irreps_in,
+    irreps_out,
+    correlation: int,
+    num_elements: int | None,
+) -> list[_CueqPathSpec]:
+    reference = E3NNSymmetricContraction(
+        str(irreps_in),
+        str(irreps_out),
+        correlation=int(correlation),
+        internal_weights=True,
+        shared_weights=True,
+        num_elements=num_elements,
+    )
+    specs: list[_CueqPathSpec] = []
+    offset = 0
+    for out_i, contraction in enumerate(reference.contractions):
+        weights = [contraction.weights_max, *list(contraction.weights)]
+        for degree, weight in zip(range(contraction.correlation, 0, -1), weights):
+            path_shape = tuple(int(v) for v in weight.shape[1:])
+            width = int(path_shape[0]) if path_shape else 0
+            specs.append(
+                _make_path_spec(
+                    (int(out_i), int(degree)),
+                    path_shape,
+                    slice(offset, offset + width),
+                )
+            )
+            offset += width
+    return specs
+
+
 class _CueqPathwiseELoRAModuleMixin:
     lora_rank: int
     lora_alpha: float
     lora_scale: float
     _merged: bool
     _path_specs: list[_CueqPathSpec]
+    _path_scales: list[float]
 
     def _init_pathwise_elora(
         self,
@@ -194,21 +228,24 @@ class _CueqPathwiseELoRAModuleMixin:
         self.lora_scale = self.lora_alpha / float(max(1, self.lora_rank))
         self._merged = False
         self._path_specs = list(path_specs)
+        self._path_scales = []
         self.lora_A = nn.ParameterList()
         self.lora_B = nn.ParameterList()
         if weight_shape is None or self.lora_rank <= 0:
             return
         prefix = tuple(int(v) for v in weight_shape[:-1])
         for spec in self._path_specs:
+            path_rank = clamp_rank(spec.left_dim, spec.right_dim, self.lora_rank)
             lora_a, lora_b = make_lora_matrix_pair(
                 spec.left_dim,
                 spec.right_dim,
-                rank=self.lora_rank,
+                rank=path_rank,
                 shape_prefix=prefix,
                 init_scale=spec.init_scale,
             )
             self.lora_A.append(lora_a)
             self.lora_B.append(lora_b)
+            self._path_scales.append(self.lora_alpha / float(path_rank))
 
     def _has_unmerged_elora(self) -> bool:
         return not self._merged and len(self.lora_A) > 0
@@ -218,10 +255,15 @@ class _CueqPathwiseELoRAModuleMixin:
             return weight
         delta = torch.zeros_like(weight)
         prefix = tuple(int(v) for v in weight.shape[:-1])
-        for spec, lora_a, lora_b in zip(self._path_specs, self.lora_A, self.lora_B):
+        for spec, path_scale, lora_a, lora_b in zip(
+            self._path_specs,
+            self._path_scales,
+            self.lora_A,
+            self.lora_B,
+        ):
             update = torch.matmul(lora_a, lora_b).reshape(*prefix, *spec.path_shape)
-            delta[..., spec.weight_slice] = update.flatten(start_dim=-len(spec.path_shape))
-        return weight + self.lora_scale * delta
+            delta[..., spec.weight_slice] = update.flatten(start_dim=-len(spec.path_shape)) * path_scale
+        return weight + delta
 
     def _merge_pathwise_elora(self, target: nn.Parameter) -> None:
         if not self._has_unmerged_elora():
@@ -416,26 +458,63 @@ class CueqLoRASymmetricContraction(_CueqPathwiseELoRAModuleMixin, CuetSymmetricC
         **kwargs,
     ) -> None:
         super().__init__(*args, **kwargs)
-        path_specs = [
-            _make_path_spec(
-                (path_i,),
-                self.sc.get_segment_shape(0, path_i),
-                self.sc.segment_slice(0, path_i),
-            )
-            for path_i in range(self.sc.num_paths)
-        ]
-        self._init_pathwise_elora(
-            tuple(int(v) for v in self.sc.weight.shape),
-            path_specs,
-            rank=rank,
-            alpha=alpha,
+        path_specs = _make_symmetric_contraction_reference_specs(
+            self.sc.irreps_in,
+            self.sc.irreps_out,
+            self.contraction_degree,
+            self.num_elements,
         )
+        total_width = sum(spec.left_dim for spec in path_specs)
+        if total_width != int(self.sc.weight.shape[1]):
+            raise ValueError(
+                "Symmetric-contraction path specs do not match visible weight width: "
+                f"specs={total_width}, weight={int(self.sc.weight.shape[1])}."
+            )
+        self.lora_rank = int(rank)
+        self.lora_alpha = float(alpha)
+        self.lora_scale = self.lora_alpha / float(max(1, self.lora_rank))
+        self._merged = False
+        self._path_specs = path_specs
+        self._path_scales = []
+        self.lora_A = nn.ParameterList()
+        self.lora_B = nn.ParameterList()
+        num_elements = int(self.sc.weight.shape[0])
+        if self.lora_rank > 0:
+            for spec in self._path_specs:
+                path_rank = clamp_rank(spec.left_dim, spec.right_dim, self.lora_rank)
+                lora_a, lora_b = make_lora_matrix_pair(
+                    spec.left_dim,
+                    spec.right_dim,
+                    rank=path_rank,
+                    shape_prefix=(num_elements,),
+                    init_scale=spec.init_scale,
+                )
+                self.lora_A.append(lora_a)
+                self.lora_B.append(lora_b)
+                self._path_scales.append(self.lora_alpha / float(path_rank))
         if elora_freeze_base:
             freeze_module_parameters(self.sc)
 
+    def _apply_visible_pathwise_elora(self, weight: torch.Tensor) -> torch.Tensor:
+        if not self._has_unmerged_elora():
+            return weight
+        delta = torch.zeros_like(weight)
+        num_elements = int(weight.shape[0])
+        for spec, path_scale, lora_a, lora_b in zip(
+            self._path_specs,
+            self._path_scales,
+            self.lora_A,
+            self.lora_B,
+        ):
+            update = torch.matmul(lora_a, lora_b).reshape(num_elements, *spec.path_shape)
+            delta[:, spec.weight_slice, :] = update * path_scale
+        return weight + delta
+
     def forward(self, x: torch.Tensor, attrs: torch.Tensor) -> torch.Tensor:
-        weight = self._apply_pathwise_elora(self.sc.weight)
-        return self.forward_with_weight(x, attrs, weight)
+        return self.forward_with_weight(x, attrs, self._apply_visible_pathwise_elora(self.sc.weight))
 
     def merge_elora(self) -> None:
-        self._merge_pathwise_elora(self.sc.weight)
+        if not self._has_unmerged_elora():
+            return
+        self.sc.weight.data = self._apply_visible_pathwise_elora(self.sc.weight.data)
+        self._merged = True

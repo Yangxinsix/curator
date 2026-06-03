@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Dict, Iterable, Optional
 
 import torch
-from omegaconf import DictConfig, ListConfig, open_dict
+from omegaconf import DictConfig, ListConfig, OmegaConf, open_dict
 
 from curator.data import properties
 
@@ -45,8 +45,28 @@ def is_offline_distill_output(cfg: DictConfig) -> bool:
     return teacher_output_property != student_property
 
 
-def prepare_teacher_model_for_offline_distillation(model, output_columns: Dict[str, str]) -> None:
-    if properties.energy_hessian not in output_columns:
+def prepare_teacher_model_for_offline_distillation(
+    model,
+    output_columns: Dict[str, str],
+    *,
+    projected_hessian: Optional[DictConfig] = None,
+) -> None:
+    def projected_option(name: str, default):
+        if projected_hessian is None:
+            return default
+        if isinstance(projected_hessian, dict):
+            return projected_hessian.get(name, default)
+        return OmegaConf.select(projected_hessian, name, default=default)
+
+    hessian_outputs_requested = [
+        properties.energy_hessian,
+        properties.energy_hessian_projected,
+        properties.energy_hessian_probe_vectors,
+    ]
+    requested_hessian_outputs = [
+        key for key in hessian_outputs_requested if key in output_columns
+    ]
+    if not requested_hessian_outputs:
         return
     if any(
         not hasattr(model, attr) for attr in ("output_modules", "model_outputs", "register_callbacks")
@@ -54,7 +74,24 @@ def prepare_teacher_model_for_offline_distillation(model, output_columns: Dict[s
         raise TypeError(
             "Offline Hessian distillation requires teacher models with mutable output modules."
         )
-    from curator.layer import EnergyHessianOutput, GradientOutput
+    from curator.layer import EnergyHessianOutput, GradientOutput, PairwiseDistance
+
+    # Hessian distill needs forces differentiable w.r.t. positions.
+    # Direct-force teachers need both switches on; energy teachers also work with these defaults.
+    pairwise_module = None
+    for module in getattr(model, "input_modules", []):
+        if isinstance(module, PairwiseDistance):
+            pairwise_module = module
+            break
+    if pairwise_module is None:
+        log.warning("Hessian distill requested, but teacher model has no PairwiseDistance input module.")
+    else:
+        pairwise_module.compute_distance_from_R = True
+        pairwise_module.compute_forces = True
+        log.info(
+            "Prepared Hessian distill teacher: enabled PairwiseDistance("
+            "compute_distance_from_R=True, compute_forces=True)."
+        )
 
     gradient_module = None
     gradient_index = None
@@ -63,7 +100,8 @@ def prepare_teacher_model_for_offline_distillation(model, output_columns: Dict[s
             gradient_module = module
             gradient_index = i
             break
-    if gradient_module is None:
+    teacher_has_forces = properties.forces in getattr(model, "model_outputs", [])
+    if gradient_module is None and not teacher_has_forces:
         insert_at = len(model.output_modules)
         model.output_modules.insert(
             insert_at,
@@ -74,8 +112,15 @@ def prepare_teacher_model_for_offline_distillation(model, output_columns: Dict[s
             )
         )
         gradient_index = insert_at
-    elif properties.forces not in gradient_module.model_outputs:
-        gradient_module.update_model_outputs(properties.forces)
+        log.info("Prepared Hessian distill teacher: inserted GradientOutput for force derivatives.")
+    elif gradient_module is None:
+        log.info("Prepared Hessian distill teacher: using teacher-provided forces without GradientOutput.")
+    elif gradient_module is not None:
+        gradient_module.grad_on_edge_diff = False
+        gradient_module.grad_on_positions = True
+        if properties.forces not in gradient_module.model_outputs:
+            gradient_module.update_model_outputs(properties.forces)
+        log.info("Prepared Hessian distill teacher: configured existing GradientOutput for position forces.")
 
     hessian_module = None
     for module in model.output_modules:
@@ -86,12 +131,21 @@ def prepare_teacher_model_for_offline_distillation(model, output_columns: Dict[s
         insert_at = len(model.output_modules) if gradient_index is None else gradient_index + 1
         model.output_modules.insert(
             insert_at,
-            EnergyHessianOutput(model_outputs=[properties.energy_hessian]),
+            EnergyHessianOutput(model_outputs=requested_hessian_outputs),
         )
         hessian_module = model.output_modules[insert_at]
-    elif properties.energy_hessian not in hessian_module.model_outputs:
-        hessian_module.update_model_outputs(properties.energy_hessian)
+    else:
+        missing_hessian_outputs = [
+            key for key in requested_hessian_outputs
+            if key not in hessian_module.model_outputs
+        ]
+        if missing_hessian_outputs:
+            hessian_module.update_model_outputs(missing_hessian_outputs)
     hessian_module.vectorize = False
+    if properties.energy_hessian_projected in requested_hessian_outputs:
+        hessian_module.num_probes = projected_option("num_probes", None)
+        hessian_module.normalize_probes = bool(projected_option("normalize", False))
+        hessian_module.probe_distribution = str(projected_option("distribution", "gaussian"))
 
 # Collect the mapping of student properties to teacher properties from the distillation outputs.
 def collect_distill_output_columns(outputs: Optional[DictConfig]) -> Dict[str, str]:
@@ -108,6 +162,11 @@ def collect_distill_output_columns(outputs: Optional[DictConfig]) -> Dict[str, s
                 f"'{existing}' and '{teacher_property}'."
             )
         columns[source_property] = teacher_property
+        if source_property == properties.energy_hessian_projected:
+            columns.setdefault(
+                properties.energy_hessian_probe_vectors,
+                properties.energy_hessian_probe_vectors,
+            )
     return columns
 
 
@@ -199,7 +258,11 @@ def prepare_distillation(config: DictConfig, logger: Optional[logging.Logger] = 
             cfg=distill_cfg.get("teacher_cfg"),
         )
         for teacher_model in models:
-            prepare_teacher_model_for_offline_distillation(teacher_model, output_columns)
+            prepare_teacher_model_for_offline_distillation(
+                teacher_model,
+                output_columns,
+                projected_hessian=OmegaConf.select(config, "task.projected_hessian", default=None),
+            )
         model = EnsembleModel(models) if len(models) > 1 else models[0]
         evaluator = Evaluator(
             model=model,

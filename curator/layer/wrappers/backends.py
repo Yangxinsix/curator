@@ -251,23 +251,24 @@ class OeqLoRABackend(_ConfiguredLoRABackendMixin, OeqBackend):
 
 def get_backend():
     config = get_wrapper_config()
+    use_lora = config.adapter == "lora"
     if config.backend == "oeq":
         ensure_oeq_runtime_available()
     if config.backend == "cueq" and not IS_CUET_AVAILABLE:
         raise ImportError("backend=cueq requires cuequivariance_torch to be available.")
-    if config.backend == "oeq" and config.adapter == "lora":
+    if config.backend == "oeq" and use_lora:
         return OeqLoRABackend(
             rank=config.lora_rank,
             alpha=config.lora_alpha,
             freeze_base=config.lora_freeze_base,
         )
-    if config.backend == "cueq" and config.adapter == "lora":
+    if config.backend == "cueq" and use_lora:
         return CueqLoRABackend(
             rank=config.lora_rank,
             alpha=config.lora_alpha,
             freeze_base=config.lora_freeze_base,
         )
-    if config.backend == "e3nn" and config.adapter == "lora":
+    if config.backend == "e3nn" and use_lora:
         return LoRABackend(
             rank=config.lora_rank,
             alpha=config.lora_alpha,

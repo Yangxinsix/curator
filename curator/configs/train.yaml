@@ -12,7 +12,17 @@ defaults:
 # Some parameters that are important for training
 seed: 3407                         # random seed for reproducibility
 cfg: null                          # optional path to an existing config to merge
-model_path: null                   # path/run dir for a Curator checkpoint, or external pretrained spec like `mace:/path/model` / `nequip:/path/model`
+model_path: null                   # null | string path/spec | dict {path, mode, transform}
+                                   # mode: model | weights | resume
+                                   # transform: ordered list of model transforms, e.g.
+                                   #   model_path:
+                                   #     path: mace:/path/model
+                                   #     mode: model
+                                   #     transform:
+                                   #       - type: direct_force
+                                   #       - type: wrapper
+                                   #         backend: e3nn
+                                   #         adapter: lora
 run_path: .                        # root directory for logs, checkpoints, and artifacts
 deploy_model: True                 # export a deployable model after training
 deploy:
@@ -28,4 +38,10 @@ deploy:
                                    #     streaming: false
 compile: False                     # torch.compile model before training if supported
 device: cuda                       # device identifier for training
-backend: null                      # optional runtime backend override, e.g. `backend=cueq` or `backend=oeq`
+wrapper:
+  backend: null                    # optional runtime backend override: `e3nn`, `cueq`, or `oeq`
+  adapter: null                    # optional runtime adapter override: `lora`
+  lora_rank: null                  # LoRA rank override
+  lora_alpha: null                 # LoRA alpha override
+  lora_freeze_base: null           # whether to freeze base weights for LoRA fine-tuning
+  lora_target_groups: null         # optional semantic construction groups to receive LoRA, e.g. [interactions, products]
