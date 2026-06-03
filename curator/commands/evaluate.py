@@ -131,7 +131,7 @@ def evaluate_main(argv: Optional[List[str]] = None):
 
     ensure_resolvers()
     from ..model import EnsembleModel
-    from ..simulate.evaluator import Evaluator
+    from ..evaluate import Evaluator
     from ..utils import load_models
 
     datapath = args.datapath or args.dataset

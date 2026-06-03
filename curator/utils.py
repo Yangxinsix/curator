@@ -84,6 +84,7 @@ def load_trained_model(
 ) -> torch.nn.Module:
     """Load a trained model or checkpoint and return a torch.nn.Module."""
     from curator.layer.wrappers import get_config_wrapper_config, get_model_wrapper_config
+    from curator.model.checkpoint_upgrade import _register_legacy_outputspec, _upgrade_legacy_checkpoint_model
     from curator.model.conversion import convert_model_wrapper
 
     model_file = Path(model_file)
@@ -126,6 +127,7 @@ def load_trained_model(
             pass
         return model
 
+    _register_legacy_outputspec()
     try:
         obj = _torch_load(model_file, device, load_weights_only)
     except RuntimeError as exc:
@@ -140,6 +142,7 @@ def load_trained_model(
         normalize_config_sequences(cfg_copy)
 
     if isinstance(obj, torch.nn.Module):
+        obj = _upgrade_legacy_checkpoint_model(obj)
         obj.to(device)
         return obj
 
@@ -148,6 +151,8 @@ def load_trained_model(
 
     stored_model = obj.get("model")
     if isinstance(stored_model, torch.nn.Module):
+        stored_model = _upgrade_legacy_checkpoint_model(stored_model)
+        obj["model"] = stored_model
         stored_wrapper = get_model_wrapper_config(stored_model)
     else:
         stored_wrapper = get_config_wrapper_config(obj.get("wrapper_config"))
