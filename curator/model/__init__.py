@@ -18,8 +18,10 @@ from .multi_domain import (
 )
 from .external import (
     AllegroRepresentation,
-    AllegroAdapter,
     ESENRepresentation,
+)
+from .adapter import (
+    AllegroAdapter,
     ESENAdapter,
     ExternalModelSpec,
     MatGLAdapter,

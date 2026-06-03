@@ -1,4 +1,4 @@
-from .external import (
+from .adapter import (
     AllegroAdapter,
     ESENAdapter,
     ExternalModelSpec,

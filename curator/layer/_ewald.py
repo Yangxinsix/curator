@@ -51,7 +51,7 @@ class EwaldSummation(nn.Module):
 
         E_self = self.self_energy(data[properties.atomic_charge])
 
-        return scatter_add(E_real + E_recip + E_self, data[properties.image_idx])
+        return scatter_add(E_real + E_self, data[properties.image_idx], dim=0) + E_recip
         
     def real_space_energy(
         self,
@@ -69,7 +69,12 @@ class EwaldSummation(nn.Module):
         """
         dist = torch.erfc(self.alpha * edge_dist) / edge_dist
         E_real = atomic_charges[edge_idx[:, 0]] * atomic_charges[edge_idx[:, 1]] * dist
-        E_real = 1 / 2 * scatter_add(E_real, edge_idx[:, 0])     # double counted
+        E_real = 1 / 2 * scatter_add(
+            E_real,
+            edge_idx[:, 0],
+            dim=0,
+            out=torch.zeros_like(atomic_charges),
+        )     # double counted
 
         return E_real * EwaldSummation.CONV_FACT
 
@@ -82,13 +87,15 @@ class EwaldSummation(nn.Module):
     ) -> torch.Tensor:
         """
         Perform the reciprocal space summation. The calculation is based on:
-        E_recip = 1/(2 * V * pi) * sum_{k != 0} exp(-k^2 / (4 alpha^2)) * |rho(k)|^2 / k^2
+        E_recip = 2 * pi / V * sum_{k != 0} exp(-k^2 / (4 alpha^2)) * |rho(k)|^2 / k^2
         where
         rho(k) = sum_{j=1,N} q_j exp(-i k.r_j)
+
+        Returns one reciprocal-space energy per structure in the batch.
         """
         cell = cell.reshape(-1, 3, 3)
-        volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1)
-        prefactor = (1.0 / (2.0 * volumes * math.pi))
+        volumes = torch.abs(torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1))
+        prefactor = 2.0 * math.pi / volumes
 
         offset = 0
         E_recip_list = []
@@ -101,16 +108,20 @@ class EwaldSummation(nn.Module):
 
             # calculate structure factor: rho(k) = sum_j q_j exp(i k dot r_j)
             k_vec, k_sq = self.get_reciprocal_k_vectors(c, self.k_cutoff)   # (M,3), (M,)
-            k_dot_r = (k_vec.unsqueeze(0) * pos.unsqueeze(1)).sum(-1)       # (1,M,3) * (N,1,3) -> (N,M)
-            real_part = q.unsqueeze(1) * torch.cos(k_dot_r)  # (N,M)
-            imag_part = q.unsqueeze(1) * torch.sin(k_dot_r)  # (N,M)
-            rho_sq = real_part**2 + imag_part**2             # (N,M)
+            if k_sq.numel() == 0:
+                E_recip_list.append(pos.new_zeros(()))
+                continue
+
+            k_dot_r = pos @ k_vec.T
+            rho_real = torch.sum(q.unsqueeze(1) * torch.cos(k_dot_r), dim=0)
+            rho_imag = torch.sum(q.unsqueeze(1) * torch.sin(k_dot_r), dim=0)
+            rho_sq = rho_real.square() + rho_imag.square()
 
             # Damping factor exp(-k^2/(4 alpha^2))
             damping  = torch.exp(- k_sq / (4.0 * self.alpha ** 2))          # (M,)
-            E_recip_list.append(torch.sum(damping * rho_sq / k_sq, dim=-1) * p)  # (N,)
+            E_recip_list.append(torch.sum(damping * rho_sq / k_sq) * p)
 
-        E_recip = torch.concat(E_recip_list)
+        E_recip = torch.stack(E_recip_list)
         return E_recip * EwaldSummation.CONV_FACT
     
     def self_energy(self, atomic_charges) -> torch.Tensor: 
@@ -135,14 +146,17 @@ class EwaldSummation(nn.Module):
         edge_dist,
         edge_idx,
     ):
+        """
+        Return one per-structure kernel K in eV such that 0.5 * q^T K q
+        reproduces the Ewald energy for that structure.
+        """
         # reciprocal part
         cell = cell.reshape(-1, 3, 3)
-        volumes = torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1)
-        prefactor = (1.0 / (2.0 * volumes * math.pi))
+        volumes = torch.abs(torch.sum(cell[:, 0] * cell[:, 1].cross(cell[:, 2], dim=-1), dim=1))
+        prefactor = 2.0 * math.pi / volumes
 
         # real part
         dist = torch.erfc(self.alpha * edge_dist) / edge_dist
-        real_matrix = torch.zeros(edge_idx.max().item(), edge_idx.max().item(), dtype=dist.dtype, device=dist.device)
 
         offset = 0
         kernel_list = []
@@ -150,25 +164,42 @@ class EwaldSummation(nn.Module):
             # get positions and volumes
             n = n.item()
             pos = positions[offset:offset+n]      # (N,3)
+            local_mask = (edge_idx[:, 0] >= offset) & (edge_idx[:, 0] < offset + n)
+            local_edges = edge_idx[local_mask] - offset
+            local_dist = dist[local_mask]
 
             # real part
-            real_per_image = real_matrix[offset:offset+n, offset:offset+n]
+            real_per_image = torch.zeros((n, n), dtype=dist.dtype, device=dist.device)
+            if local_edges.numel() > 0:
+                real_per_image.index_put_(
+                    (local_edges[:, 0], local_edges[:, 1]),
+                    local_dist,
+                    accumulate=True,
+                )
             offset += n
 
             # calculate structure factor: rho(k) = sum_j q_j exp(i k dot r_j)
             k_vec, k_sq = self.get_reciprocal_k_vectors(c, self.k_cutoff)   # (M,3), (M,)
-            k_dot_r = (k_vec.unsqueeze(1) * pos.unsqueeze(0)).sum(-1)       # (M,1,3) * (1,N,3) -> (M,N)   this place is slightly different from reciprocal energy part
-            phases = torch.exp(1j * k_dot_r)                                # (M,N)
-            M = phases.unsqueeze(1) * phases.unsqueeze(0).conj()            # (M,N,N)
-            M = M.real
+            if k_sq.numel() == 0:
+                recip_per_image = torch.zeros((n, n), dtype=dist.dtype, device=dist.device)
+            else:
+                k_dot_r = pos @ k_vec.T
+                phase_diff = k_dot_r.unsqueeze(1) - k_dot_r.unsqueeze(0)
 
-            # Damping factor exp(-k^2/(4 alpha^2))
-            damping  = torch.exp(- k_sq / (4.0 * self.alpha ** 2))          # (M,)
-            recip_per_image = torch.sum(damping * M / k_sq, dim=-1) * p   # (N,N)
+                # 0.5 * q^T K q uses a pair kernel, so the reciprocal prefactor is doubled here.
+                damping = torch.exp(- k_sq / (4.0 * self.alpha ** 2)).view(1, 1, -1)
+                recip_per_image = 2.0 * p * torch.sum(
+                    damping * torch.cos(phase_diff) / k_sq.view(1, 1, -1),
+                    dim=-1,
+                )
 
             # add up self part
-            kernel_matrix = real_per_image + recip_per_image + torch.eye(n, dtype=dist.dtype, device=dist.device) * (-self.alpha / math.sqrt(math.pi) * 2)
-            kernel_list.append(kernel_matrix) 
+            kernel_matrix = real_per_image + recip_per_image + torch.eye(
+                n,
+                dtype=dist.dtype,
+                device=dist.device,
+            ) * (-2.0 * self.alpha / math.sqrt(math.pi))
+            kernel_list.append(kernel_matrix * EwaldSummation.CONV_FACT)
 
         return kernel_list
 
