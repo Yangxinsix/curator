@@ -234,11 +234,6 @@ class LitNNP(pl.LightningModule):
                 continue
             self._set_module_trainable(module, trainable, module_name, changed)
 
-    def _set_component_trainable(self, flag: Any, module: Optional[nn.Module], trainable_name: str, changed: List[str]) -> None:
-        if flag is None:
-            return
-        self._set_module_trainable(module, bool(flag), trainable_name, changed)
-
     def _apply_finetune_config(self, finetune_config: Any) -> None:
         """Apply optional parameter freezing for fine-tuning.
 
@@ -290,7 +285,7 @@ class LitNNP(pl.LightningModule):
         # of these flags enables the whole readout module.
         energy_readout_flag = self._config_get(finetune_config, "finetune_energy_readout", None)
         charge_readout_flag = self._config_get(finetune_config, "finetune_charge_readout", None)
-        if (energy_readout_flag is True or charge_readout_flag is True) and hasattr(representation, "readout"):
+        if (bool(energy_readout_flag) or bool(charge_readout_flag)) and hasattr(representation, "readout"):
             self._set_module_trainable(representation.readout, True, "representation.readout", changed)
         elif not freeze_all and energy_readout_flag is False and charge_readout_flag is False and hasattr(representation, "readout"):
             self._set_module_trainable(representation.readout, False, "representation.readout", changed)
@@ -562,6 +557,9 @@ class LitNNP(pl.LightningModule):
     
     def configure_optimizers(self) -> Type[torch.optim.Optimizer]:
         from curator.model import MACE
+        def trainable_parameters(parameters):
+            return [param for param in parameters if param.requires_grad]
+
         if type(self.model.representation) == MACE:
             decay_params = {}
             no_decay_params = {}
@@ -575,38 +573,49 @@ class LitNNP(pl.LightningModule):
             param_group = [
                 {
                     "name": "input_modules",
-                    "params": self.model.input_modules.parameters(),
+                    "params": trainable_parameters(self.model.input_modules.parameters()),
                     "weight_decay": 0.0,
                 },
                 {
+                    "name": "embeddings",
+                    "params": trainable_parameters(self.model.representation.embeddings.parameters()),
+                    "weight_decay": self.optimizer.keywords['weight_decay'],
+                },
+                {
                     "name": "decay_params",
-                    "params": list(decay_params.values()),
+                    "params": trainable_parameters(decay_params.values()),
                     "weight_decay": self.optimizer.keywords['weight_decay'],
                 },
                 {
                     "name": "no_decay_params",
-                    "params": list(no_decay_params.values()),
+                    "params": trainable_parameters(no_decay_params.values()),
                     "weight_decay": 0.0,
                 },
                 {
                     "name": "products",
-                    "params": self.model.representation.products.parameters(),
+                    "params": trainable_parameters(self.model.representation.products.parameters()),
                     "weight_decay": self.optimizer.keywords['weight_decay'],
                 },
                 {
                     "name": "readout",
-                    "params": self.model.representation.readout.parameters(),
+                    "params": trainable_parameters(self.model.representation.readout.parameters()),
                     "weight_decay": 0.0,
                 },
                 {
                     "name": "output_modules",
-                    "params": self.model.output_modules.parameters(),
+                    "params": trainable_parameters(self.model.output_modules.parameters()),
                     "weight_decay": 0.0,
                 },
             ]
+            param_group = [group for group in param_group if len(group["params"]) > 0]
+            if len(param_group) == 0:
+                raise ValueError("No trainable parameters found. Check task.finetune_config.")
             optimizer = self.optimizer(params=param_group)
         else:
-            optimizer = self.optimizer(params=self.parameters())
+            params = trainable_parameters(self.parameters())
+            if len(params) == 0:
+                raise ValueError("No trainable parameters found. Check task.finetune_config.")
+            optimizer = self.optimizer(params=params)
         # optimizer = self.optimizer(params=self.parameters())
         if self.scheduler is not None:
             scheduler = self.scheduler(optimizer=optimizer)
