@@ -158,6 +158,7 @@ class CURATORLammpsConfig:
     def __init__(self):
         self.debug_time = self._get_env_bool("CURATOR_TIME", False)
         self.debug_profile = self._get_env_bool("CURATOR_PROFILE", False)
+        self.debug_io = self._get_env_bool("CURATOR_DEBUG_IO", False)
         self.profile_start_step = int(os.environ.get("CURATOR_PROFILE_START", "5"))
         self.profile_end_step = int(os.environ.get("CURATOR_PROFILE_END", "10"))
         self.allow_cpu = self._get_env_bool("CURATOR_ALLOW_CPU", False)
@@ -499,8 +500,8 @@ class LAMMPS_MLIAP_QEQ(MLIAPUnified):
             with timer("prepare_batch", enabled=self.config.debug_time):
                 batch = self._prepare_batch(data)
 
-            # DEBUG: print batch shapes
-            if self.step <= 2:
+            # Optional debug: print batch shapes for the first two steps.
+            if getattr(self.config, "debug_io", False) and self.step <= 2:
                 print(f"\n=== DEBUG QEQ STEP {self.step} ===")
                 for k, v in batch.items():
                     if isinstance(v, torch.Tensor):
@@ -512,8 +513,8 @@ class LAMMPS_MLIAP_QEQ(MLIAPUnified):
             with timer("model_forward", enabled=self.config.debug_time):
                 out = self.model(batch)
                 
-                # DEBUG: print output keys
-                if self.step <= 2:
+                # Optional debug: print output keys for the first two steps.
+                if getattr(self.config, "debug_io", False) and self.step <= 2:
                     print(f"\n=== DEBUG MODEL OUTPUT (step {self.step}) ===")
                     print(f"  output keys: {list(out.keys())}")
                     for k, v in out.items():

@@ -161,6 +161,7 @@ class LitNNP(pl.LightningModule):
         scheduler_monitor: Optional[str] = None,
         warmup_steps: int = 0,
         save_entire_model: bool = True,
+        finetune_config: Optional[Dict[str, Any]] = None,
         *args,
         **kwargs,
     ) -> None:
@@ -183,12 +184,158 @@ class LitNNP(pl.LightningModule):
         self.scheduler_monitor = scheduler_monitor
         self.warmup_steps = warmup_steps
         self.save_entire_model = save_entire_model
+        self.finetune_config = finetune_config
+        self._apply_finetune_config(finetune_config)
         logger.debug(" ".join([f'{output.name.capitalize()} loss weight: {output.loss_weight}'for output in self.outputs]))
 
         # metrics related things
         self.metric_names_initialized = False          # for first batch
         self.metric_names_logged = False               # for first batch logging
         self.metric_names = None                       # for epoches
+
+    @staticmethod
+    def _config_get(config: Any, key: str, default: Any = None) -> Any:
+        if config is None:
+            return default
+        if isinstance(config, dict):
+            return config.get(key, default)
+        return getattr(config, key, default)
+
+    def _set_module_trainable(
+        self,
+        module: Optional[nn.Module],
+        trainable: bool,
+        prefix: str,
+        changed: List[str],
+    ) -> None:
+        if module is None:
+            return
+        for name, param in module.named_parameters():
+            full_name = f"{prefix}.{name}" if name else prefix
+            if param.requires_grad != trainable:
+                changed.append(full_name)
+            param.requires_grad = trainable
+
+    def _set_named_modules_trainable(
+        self,
+        names: Any,
+        trainable: bool,
+        changed: List[str],
+    ) -> None:
+        if names is None:
+            return
+        if isinstance(names, str):
+            names = [names]
+        module_dict = dict(self.model.named_modules())
+        for module_name in names:
+            module = module_dict.get(module_name)
+            if module is None:
+                logger.warning("Fine-tune module '%s' was requested but not found", module_name)
+                continue
+            self._set_module_trainable(module, trainable, module_name, changed)
+
+    def _set_component_trainable(self, flag: Any, module: Optional[nn.Module], trainable_name: str, changed: List[str]) -> None:
+        if flag is None:
+            return
+        self._set_module_trainable(module, bool(flag), trainable_name, changed)
+
+    def _apply_finetune_config(self, finetune_config: Any) -> None:
+        """Apply optional parameter freezing for fine-tuning.
+
+        This is intentionally opt-in.  If ``finetune_config`` is omitted, every
+        parameter keeps its default ``requires_grad`` value, so old configs and
+        old checkpoints continue to train/load as before.
+        """
+        if finetune_config is None:
+            return
+        if self._config_get(finetune_config, "enabled", True) is False:
+            return
+
+        freeze_all = bool(self._config_get(finetune_config, "freeze_all", True))
+        verbose = bool(self._config_get(finetune_config, "verbose", True))
+        show_frozen = bool(self._config_get(finetune_config, "show_frozen", False))
+        changed: List[str] = []
+
+        if freeze_all:
+            total_params = sum(p.numel() for p in self.model.parameters())
+            for param in self.model.parameters():
+                param.requires_grad = False
+            if verbose:
+                logger.info("Frozen all %s parameters initially", f"{total_params:,d}")
+
+        # Whole top-level components.
+        input_flag = self._config_get(finetune_config, "finetune_input_modules", None)
+        if input_flag is not None:
+            self._set_module_trainable(self.model.input_modules, bool(input_flag), "input_modules", changed)
+
+        representation_flag = self._config_get(finetune_config, "finetune_representation", None)
+        if representation_flag is not None:
+            self._set_module_trainable(self.model.representation, bool(representation_flag), "representation", changed)
+
+        # Representation sub-components.  These work for MACE and for other
+        # representations that expose similarly named modules.
+        representation = self.model.representation
+        for flag_name, attr_name in (
+            ("finetune_embeddings", "embeddings"),
+            ("finetune_interactions", "interactions"),
+            ("finetune_products", "products"),
+            ("finetune_readout", "readout"),
+        ):
+            flag = self._config_get(finetune_config, flag_name, None)
+            if flag is not None and hasattr(representation, attr_name):
+                self._set_module_trainable(getattr(representation, attr_name), bool(flag), f"representation.{attr_name}", changed)
+
+        # Backward-compatible aliases used by train-16.  The current MACE
+        # readout shares the final output tensor for energy and charge, so either
+        # of these flags enables the whole readout module.
+        energy_readout_flag = self._config_get(finetune_config, "finetune_energy_readout", None)
+        charge_readout_flag = self._config_get(finetune_config, "finetune_charge_readout", None)
+        if (energy_readout_flag is True or charge_readout_flag is True) and hasattr(representation, "readout"):
+            self._set_module_trainable(representation.readout, True, "representation.readout", changed)
+        elif not freeze_all and energy_readout_flag is False and charge_readout_flag is False and hasattr(representation, "readout"):
+            self._set_module_trainable(representation.readout, False, "representation.readout", changed)
+
+        output_modules_flag = self._config_get(finetune_config, "finetune_output_modules", None)
+        if output_modules_flag is not None:
+            self._set_module_trainable(self.model.output_modules, bool(output_modules_flag), "output_modules", changed)
+
+        charge_eq_flag = self._config_get(finetune_config, "finetune_charge_equilibration", None)
+        rescale_flag = self._config_get(finetune_config, "finetune_rescale", None)
+        for idx, module in enumerate(self.model.output_modules):
+            module_name = f"output_modules.{idx}"
+            class_name = type(module).__name__.lower()
+            is_charge_equilibration = (
+                hasattr(module, "electronegativity_mlp")
+                or hasattr(module, "hardness_mlp")
+                or "chargeequilibration" in class_name
+            )
+            is_rescale = hasattr(module, "scale") and hasattr(module, "unscale")
+            if charge_eq_flag is not None and is_charge_equilibration:
+                self._set_module_trainable(module, bool(charge_eq_flag), module_name, changed)
+            if rescale_flag is not None and is_rescale:
+                self._set_module_trainable(module, bool(rescale_flag), module_name, changed)
+
+        self._set_named_modules_trainable(self._config_get(finetune_config, "finetune_modules", None), True, changed)
+        self._set_named_modules_trainable(self._config_get(finetune_config, "freeze_modules", None), False, changed)
+
+        trainable_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        total_params = sum(p.numel() for p in self.model.parameters())
+        frozen_params = total_params - trainable_params
+        if verbose:
+            unfrozen_names = [name for name, p in self.model.named_parameters() if p.requires_grad]
+            frozen_names = [name for name, p in self.model.named_parameters() if not p.requires_grad]
+            logger.info("Unfrozen parameters: %s", unfrozen_names)
+            if show_frozen:
+                logger.info("Frozen parameters: %s", frozen_names)
+            logger.info(
+                "Fine-tuning setup complete:\n"
+                "  Total parameters: %s\n"
+                "  Trainable (requires_grad=True): %s\n"
+                "  Frozen (requires_grad=False): %s",
+                f"{total_params:,d}",
+                f"{trainable_params:,d}",
+                f"{frozen_params:,d}",
+            )
         
     def setup(self, stage: Optional[str]=None) -> None:
         if stage == "fit":

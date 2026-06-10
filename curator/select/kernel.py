@@ -10,8 +10,8 @@ try:
     FAISS_AVAILABLE = True
 except ImportError:
     FAISS_AVAILABLE = False
-    logger.warning("Faiss not installed. FaissKernelMatrix will not be available. "
-                   "Install with: conda install -c pytorch faiss-gpu (or faiss-cpu)")
+    # logger.warning("Faiss not installed. FaissKernelMatrix will not be available. "
+    #                "Install with: conda install -c pytorch faiss-gpu (or faiss-cpu)")
 
 class KernelMatrix:
     """Abstract kernel class used to calculate kernel matrix by giving a feature matrix"""

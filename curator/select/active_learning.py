@@ -23,8 +23,8 @@ try:
     FAISS_AVAILABLE = True
 except ImportError:
     FAISS_AVAILABLE = False
-    logger.warning("Faiss not installed. FaissKernelMatrix will not be available. "
-                   "Install with: conda install -c pytorch faiss-gpu (or faiss-cpu)")
+    # logger.warning("Faiss not installed. FaissKernelMatrix will not be available. "
+    #                "Install with: conda install -c pytorch faiss-gpu (or faiss-cpu)")
     
 # class RandomProjections:
 #     """Store parameters of random projections"""
