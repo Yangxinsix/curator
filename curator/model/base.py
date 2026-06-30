@@ -268,7 +268,7 @@ class NeuralNetworkPotential(nn.Module):
             input_modules=list(self.input_modules),
             output_modules=list(self.output_modules),
             model_outputs=list(self.model_outputs),
-            heads=self.heads,
+            heads=getattr(self, "heads", None),
         )
 
     def module_groups(self) -> "OrderedDict[str, List[nn.Module]]":

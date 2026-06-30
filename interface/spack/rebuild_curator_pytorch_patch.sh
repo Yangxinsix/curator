@@ -98,6 +98,9 @@ required_files=(
   "${MLIAP_INTERFACE_DIR}/mliap_data.cpp"
   "${MLIAP_INTERFACE_DIR}/mliap_data.h"
   "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx"
+  "${MLIAP_INTERFACE_DIR}/mliap_unified_couple_kokkos.pyx"
+  "${MLIAP_INTERFACE_DIR}/pair_mliap.cpp"
+  "${MLIAP_INTERFACE_DIR}/pair_mliap.h"
   "${LAMMPS_TARBALL}"
   "${PACKAGE_FILE}"
 )
@@ -145,6 +148,10 @@ mkdir -p "${mod}/src/ML-IAP"
 cp "${MLIAP_INTERFACE_DIR}/mliap_data.cpp" "${mod}/src/ML-IAP/mliap_data.cpp"
 cp "${MLIAP_INTERFACE_DIR}/mliap_data.h" "${mod}/src/ML-IAP/mliap_data.h"
 cp "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx" "${mod}/src/ML-IAP/mliap_unified_couple.pyx"
+cp "${MLIAP_INTERFACE_DIR}/pair_mliap.cpp" "${mod}/src/ML-IAP/pair_mliap.cpp"
+cp "${MLIAP_INTERFACE_DIR}/pair_mliap.h" "${mod}/src/ML-IAP/pair_mliap.h"
+mkdir -p "${mod}/src/KOKKOS"
+cp "${MLIAP_INTERFACE_DIR}/mliap_unified_couple_kokkos.pyx" "${mod}/src/KOKKOS/mliap_unified_couple_kokkos.pyx"
 
 override_targets=()
 if [[ -d "${OVERRIDE_ROOT}" ]]; then
@@ -170,6 +177,9 @@ targets=(
   "src/ML-IAP/mliap_data.cpp"
   "src/ML-IAP/mliap_data.h"
   "src/ML-IAP/mliap_unified_couple.pyx"
+  "src/ML-IAP/pair_mliap.cpp"
+  "src/ML-IAP/pair_mliap.h"
+  "src/KOKKOS/mliap_unified_couple_kokkos.pyx"
 )
 targets+=("${override_targets[@]}")
 

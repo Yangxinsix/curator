@@ -79,7 +79,7 @@ class CalculatorAssign(Callback):
             try:
                 _ = atoms.get_potential_energy()
                 if self.require_forces:
-                    _ = atoms.get_forces()
+                    _ = atoms.get_forces(apply_constraint=False)
             except Exception as e:
                 self.log.warning(f"Calculator warmup failed: {e}")
 

@@ -15,8 +15,9 @@ def select(config: DictConfig):
     from hydra.utils import instantiate
     from pytorch_lightning import seed_everything
 
+    from ..config_utils import read_user_config
     from ..select import GeneralActiveLearning
-    from ..utils import load_models, read_user_config
+    from ..utils import load_models
 
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="select")

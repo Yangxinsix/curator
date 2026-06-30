@@ -19,7 +19,7 @@ def label(config: DictConfig):
     from hydra.utils import instantiate
 
     from ..data import read_trajectory
-    from ..utils import read_user_config
+    from ..config_utils import read_user_config
 
     if config.cfg is not None:
         config = read_user_config(config.cfg, config_path="configs", config_name="label")

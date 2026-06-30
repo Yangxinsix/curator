@@ -308,6 +308,14 @@ class ExternalBackboneRepresentation(Representation):
                 data[properties.positions].device,
             )
         native_batch = self._build_native_batch(data)
+        try:
+            backbone_dtype = next(self.backbone.parameters()).dtype
+        except StopIteration:
+            backbone_dtype = None
+        if backbone_dtype is not None:
+            for key, value in list(native_batch.items()):
+                if torch.is_tensor(value) and torch.is_floating_point(value):
+                    native_batch[key] = value.to(backbone_dtype)
         backbone_output = self.backbone(native_batch)
         feature_tensor = self._resolve_feature_tensor(native_batch, backbone_output)
         node_features = self._coerce_node_features(feature_tensor, native_batch, data)

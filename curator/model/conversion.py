@@ -992,6 +992,18 @@ def _load_official_mace_as_curator_impl(
     head: Optional[Union[str, int]] = None,
     device: Optional[torch.device] = None,
 ) -> torch.nn.Module:
+    mace_model = _load_official_mace_model(model_ref, device=device)
+    curator_model = create_model_from_mace(mace_model, head=head)
+    if device is not None:
+        curator_model.to(torch.device(device))
+    return curator_model
+
+
+def _load_official_mace_model(
+    model_ref: Union[str, Path],
+    *,
+    device: Optional[torch.device] = None,
+):
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     torch_serialization.add_safe_globals([slice])
@@ -1013,10 +1025,7 @@ def _load_official_mace_as_curator_impl(
         )
     else:
         raise TypeError(f"Unsupported MACE checkpoint format at {model_ref}")
-
-    curator_model = create_model_from_mace(mace_model, head=head)
-    curator_model.to(torch.device(device))
-    return curator_model
+    return mace_model
 
 
 def _load_official_nequip_as_curator_impl(
@@ -1027,6 +1036,17 @@ def _load_official_nequip_as_curator_impl(
 ) -> torch.nn.Module:
     if device is None:
         device = torch.device("cpu")
+    official_model = _load_official_nequip_saved_model(model_ref, compile_mode=compile_mode)
+    curator_model = create_model_from_nequip(official_model)
+    curator_model.to(torch.device(device))
+    return curator_model
+
+
+def _load_official_nequip_saved_model(
+    model_ref: Union[str, Path],
+    *,
+    compile_mode: str = "eager",
+):
     torch_serialization.add_safe_globals([slice])
     try:
         load_utils = importlib.import_module("nequip.model.saved_models.load_utils")
@@ -1036,11 +1056,17 @@ def _load_official_nequip_as_curator_impl(
             raise
         sys.path.insert(0, str(local_src))
         load_utils = importlib.import_module("nequip.model.saved_models.load_utils")
+    return load_utils.load_saved_model(str(model_ref), compile_mode=compile_mode)
 
-    official_model = load_utils.load_saved_model(str(model_ref), compile_mode=compile_mode)
-    curator_model = create_model_from_nequip(official_model)
-    curator_model.to(torch.device(device))
-    return curator_model
+
+def _unwrap_official_nequip_model(nequip_model):
+    graph_model = nequip_model
+    func = getattr(getattr(graph_model, "model", None), "func", None) or getattr(graph_model, "func", None)
+    if func is None:
+        raise TypeError(
+            "Unsupported NequIP model object. Expected a GraphModel loaded from a saved model/package."
+        )
+    return graph_model, func
 
 
 def _create_model_from_nequip_impl(nequip_model) -> torch.nn.Module:
@@ -1311,7 +1337,7 @@ def _convert_model_wrapper_impl(
     *,
     target_dtype: torch.dtype | None = None,
 ) -> torch.nn.Module:
-    from curator.layer.wrappers import WrapperConfig, apply_wrappers, get_model_wrapper_config
+    from curator.layer.wrappers import WrapperConfig, apply_wrappers, get_model_wrapper_config, resolve_wrapper_config
     from curator.utils import load_cueq_weights, load_e3nn_weights
 
     if not isinstance(wrapper_config, WrapperConfig):
@@ -1321,6 +1347,16 @@ def _convert_model_wrapper_impl(
 
     source_cfg = get_model_wrapper_config(model)
     source_model = model
+    if source_cfg.adapter == "lora" and source_cfg.backend != wrapper_config.backend:
+        from curator.layer.wrappers import merge_model_wrappers
+
+        source_model = copy.deepcopy(model)
+        merge_model_wrappers(source_model)
+        source_model.train(model.training)
+        source_model._initialized = getattr(model, "_initialized", False)
+        source_model._wrapper_config = resolve_wrapper_config(backend=source_cfg.backend, adapter="none")
+        wrapper_config = resolve_wrapper_config(backend=wrapper_config.backend, adapter="none")
+        source_cfg = get_model_wrapper_config(source_model)
     if source_cfg.adapter == "lora" and wrapper_config.adapter != "lora":
         from curator.layer.wrappers import merge_model_wrappers
 
@@ -1524,6 +1560,18 @@ def load_official_mace_as_curator(
     return _load_official_mace_as_curator_impl(model_ref, head=head, device=device)
 
 
+def convert_mace_to_curator(
+    mace_path: Union[str, Path],
+    output_path: Union[str, Path],
+    *,
+    device: Optional[torch.device] = None,
+    head: Optional[Union[str, int]] = None,
+) -> Union[str, Path]:
+    model = load_official_mace_as_curator(mace_path, head=head, device=device)
+    torch.save(model, output_path)
+    return output_path
+
+
 def load_official_nequip_as_curator(
     model_ref: Union[str, Path],
     *,
@@ -1672,6 +1720,7 @@ __all__ = [
     'build_mace_from_curator',
     'convert_cueq_to_e3nn',
     'convert_e3nn_to_cueq',
+    'convert_mace_to_curator',
     'convert_model_wrapper',
     'convert_multi_to_selected_domains',
     'convert_multi_to_single_domain',
@@ -1679,6 +1728,9 @@ __all__ = [
     'create_model_from_mace',
     'create_model_from_nequip',
     'get_model_transform_registry',
+    '_load_official_mace_model',
+    '_load_official_nequip_saved_model',
+    '_unwrap_official_nequip_model',
     'load_official_mace_as_curator',
     'load_official_nequip_as_curator',
     'load_pretrained_weights_from_model',

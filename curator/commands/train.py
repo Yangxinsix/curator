@@ -125,6 +125,9 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
             raise ValueError(
                 f"Fine-tuning only supports external pretrained specs for 'mace' and 'nequip', got {parsed.scheme!r}."
             )
+        checkpoint_mode = str(OmegaConf.select(config, "task.checkpoint_mode", default="model")).strip().lower()
+        if checkpoint_mode != "model":
+            raise ValueError("External pretrained spec requires task.checkpoint_mode='model'.")
         if source_mode == "resume":
             raise ValueError(
                 f"External pretrained spec {source_path!r} does not support model_path.mode='resume'."
@@ -296,9 +299,6 @@ def train(config: DictConfig) -> None:
     from ..utils import (
         CustomFormatter,
         find_best_model,
-        normalize_config_sequences,
-        prune_config_targets,
-        read_user_config,
         update_config_from_datamodule,
     )
 

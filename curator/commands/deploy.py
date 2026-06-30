@@ -22,6 +22,7 @@ class DeployOptions:
     cfg_path: Optional[str] = None
     return_model: bool = False
     lammps_mliap: bool = False
+    python_object: bool = False
     element_types: Optional[List[str]] = None
     uncertainty_spec: Optional[dict] = None
 
@@ -36,7 +37,9 @@ def _as_plain_mapping(spec: Optional[Any]) -> dict:
     return dict(spec)
 
 
-def _resolve_target_path(target_path: str, *, lammps_mliap: bool) -> str:
+def _resolve_target_path(target_path: str, *, lammps_mliap: bool, python_object: bool = False) -> str:
+    if python_object and target_path == "compiled_model.pt":
+        return "python_model.pth"
     if lammps_mliap and target_path == "compiled_model.pt":
         return "mliap_model.pt"
     return target_path
@@ -49,6 +52,7 @@ def resolve_uncertainty_spec(
     method: Optional[str] = None,
     dataset: Optional[str] = None,
     lammps_mliap: bool = False,
+    python_object: bool = False,
     allow_partial: bool = False,
 ) -> Optional[dict]:
     def merge(base: dict, override: dict) -> dict:
@@ -76,7 +80,7 @@ def resolve_uncertainty_spec(
         elif normalized_method == "ensemble":
             override_plain = merge({"method": "ensemble", "output_keys": None}, override_plain)
         elif normalized_method == "mahalanobis":
-            default_kernel = "local-full-g" if lammps_mliap else "local-gnn"
+            default_kernel = "local-full-g" if lammps_mliap or python_object else "local-gnn"
             override_plain = merge(
                 {
                     "method": "mahalanobis",
@@ -122,7 +126,7 @@ def resolve_uncertainty_spec(
     if normalized_method == "mahalanobis":
         merged.setdefault("output_keys", None)
         maha_cfg = dict(merged.get("maha") or {})
-        default_kernel = "local-full-g" if lammps_mliap else "local-gnn"
+        default_kernel = "local-full-g" if lammps_mliap or python_object else "local-gnn"
         maha_cfg.setdefault("kernel", default_kernel)
         maha_cfg.setdefault("max_structures", None)
         maha_cfg.setdefault("regularization", 1e-6)
@@ -157,6 +161,11 @@ def _parse_args(argv: Optional[List[str]] = None):
             "      --element-types Fe Li O P --uncertainty mahalanobis \\\n"
             "      --dataset reference.traj --target_path mliap_model.pt\n"
             "\n"
+            "  Python object for curator-simulate + mahalanobis:\n"
+            "    curator-deploy model.ckpt --python-object \\\n"
+            "      --uncertainty mahalanobis --dataset reference.traj \\\n"
+            "      --target_path model_with_maha.pth\n"
+            "\n"
             "  ensemble:\n"
             "    curator-deploy ckpt1.ckpt ckpt2.ckpt ckpt3.ckpt \\\n"
             "      --uncertainty ensemble --target_path compiled_ensemble.pt\n"
@@ -164,6 +173,7 @@ def _parse_args(argv: Optional[List[str]] = None):
             "Notes:\n"
             "  - passing multiple INPUT_FILE values creates an EnsembleModel\n"
             "  - --mliap requires --element-types\n"
+            "  - --python-object saves a torch.save model object for Python simulation callbacks\n"
             "  - --dataset is only needed for Mahalanobis\n"
             "  - use --cfg_path for advanced deploy.uncertainty settings"
         ),
@@ -182,10 +192,14 @@ def _parse_args(argv: Optional[List[str]] = None):
     parser.add_argument("--uncertainty", type=str, choices=["none", "ensemble", "mahalanobis"], default=None, help="Convenience uncertainty preset; keep detailed tuning in cfg_path")
     parser.add_argument("--dataset", type=str, default=None, help="Reference dataset for Mahalanobis fitting; not needed for ensemble")
     parser.add_argument("--mliap", action="store_true", help="Export an mliap unified model instead of TorchScript pair_style curator output")
+    parser.add_argument("--python-object", action="store_true", help="Save a Python torch model object instead of TorchScript; useful for curator-simulate uncertainty callbacks")
     parser.add_argument("--element-types", type=str, nargs="+", default=None, help="Element symbols in LAMMPS type order; required when --mliap is set")
     if argcomplete:
         argcomplete.autocomplete(parser)
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.mliap and args.python_object:
+        parser.error("--python-object cannot be combined with --mliap")
+    return args
 
 
 def _disable_internal_neighborlists(model_obj) -> int:
@@ -223,21 +237,28 @@ def deploy_main(argv: Optional[List[str]] = None):
     args = _parse_args(argv)
     options = DeployOptions(
         model_path=args.model_path,
-        target_path=_resolve_target_path(args.target_path, lammps_mliap=args.mliap),
+        target_path=_resolve_target_path(args.target_path, lammps_mliap=args.mliap, python_object=args.python_object),
         load_weights_only=args.load_weights_only,
         cfg_path=args.cfg_path,
         return_model=False,
         lammps_mliap=args.mliap,
+        python_object=args.python_object,
         element_types=args.element_types,
         uncertainty_spec=resolve_uncertainty_spec(
             method=args.uncertainty,
             dataset=args.dataset,
             lammps_mliap=args.mliap,
+            python_object=args.python_object,
             allow_partial=bool(args.cfg_path),
         ),
     )
     model = deploy(**options.__dict__)
-    export_kind = "mliap" if options.lammps_mliap else "torchscript"
+    if options.lammps_mliap:
+        export_kind = "mliap"
+    elif options.python_object:
+        export_kind = "python-object"
+    else:
+        export_kind = "torchscript"
     print(f"Deploy succeeded: type={export_kind} output={options.target_path}")
     return model
 
@@ -249,6 +270,7 @@ def deploy(
     cfg_path: Optional[str] = None,
     return_model: bool = False,
     lammps_mliap: bool = False,
+    python_object: bool = False,
     element_types: Optional[List[str]] = None,
     uncertainty_spec: Optional[dict] = None,
 ):
@@ -258,12 +280,16 @@ def deploy(
     import torch
     from e3nn.util.jit import script
 
+    from ..config_utils import normalize_config_sequences, read_user_config
     from ..layer.utils import find_layer_by_name_recursive
     from ..model import EnsembleModel
     from ..simulate.uncertainty._deploy import prepare_deploy_uncertainty
-    from ..utils import load_models, normalize_config_sequences, read_user_config
+    from ..utils import load_models
 
-    target_path = _resolve_target_path(target_path, lammps_mliap=lammps_mliap)
+    if python_object and lammps_mliap:
+        raise ValueError("python_object cannot be combined with lammps_mliap.")
+
+    target_path = _resolve_target_path(target_path, lammps_mliap=lammps_mliap, python_object=python_object)
 
     cfg = None
     cfg_uncertainty_spec = None
@@ -276,6 +302,7 @@ def deploy(
         base_spec=cfg_uncertainty_spec,
         override_spec=uncertainty_spec,
         lammps_mliap=lammps_mliap,
+        python_object=python_object,
         allow_partial=True,
     )
 
@@ -314,6 +341,14 @@ def deploy(
                 disabled_neighborlist_modules,
             )
         return lmp_model
+
+    if python_object:
+        prepare_deploy_uncertainty(model, uncertainty_spec, lammps_mliap=False, torchscript=False)
+        torch.save(model, target_path)
+        log.debug(f"Deploying Python model object at <{target_path}> from <{model_path}>")
+        if return_model:
+            return model
+        return None
 
     _prepare_torchscript_model(model)
     if disabled_neighborlist_modules:

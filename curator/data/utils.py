@@ -6,7 +6,6 @@ import torch
 from torch.utils.data import DataLoader, Dataset
 import math
 import contextlib
-import sys
 import numpy as np
 from ase.io import read
 from ase.data import atomic_numbers
@@ -26,7 +25,7 @@ from urllib.parse import urlparse
 from urllib.request import urlopen
 import logging
 try:
-    from tqdm import tqdm
+    from tqdm.auto import tqdm
     from tqdm.contrib.logging import logging_redirect_tqdm
 except ImportError:  # pragma: no cover - optional dependency
     tqdm = None
@@ -76,8 +75,13 @@ def _read_trajectory_path(path: str, *args, **kwargs):
             return [sliced]
         return sliced
     if slice_obj is None:
-        result = read(base, ":", *args, **kwargs)
+        if args or "index" in kwargs:
+            result = read(base, *args, **kwargs)
+        else:
+            result = read(base, ":")
     else:
+        if "index" in kwargs:
+            raise TypeError("index is specified both via @slice syntax and keyword arguments")
         result = read(base, slice_obj, *args, **kwargs)
     if isinstance(result, Atoms):
         return [result]
@@ -155,7 +159,6 @@ def iter_atoms(
             atoms_iter,
             desc=desc,
             total=total,
-            disable=not sys.stderr.isatty(),
         )
     with log_ctx:
         try:
@@ -210,7 +213,7 @@ def iter_batches(
             pin_memory=pin_memory,
         )
     iterator = loader
-    use_tqdm = tqdm is not None and desc is not None and sys.stderr.isatty()
+    use_tqdm = tqdm is not None and desc is not None
     if use_tqdm:
         iterator = tqdm(
             loader,

@@ -51,7 +51,13 @@ def _prepare_ensemble(model, spec: dict[str, Any]) -> None:
         raise ValueError(f"Requested deploy ensemble uncertainty keys are not present in model outputs: {missing}")
 
 
-def _prepare_mahalanobis(model, spec: dict[str, Any], *, lammps_mliap: bool) -> None:
+def _prepare_mahalanobis(
+    model,
+    spec: dict[str, Any],
+    *,
+    lammps_mliap: bool,
+    torchscript: bool = True,
+) -> None:
     from curator.layer import FeatureCalculator
     from curator.layer._feature import normalize_kernel
     from curator.model import EnsembleModel
@@ -84,20 +90,21 @@ def _prepare_mahalanobis(model, spec: dict[str, Any], *, lammps_mliap: bool) -> 
                 f"Mahalanobis deploy output_keys {invalid_output_keys} are not supported for kernel={kernel}."
             )
 
-    if not lammps_mliap and not pair_scriptable:
+    if torchscript and not lammps_mliap and not pair_scriptable:
         raise RuntimeError(
             "pair_style curator Mahalanobis is TorchScript-safe only for kernel=gnn/local-gnn. "
             "Hook-based full-g/local-full-g remains MLIAP-only."
         )
 
     n_random_features = 0 if pair_scriptable else 500
+    target_kind = "mliap" if lammps_mliap else ("torchscript" if torchscript else "python-object")
     logger.info(
         "Preparing Mahalanobis deploy uncertainty: dataset=%s kernel=%s max_structures=%s streaming=%s target=%s",
         dataset,
         kernel,
         max_structures if max_structures is not None else "all",
         streaming,
-        "mliap" if lammps_mliap else "torchscript",
+        target_kind,
     )
 
     for module in model.output_modules:
@@ -139,6 +146,7 @@ def prepare_deploy_uncertainty(
     spec: Optional[Any],
     *,
     lammps_mliap: bool = False,
+    torchscript: bool = True,
 ) -> None:
     spec = _as_plain_spec(spec)
     if spec is None:
@@ -151,6 +159,6 @@ def prepare_deploy_uncertainty(
         _prepare_ensemble(model, spec)
         return
     if method == "mahalanobis":
-        _prepare_mahalanobis(model, spec, lammps_mliap=lammps_mliap)
+        _prepare_mahalanobis(model, spec, lammps_mliap=lammps_mliap, torchscript=torchscript)
         return
     raise ValueError(f"Unknown deploy uncertainty method '{method}'.")

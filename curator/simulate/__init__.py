@@ -14,6 +14,8 @@ _EXPORTS = {
     "EnsembleUncertainty": (".uncertainty", "EnsembleUncertainty"),
     "MahalanobisUncertainty": (".uncertainty", "MahalanobisUncertainty"),
     "MCDropoutUncertainty": (".uncertainty", "MCDropoutUncertainty"),
+    "Evaluator": (".evaluator", "Evaluator"),
+    "LammpsEngine": (".engines.lammps", "LammpsEngine"),
     "TorchSimEngine": (".engines.torchsim", "TorchSimEngine"),
     "TorchSimThermoLogger": (".callbacks.torchsim_logger", "TorchSimThermoLogger"),
     "LAMMPS_MLIAP": (".lammps_mliap_interface", "LAMMPS_MLIAP"),

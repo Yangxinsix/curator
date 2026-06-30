@@ -1,4 +1,7 @@
+from .._torch_compat import ensure_torch_safe_globals
 from curator.data._uncertainty import UncertaintyModule, collect_uncertainty_outputs
+
+ensure_torch_safe_globals()
 
 from .painn import Painn
 from .nequip import Nequip

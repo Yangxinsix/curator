@@ -3,7 +3,7 @@ from myqueue.workflow import run
 from myqueue.task import Task
 from typing import Optional, Dict, Tuple, Final, Union
 from omegaconf import DictConfig, OmegaConf
-from curator.utils import read_user_config, register_resolvers
+from curator.config_utils import read_user_config, register_resolvers
 from pathlib import Path
 
 register_resolvers()

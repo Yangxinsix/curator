@@ -1,0 +1,14 @@
+units metal
+atom_style atomic
+boundary {boundary}
+newton off
+read_data {data_file}
+pair_style curator
+pair_coeff * * {model_file} {atomic_numbers}
+neighbor 2.0 bin
+neigh_modify every 1 delay 0 check yes
+thermo_style custom step temp pe pxx pyy pzz pxy pxz pyz vol
+thermo 1
+dump curator_all all custom 1 {dump_file} id type x y z fx fy fz
+dump_modify curator_all sort id
+run {steps}
