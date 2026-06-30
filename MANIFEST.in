@@ -1,6 +1,7 @@
 include README.md
 
 recursive-include curator *.py
+recursive-include curator *.cpp
 recursive-include curator *.yaml *.yml *.toml *.json *.txt
 recursive-include scripts *
 

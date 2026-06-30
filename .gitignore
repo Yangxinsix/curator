@@ -2,10 +2,12 @@
 __pycache__/
 *.pyc
 *.pyo
+*.so
 *.egg-info/
 dist/
 build/
 test/*
+!test/test_native_neighborlist.py
 scripts/
 
 # model files

@@ -17,6 +17,12 @@ try:
 except ModuleNotFoundError:
     warnings.warn("Failed to import matscipy module for fast neighborlist")
 
+try:
+    from curator.native import neighbor_pairs as native_neighbor_pairs
+except ImportError:
+    native_neighbor_pairs = None
+    warnings.warn("Failed to import curator native neighborlist module")
+
 class NeighborListTransform(Transform):
     """
     Base classs for calculating neighbor list
@@ -185,6 +191,113 @@ class TorchNeighborList(NeighborListTransform):
             outputs[properties.cell_displacements] = cell_displacements[mask]
 
         return outputs
+
+class NativeNeighborList(NeighborListTransform):
+    """Neighbor list backed by CURATOR's native C++ cell-list kernel."""
+    def __init__(
+        self,
+        *args,
+        wrap_atoms: bool=True,
+        return_cell_displacements: bool=False,
+        num_threads: int=0,
+        **kwargs,
+    ) -> None:
+        super().__init__(*args, **kwargs)
+        if native_neighbor_pairs is None:
+            raise ModuleNotFoundError("This neighbor list implementation needs curator.native._neighbors module!")
+        self.wrap_atoms = wrap_atoms
+        self.return_cell_displacements = return_cell_displacements
+        self.num_threads = int(num_threads)
+
+    def _simple_neighbor_list(
+        self,
+        pos: torch.Tensor,
+    ) -> properties.Type:
+        return self._build_native_neighbor_list(pos, cell=None)
+
+    def _build_neighbor_list(
+        self,
+        pos: torch.Tensor,
+        cell: torch.Tensor,
+    ) -> properties.Type:
+        return self._build_native_neighbor_list(pos, cell=cell)
+
+    def _build_native_neighbor_list(
+        self,
+        pos: torch.Tensor,
+        cell: Union[torch.Tensor, None],
+    ) -> properties.Type:
+        if cell is not None and self.wrap_atoms:
+            search_pos = wrap_positions(pos, cell)
+        else:
+            search_pos = pos
+
+        search_pos_np = search_pos.detach().to(device="cpu", dtype=torch.float64).numpy()
+        cell_np = None if cell is None else cell.detach().to(device="cpu", dtype=torch.float64).numpy()
+        result = native_neighbor_pairs(
+            search_pos_np,
+            self.cutoff,
+            cell=cell_np,
+            pbc=None if cell is None else [True, True, True],
+            num_threads=self.num_threads,
+        )
+        return self._native_pairs_to_curator_edges(result, search_pos, cell)
+
+    def _native_pairs_to_curator_edges(
+        self,
+        result,
+        pos: torch.Tensor,
+        cell: Union[torch.Tensor, None],
+    ) -> properties.Type:
+        device = pos.device
+        dtype = pos.dtype
+        count = result.count
+        if count == 0:
+            outputs = {
+                properties.edge_idx: torch.empty((0, 2), dtype=torch.long, device=device),
+                properties.edge_diff: torch.empty((0, 3), dtype=dtype, device=device),
+            }
+            if self.return_distance:
+                outputs[properties.edge_dist] = torch.empty((0,), dtype=dtype, device=device)
+            if self.return_cell_displacements:
+                outputs[properties.cell_displacements] = torch.empty((0, 3), dtype=dtype, device=device)
+            return outputs
+
+        pair_i = torch.as_tensor(result.i, dtype=torch.long, device=device)
+        pair_j = torch.as_tensor(result.j, dtype=torch.long, device=device)
+        edge_idx = torch.cat(
+            (
+                torch.stack((pair_i, pair_j), dim=1),
+                torch.stack((pair_j, pair_i), dim=1),
+            ),
+            dim=0,
+        )
+
+        if cell is None:
+            shifts = torch.zeros((count, 3), dtype=dtype, device=device)
+        else:
+            offsets = torch.as_tensor(result.offsets, dtype=dtype, device=device)
+            shifts = offsets @ cell.to(device=device, dtype=dtype)
+
+        forward_diff = pos[pair_j] + shifts - pos[pair_i]
+        reverse_diff = pos[pair_i] - shifts - pos[pair_j]
+        edge_diff = torch.cat((forward_diff, reverse_diff), dim=0)
+        outputs = {
+            properties.edge_idx: edge_idx,
+            properties.edge_diff: edge_diff,
+        }
+
+        if self.return_distance:
+            distance = torch.as_tensor(result.distance, dtype=dtype, device=device)
+            outputs[properties.edge_dist] = torch.cat((distance, distance), dim=0)
+
+        if self.return_cell_displacements:
+            outputs[properties.cell_displacements] = torch.cat((shifts, -shifts), dim=0)
+
+        return outputs
+
+    def __repr__(self):
+        return f"{self.__class__.__name__}(cutoff={self.cutoff}, return_distance={self.return_distance}, return_cell_displacements={self.return_cell_displacements}, num_threads={self.num_threads})"
         
 class Asap3NeighborList(NeighborListTransform):
     def __init__(
@@ -295,7 +408,7 @@ class BatchNeighborList(nn.Module):
         cutoff: float, 
         requires_grad: bool=False, 
         return_distance: bool=False,
-        neighbor_list: Union[NeighborListTransform, Literal["MatScipy", "Torch", "Asap3"]] = 'Torch',
+        neighbor_list: Union[NeighborListTransform, Literal["MatScipy", "Torch", "Asap3", "Native"]] = 'Torch',
     ) -> None:
         """Batch neighbor list
         
@@ -315,6 +428,8 @@ class BatchNeighborList(nn.Module):
                 self.neighbor_list = TorchNeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance, wrap_atoms=True)
             elif neighbor_list == 'Asap3':
                 self.neighbor_list = Asap3NeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance)
+            elif neighbor_list == 'Native':
+                self.neighbor_list = NativeNeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance)
             else:
                 raise ValueError(f"Unknown neighbor list method: {neighbor_list}")
         else:
