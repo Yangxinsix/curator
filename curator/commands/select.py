@@ -75,12 +75,34 @@ def select(config: DictConfig):
     if config.save_images:
         save_images = config.save_images if isinstance(config.save_images, str) else os.path.join(config.run_path, "selected.traj")
 
+    feature_specs = OmegaConf.to_container(
+        OmegaConf.select(config, "feature_specs", default=[]),
+        resolve=True,
+    )
+    if not feature_specs:
+        kernel = OmegaConf.select(config, "kernel", default="full-g")
+        n_random_features = OmegaConf.select(config, "n_random_features", default=None)
+        legacy_presets = {
+            "full-g": "fg-sketch",
+            "full-gradient": "fg-sketch",
+            "ll-g": "llg-sketch",
+            "ll-gradient": "llg-sketch",
+            "gnn": "gnn-sketch",
+            "local-full-g": "local_fg-sketch",
+            "local_full-g": "local_fg-sketch",
+            "local-full-gradient": "local_fg-sketch",
+            "local_full-gradient": "local_fg-sketch",
+        }
+        spec = {"preset": legacy_presets.get(str(kernel), str(kernel))}
+        if n_random_features:
+            spec["num_features"] = int(n_random_features)
+        feature_specs = [spec]
+
     al = GeneralActiveLearning(
         models=models,
-        kernel=config.kernel,
-        kernels=OmegaConf.select(config, "export_kernels"),
         selection=config.method,
-        n_random_features=config.n_random_features,
+        feature_specs=feature_specs,
+        selection_feature=OmegaConf.select(config, "selection_feature"),
         target_layer=OmegaConf.select(config, "target_layer", default="readout_mlp"),
         batch_size=data_batch_size,
         device=config.device,
@@ -98,7 +120,9 @@ def select(config: DictConfig):
         save_images=save_images,
         save_selected_features=save_selected_features,
         normalize_features=OmegaConf.select(config, "export_normalized_features", default=True),
-        compute_features_only=bool(OmegaConf.select(config, "compute_features_only", default=False)),
+        compute_features_only=bool(
+            OmegaConf.select(config, "compute_features_only", default=False)
+        ),
     )
 
     log.debug(

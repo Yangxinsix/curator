@@ -2,6 +2,7 @@ from .adapter import (
     AllegroAdapter,
     ESENAdapter,
     ExternalModelSpec,
+    MACEAdapter,
     MatGLAdapter,
     is_external_model_spec,
     load_external_model,
@@ -12,6 +13,7 @@ from .adapter import (
 __all__ = [
     "ExternalModelSpec",
     "MatGLAdapter",
+    "MACEAdapter",
     "AllegroAdapter",
     "ESENAdapter",
     "register_adapter_loader",

@@ -9,11 +9,13 @@ from . import mace as _mace_loader
 from . import nequip as _nequip_loader
 from .allegro import AllegroAdapter
 from .esen import ESENAdapter
+from .mace import MACEAdapter
 from .matgl import MatGLAdapter
 
 __all__ = [
     "ExternalModelSpec",
     "MatGLAdapter",
+    "MACEAdapter",
     "AllegroAdapter",
     "ESENAdapter",
     "register_adapter_loader",

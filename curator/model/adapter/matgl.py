@@ -33,7 +33,10 @@ class _MatGLAtoms2GraphFallback:
         if self.backend == "DGL":
             from matgl.graph._converters_dgl import GraphConverter
         else:
-            from matgl.graph._converters_pyg import GraphConverter
+            try:
+                from matgl.graph._converters_pyg import GraphConverter
+            except ModuleNotFoundError:
+                from matgl.graph._converters import GraphConverter
 
         class _Converter(GraphConverter):
             def get_graph(self, structure):
@@ -133,7 +136,11 @@ class MatGLAdapter(nn.Module):
             raise ValueError(f"Unsupported MatGL backend: {self.backend}")
         self.graph_converter = self._build_graph_converter(tuple(element_types), float(cutoff))
         self.representation = build_representation(float(cutoff))
-        target_module = resolve_target_layer(self.core_model, target_layer, ("final_layer", "readout"))
+        target_module = resolve_target_layer(
+            self.core_model,
+            target_layer,
+            ("final_layer", "readout"),
+        )
         bind_target_layer_aliases(self, target_layer, target_module)
 
     def _build_graph_converter(self, element_types: tuple[str, ...], cutoff: float):
@@ -141,7 +148,10 @@ class MatGLAdapter(nn.Module):
             if self.backend == "DGL":
                 from matgl.ext._ase_dgl import Atoms2Graph
             else:
-                from matgl.ext._ase_pyg import Atoms2Graph
+                try:
+                    from matgl.ext._ase_pyg import Atoms2Graph
+                except ModuleNotFoundError:
+                    from matgl.ext._ase import Atoms2Graph
             return Atoms2Graph(element_types, cutoff)
         except Exception:
             return _MatGLAtoms2GraphFallback(element_types, cutoff, self.backend)
