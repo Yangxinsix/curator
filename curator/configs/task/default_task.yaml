@@ -13,5 +13,6 @@ load_weights_only: True              # if True, only load weights into model
 # customize loss ratios
 energy_weight: 1                     # scale factor for energy loss
 forces_weight: 100                   # scale factor for force loss
+atomic_charge_weight: 1              # scale factor for supervised atomic charge loss
 # stress_weight: 50                  # optional scale for stress loss
 patience: 200                        # early stopping patience (epochs)
