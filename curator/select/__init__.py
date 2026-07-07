@@ -5,6 +5,7 @@ from .kernel import (
     FeatureCovKernelMatrix,
 )
 from .select import (
+    direct_birch,
     max_diag,
     max_dist_greedy,
     max_det_greedy,

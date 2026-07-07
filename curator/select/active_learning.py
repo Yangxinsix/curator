@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple, Union, Literal
+from typing import Any, Dict, List, Optional, Sequence, Tuple, Union, Literal
 
 import h5py
 import numpy as np
@@ -29,7 +29,9 @@ from curator.select.kernel import (
     KernelMatrix,
 )
 from curator.select.select import (
+    _call_selection,
     deterministic_CUR,
+    direct_birch,
     lcmd_greedy,
     max_det_greedy,
     max_det_greedy_local,
@@ -61,6 +63,7 @@ SelectionName = Literal[
     "max_det_greedy_local",
     "lcmd_greedy",
     "deterministic_CUR",
+    "direct_birch",
 ]
 
 
@@ -82,9 +85,11 @@ class GeneralActiveLearning:
         checkpoint_interval: int = 0,
         structure_filter: Optional[Union[Filter, Sequence[Filter]]] = None,
         target_domain: Optional[Union[str, int]] = None,
+        selection_kwargs: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.models = models
         self.selection = selection
+        self.selection_kwargs = dict(selection_kwargs or {})
         self.feature_specs = [feature_spec_from_object(spec) for spec in feature_specs] if feature_specs else []
         if not self.feature_specs:
             raise ValueError("feature_specs must contain at least one feature spec.")
@@ -219,34 +224,30 @@ class GeneralActiveLearning:
         if isinstance(matrix, DiagonalKernelMatrix) and self.selection != "max_diag":
             raise ValueError("Diagonal kernels only support max_diag selection.")
 
-        if self.selection == "max_diag":
-            idxs = max_diag(matrix=matrix, batch_size=select_batch_size)
-        elif self.selection == "max_dist_greedy":
-            idxs = max_dist_greedy(
-                matrix=matrix,
-                batch_size=select_batch_size,
-                n_train=n_train,
-            )
-        elif self.selection == "max_det_greedy":
-            idxs = max_det_greedy(matrix=matrix, batch_size=select_batch_size)
-        elif self.selection == "max_det_greedy_local":
-            if num_atoms is None:
-                raise ValueError("max_det_greedy_local requires local features.")
-            idxs = max_det_greedy_local(
-                matrix=matrix,
-                batch_size=select_batch_size,
-                num_atoms=num_atoms,
-            )
-        elif self.selection == "lcmd_greedy":
-            idxs = lcmd_greedy(
-                matrix=matrix,
-                batch_size=select_batch_size,
-                n_train=n_train,
-            )
-        elif self.selection == "deterministic_CUR":
-            idxs = deterministic_CUR(matrix=matrix, batch_size=select_batch_size)
-        else:
+        selection_methods = {
+            "max_diag": max_diag,
+            "max_dist_greedy": max_dist_greedy,
+            "max_det_greedy": max_det_greedy,
+            "max_det_greedy_local": max_det_greedy_local,
+            "lcmd_greedy": lcmd_greedy,
+            "deterministic_CUR": deterministic_CUR,
+            "direct_birch": direct_birch,
+        }
+        selection_fn = selection_methods.get(self.selection)
+        if selection_fn is None:
             raise ValueError(f"Unknown selection method '{self.selection}'.")
+        if self.selection == "max_det_greedy_local" and num_atoms is None:
+            raise ValueError("max_det_greedy_local requires local features.")
+        if self.selection == "direct_birch" and num_atoms is not None:
+            raise ValueError("direct_birch currently requires global structure-level features.")
+        idxs = _call_selection(
+            selection_fn,
+            selection_kwargs=self.selection_kwargs,
+            matrix=matrix,
+            batch_size=select_batch_size,
+            n_train=n_train,
+            num_atoms=num_atoms,
+        )
         selected = idxs.cpu().tolist()
         if pool_map is not None:
             selected = [pool_map[i] for i in selected]
