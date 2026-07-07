@@ -87,6 +87,10 @@ def select(config: DictConfig):
         transforms=transforms,
         save_features=save_features,
         target_domain=OmegaConf.select(config, "target_domain"),
+        selection_kwargs=OmegaConf.to_container(
+            OmegaConf.select(config, "selection_kwargs", default={}),
+            resolve=True,
+        ),
     )
     save_json = os.path.join(config.run_path, "selected.json")
     indices = al.select(
