@@ -14,8 +14,26 @@ def cat_tensors(tensors: List[torch.Tensor]) -> torch.Tensor:
     return torch.stack(tensors)
 
 
+def _missing_atoms_value(key: str, atoms: Dict[str, torch.Tensor]) -> torch.Tensor:
+    if key == properties.pbc:
+        return torch.zeros((1, 3), dtype=torch.bool)
+    if key == properties.cell:
+        dtype = atoms[properties.positions].dtype
+        device = atoms[properties.positions].device
+        return torch.zeros((3, 3), dtype=dtype, device=device)
+    return torch.tensor([])
+
+
 def _collate_atoms_dicts(atoms_list: List[Dict[str, torch.Tensor]], pin_memory: bool) -> Dict[str, torch.Tensor]:
-    dict_of_lists = {k: [dic[k] if k in dic else torch.tensor([]) for dic in atoms_list] for k in atoms_list[0]}
+    keys = []
+    for atoms in atoms_list:
+        for key in atoms:
+            if key not in keys:
+                keys.append(key)
+    dict_of_lists = {
+        key: [atoms[key] if key in atoms else _missing_atoms_value(key, atoms) for atoms in atoms_list]
+        for key in keys
+    }
     pin = (lambda x: x.pin_memory()) if pin_memory else (lambda x: x)
 
     collated = {k: pin(cat_tensors(v)) for k, v in dict_of_lists.items()}

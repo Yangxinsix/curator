@@ -76,7 +76,9 @@ class GeneralActiveLearning:
         selection: SelectionName = "max_diag",
         feature_specs: Optional[Sequence[Union[FeatureSpec, dict]]] = None,
         selection_feature: Optional[str] = None,
-        target_layer: str = "readout_mlp",
+        target_layer: str = "readout",
+        num_layers: Optional[Union[int, str]] = None,
+        invariants_only: bool = True,
         batch_size: int = 8,
         device: Optional[str] = None,
         dataset_cutoff: Optional[float] = None,
@@ -103,6 +105,8 @@ class GeneralActiveLearning:
                 f"selection_feature '{self.selection_feature}' not found in feature_specs: {available}"
             )
         self.target_layer = target_layer
+        self.num_layers = num_layers
+        self.invariants_only = invariants_only
         self.batch_size = batch_size
         self.device = device or next(models[0].parameters()).device
         if dataset_cutoff is None:
@@ -306,6 +310,8 @@ class GeneralActiveLearning:
             kernels=feature_specs if feature_specs else None,
             calculators=calculators,
             target_layer=self.target_layer,
+            num_layers=self.num_layers,
+            invariants_only=self.invariants_only,
             batch_size=self.batch_size,
             device=self.device,
             store=store,
@@ -379,6 +385,8 @@ class GeneralActiveLearning:
                 repr_callback=model,
                 target_layer=self.target_layer,
                 target_domain=self.target_domain,
+                num_layers=self.num_layers,
+                invariants_only=self.invariants_only,
             )
             calculators.append(
                 FeatureCalculator(

@@ -132,6 +132,7 @@ class AseDataReader(DataReader):
             properties.n_atoms: torch.tensor([n_atoms], dtype=torch.long),
             properties.Z: torch.tensor(atomic_numbers, dtype=torch.long),
             properties.positions: torch.tensor(positions, dtype=self.default_dtype),
+            properties.pbc: torch.tensor(atoms.pbc, dtype=torch.bool).view(1, 3),
             properties.image_idx: torch.zeros((n_atoms,), dtype=torch.long),                 # used for scatter add
         }
         if atoms.pbc.any():

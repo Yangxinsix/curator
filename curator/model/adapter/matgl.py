@@ -33,7 +33,10 @@ class _MatGLAtoms2GraphFallback:
         if self.backend == "DGL":
             from matgl.graph._converters_dgl import GraphConverter
         else:
-            from matgl.graph._converters_pyg import GraphConverter
+            try:
+                from matgl.graph._converters import GraphConverter
+            except ModuleNotFoundError:
+                from matgl.graph._converters_pyg import GraphConverter
 
         class _Converter(GraphConverter):
             def get_graph(self, structure):
@@ -141,7 +144,10 @@ class MatGLAdapter(nn.Module):
             if self.backend == "DGL":
                 from matgl.ext._ase_dgl import Atoms2Graph
             else:
-                from matgl.ext._ase_pyg import Atoms2Graph
+                try:
+                    from matgl.ext._ase import Atoms2Graph
+                except ModuleNotFoundError:
+                    from matgl.ext._ase_pyg import Atoms2Graph
             return Atoms2Graph(element_types, cutoff)
         except Exception:
             return _MatGLAtoms2GraphFallback(element_types, cutoff, self.backend)

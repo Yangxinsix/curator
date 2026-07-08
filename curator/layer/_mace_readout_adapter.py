@@ -27,6 +27,8 @@ class MACEReadoutAdapter(nn.Module):
 
         self.in_features_list = [self.hidden_irreps.dim] * (num_interactions - 1)
         self.in_features_list.append(self.hidden_irreps[0].dim)
+        invariant_dim = int(sum(mul * ir.dim for mul, ir in self.hidden_irreps if ir.l == 0 and ir.p == 1))
+        self.invariant_features_list = [invariant_dim for _ in range(num_interactions)]
 
     def forward(self, data: properties.Type) -> properties.Type:
         node_feat = data[properties.node_feat]

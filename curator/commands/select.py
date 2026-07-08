@@ -76,11 +76,12 @@ def select(config: DictConfig):
 
     al = GeneralActiveLearning(
         models=models,
-        kernel=config.kernel,
-        kernels=OmegaConf.select(config, "export_kernels"),
         selection=config.method,
-        n_random_features=config.n_random_features,
-        target_layer=OmegaConf.select(config, "target_layer", default="readout_mlp"),
+        feature_specs=OmegaConf.to_container(config.feature_specs, resolve=True),
+        selection_feature=OmegaConf.select(config, "selection_feature"),
+        target_layer=OmegaConf.select(config, "target_layer", default="readout"),
+        num_layers=OmegaConf.select(config, "num_layers"),
+        invariants_only=OmegaConf.select(config, "invariants_only", default=True),
         batch_size=data_batch_size,
         device=config.device,
         dataset_cutoff=cutoff,

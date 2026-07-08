@@ -281,3 +281,140 @@ class RealAgnosticResidualInteractionBlock(Interaction):
             avg_num_neigh = _datamodule._get_avg_num_neighbors()
             if avg_num_neigh is not None:
                 self.avg_num_neighbors = torch.tensor(avg_num_neigh)
+
+
+@compile_mode("script")
+class RealAgnosticDensityInteractionBlock(RealAgnosticInteractionBlock):
+    def __init__(
+        self,
+        irreps_in,
+        target_irreps,
+        radial_MLP,
+        avg_num_neighbors: Optional[float] = None,
+        **kwargs,
+    ):
+        super().__init__(
+            irreps_in=irreps_in,
+            target_irreps=target_irreps,
+            radial_MLP=radial_MLP,
+            avg_num_neighbors=avg_num_neighbors,
+            **kwargs,
+        )
+        input_dim = self.irreps_in[properties.edge_dist_embedding].num_irreps
+        self.density_fn = FullyConnectedNet(
+            [input_dim, 1],
+            torch.nn.functional.silu,
+        )
+
+    def forward(
+        self,
+        node_feat,
+        node_attr,
+        edge_idx,
+        edge_dist_embedding,
+        edge_diff_embedding,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
+        is_first_layer: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        node_feat = self.linear_up(node_feat)
+
+        tp_weights = self.conv_tp_weights(edge_dist_embedding)
+        edge_density = torch.tanh(self.density_fn(edge_dist_embedding) ** 2)
+        node_feat = self.exchange_info(node_feat, lammps_data, n_ghost, is_first_layer=is_first_layer)
+        edge_feat = self.conv_tp(
+            node_feat[edge_idx[:, 0]],
+            edge_diff_embedding,
+            tp_weights,
+        )
+
+        out_feat = torch.zeros(
+            (node_feat.shape[0], edge_feat.shape[1]),
+            device=edge_feat.device,
+            dtype=edge_feat.dtype,
+        )
+        node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0, out=out_feat)
+        density = torch.zeros(
+            (node_feat.shape[0], edge_density.shape[1]),
+            device=edge_density.device,
+            dtype=edge_density.dtype,
+        )
+        density = scatter_add(edge_density, edge_idx[:, 1], dim=0, out=density)
+        node_feat = self.truncate_ghost(node_feat, n_local)
+        node_attr = self.truncate_ghost(node_attr, n_local)
+        density = self.truncate_ghost(density, n_local)
+
+        node_feat = self.linear(node_feat) / (density + 1.0)
+        node_feat = self.skip_tp(node_feat, node_attr)
+
+        return (self.reshape(node_feat), None)
+
+
+@compile_mode("script")
+class RealAgnosticDensityResidualInteractionBlock(RealAgnosticResidualInteractionBlock):
+    def __init__(
+        self,
+        irreps_in,
+        target_irreps,
+        hidden_irreps,
+        radial_MLP,
+        avg_num_neighbors: Optional[float] = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(
+            irreps_in=irreps_in,
+            target_irreps=target_irreps,
+            hidden_irreps=hidden_irreps,
+            radial_MLP=radial_MLP,
+            avg_num_neighbors=avg_num_neighbors,
+            **kwargs,
+        )
+        input_dim = self.irreps_in[properties.edge_dist_embedding].num_irreps
+        self.density_fn = FullyConnectedNet(
+            [input_dim, 1],
+            torch.nn.functional.silu,
+        )
+
+    def forward(
+        self,
+        node_feat,
+        node_attr,
+        edge_idx,
+        edge_dist_embedding,
+        edge_diff_embedding,
+        lammps_data: Optional[Any] = None,
+        n_local: Optional[int] = None,
+        n_ghost: Optional[int] = None,
+        is_first_layer: bool = False,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        sc = self.skip_tp(node_feat, node_attr)
+        node_feat = self.linear_up(node_feat)
+        tp_weights = self.conv_tp_weights(edge_dist_embedding)
+        edge_density = torch.tanh(self.density_fn(edge_dist_embedding) ** 2)
+
+        node_feat = self.exchange_info(node_feat, lammps_data, n_ghost, is_first_layer=is_first_layer)
+        edge_feat = self.conv_tp(
+            node_feat[edge_idx[:, 0]],
+            edge_diff_embedding,
+            tp_weights,
+        )
+        out_feat = torch.zeros(
+            (node_feat.shape[0], edge_feat.shape[1]),
+            device=edge_feat.device,
+            dtype=edge_feat.dtype,
+        )
+        node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0, out=out_feat)
+        density = torch.zeros(
+            (node_feat.shape[0], edge_density.shape[1]),
+            device=edge_density.device,
+            dtype=edge_density.dtype,
+        )
+        density = scatter_add(edge_density, edge_idx[:, 1], dim=0, out=density)
+        node_feat = self.truncate_ghost(node_feat, n_local)
+        node_attr = self.truncate_ghost(node_attr, n_local)
+        density = self.truncate_ghost(density, n_local)
+        sc = self.truncate_ghost(sc, n_local)
+        node_feat = self.linear(node_feat) / (density + 1.0)
+
+        return (self.reshape(node_feat), sc)

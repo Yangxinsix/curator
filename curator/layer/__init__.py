@@ -9,6 +9,8 @@ from ._grad_output import GradientOutput
 from ._nequip_interaction import InteractionLayer
 from ._mace_interaction import (
     EquivariantProductBasisBlock,
+    RealAgnosticDensityInteractionBlock,
+    RealAgnosticDensityResidualInteractionBlock,
     RealAgnosticInteractionBlock,
     RealAgnosticResidualInteractionBlock,
 )
@@ -74,6 +76,8 @@ __all__ = [
     EwaldSummation,
     InteractionLayer,
     EquivariantProductBasisBlock,
+    RealAgnosticDensityInteractionBlock,
+    RealAgnosticDensityResidualInteractionBlock,
     RealAgnosticInteractionBlock,
     RealAgnosticResidualInteractionBlock,
     MACEReadoutAdapter,

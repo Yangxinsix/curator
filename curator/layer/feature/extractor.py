@@ -20,8 +20,10 @@ class FeatureExtractor(nn.Module):
         self,
         repr_callback: Optional[Callable] = None,
         model_outputs: Optional[List[str]] = None,
-        target_layer: str = "readout_mlp",
+        target_layer: str = "readout",
         target_domain: Optional[Union[str, int]] = None,
+        num_layers: Optional[Union[int, str]] = None,
+        invariants_only: bool = True,
     ) -> None:
         super().__init__()
         self.repr_callback = repr_callback
@@ -31,6 +33,8 @@ class FeatureExtractor(nn.Module):
         self.model_outputs = model_outputs if model_outputs is not None else ["feature", "gradient"]
         self.target_layer = target_layer
         self.target_domain = target_domain
+        self.num_layers = num_layers
+        self.invariants_only = invariants_only
         self._linear_types = self._resolve_linear_types()
         if self.repr_callback is not None:
             self.add_hooks()
@@ -41,6 +45,13 @@ class FeatureExtractor(nn.Module):
             dim=-1,
         )
         self._features.append(new_feat)
+
+    def save_segmented_feats_hook(self, module, in_feat) -> None:
+        feat = in_feat[0]
+        if isinstance(feat, dict):
+            feat = feat[properties.node_feat]
+        feat = self._select_segmented_feat(module, feat)
+        self._features.append(feat)
 
     def save_grads_hook(self, _, __, grad_output) -> None:
         self._grads.append(grad_output[0].detach().clone())
@@ -82,8 +93,15 @@ class FeatureExtractor(nn.Module):
                 "Set target_domain to select explicitly."
             )
 
-        layer = find_layer_by_name_recursive(search_root, self.target_layer)
+        layer = self._resolve_target_layer(search_root)
         assert layer is not None, f"Target layer {self.target_layer} is not found!"
+        if self.num_layers is not None:
+            if not self._has_segmented_input(layer):
+                raise ValueError("num_layers requires a target layer with segmented inputs.")
+            self.hooks.append(layer.register_forward_pre_hook(self.save_segmented_feats_hook))
+            return
+
+        layer = self._default_target(layer)
         linear_modules = [m for m in layer.modules() if isinstance(m, self._linear_types)]
         if not linear_modules:
             logger.warning("No linear-like submodules found under target layer %s", self.target_layer)
@@ -100,11 +118,74 @@ class FeatureExtractor(nn.Module):
         return data
 
     def __repr__(self) -> str:
-        return f"{self.__class__.__name__}(target_layer={self.target_layer}, target_domain={self.target_domain})"
+        return (
+            f"{self.__class__.__name__}(target_layer={self.target_layer}, "
+            f"target_domain={self.target_domain}, num_layers={self.num_layers}, "
+            f"invariants_only={self.invariants_only})"
+        )
 
     def _reset(self) -> None:
         self._features = []
         self._grads = []
+
+    def _select_segmented_feat(self, module: nn.Module, feat: torch.Tensor) -> torch.Tensor:
+        widths = [int(width) for width in getattr(module, "in_features_list")]
+        start_segment = 0
+        if isinstance(self.num_layers, str):
+            if self.num_layers.lower() not in {"last", "final"}:
+                raise ValueError("num_layers must be positive, -1, or 'last'.")
+            start_segment = len(widths) - 1
+            num_segments = 1
+        elif self.num_layers == -1:
+            num_segments = len(widths)
+        elif self.num_layers is not None and self.num_layers > 0:
+            if self.num_layers > len(widths):
+                raise ValueError(f"num_layers={self.num_layers} exceeds available segments {len(widths)}.")
+            num_segments = self.num_layers
+        else:
+            raise ValueError("num_layers must be positive, -1, or 'last'.")
+        feat = self._slice_segmented_feat(module, feat, widths, start_segment, num_segments).detach().clone()
+        return torch.cat((feat, torch.ones_like(feat[:, 0:1])), dim=-1)
+
+    def _slice_segmented_feat(
+        self,
+        module: nn.Module,
+        feat: torch.Tensor,
+        widths: List[int],
+        start_segment: int,
+        num_segments: int,
+    ) -> torch.Tensor:
+        end_segment = start_segment + num_segments
+        if not self.invariants_only:
+            return feat[:, sum(widths[:start_segment]) : sum(widths[:end_segment])]
+        invariant_widths = getattr(module, "invariant_features_list", widths)
+        if len(invariant_widths) < end_segment:
+            raise ValueError("invariant_features_list is shorter than selected segments.")
+        out = []
+        start = sum(widths[:start_segment])
+        for width, invariant_width in zip(widths[start_segment:end_segment], invariant_widths[start_segment:end_segment]):
+            out.append(feat[:, start : start + int(invariant_width)])
+            start += width
+        return torch.cat(out, dim=-1)
+
+    def _resolve_target_layer(self, search_root: nn.Module) -> Optional[nn.Module]:
+        layer = find_layer_by_name_recursive(search_root, self.target_layer)
+        if layer is not None or self.target_layer != "readout":
+            return layer
+        if hasattr(search_root, "readouts") or self._has_segmented_input(search_root):
+            return search_root
+        return None
+
+    @staticmethod
+    def _default_target(layer: nn.Module) -> nn.Module:
+        readouts = getattr(layer, "readouts", None)
+        if readouts is not None and len(readouts) > 0:
+            return readouts[-1]
+        return layer
+
+    @staticmethod
+    def _has_segmented_input(layer: nn.Module) -> bool:
+        return hasattr(layer, "in_features_list")
 
     @staticmethod
     def _resolve_linear_types() -> Sequence[type]:

@@ -42,7 +42,9 @@ feature_specs:
 #   threshold: 0.5
 #   weighting_pcs: true
 #   selection_criteria: center
-target_layer: readout_mlp # External defaults: MatGL -> final_layer, Allegro -> edge_readout, eSEN -> energy_block
+target_layer: readout # External models may override this, e.g. MatGL -> final_layer, Allegro -> edge_readout, eSEN -> energy_block
+num_layers: null # For segmented readouts: positive N selects the first N segments; -1 selects all segments; last selects the final segment
+invariants_only: true # For segmented equivariant inputs, keep only invariant channels from each selected segment
 save_features: null # H5 cache file path when set
 save_selected_features: null # Selected feature file path when set
 export_normalized_features: true

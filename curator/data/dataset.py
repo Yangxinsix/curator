@@ -166,27 +166,33 @@ class NumpyDataset(torch.utils.data.Dataset):
         }
         n_atoms = len(self.npdata["z"])
         atoms_dict[properties.n_atoms] = torch.tensor([n_atoms], dtype=torch.long)
-        atoms_dict[properties.image_idx] = torch.zeros((n_atoms,), dtype=self.default_dtype)
+        atoms_dict[properties.image_idx] = torch.zeros((n_atoms,), dtype=torch.long)
 
         if "cell" in self.npdata:
-            cell = torch.from_numpy(self.npdata["cell"]).type(self.default_dtype)
+            cell_data = self.npdata["cell"]
+            if cell_data.ndim == 3:
+                cell_data = cell_data[idx]
+            atoms_dict[properties.cell] = torch.from_numpy(cell_data).type(self.default_dtype)
+            atoms_dict[properties.pbc] = torch.ones((1, 3), dtype=torch.bool)
+        else:
+            atoms_dict[properties.pbc] = torch.zeros((1, 3), dtype=torch.bool)
         
         # transform
         for t in self.transforms:
             atoms_dict = t(atoms_dict)
         
         try:
-            atoms_dict[properties.energy] = torch.from_numpy(self.npdata["E"][idx]).type(self.default_dtype)
+            atoms_dict[properties.energy] = torch.as_tensor(self.npdata["E"][idx]).type(self.default_dtype).view(-1)
         except (AttributeError, RuntimeError, KeyError):
             pass
         
         try: 
-            atoms_dict[properties.forces] = torch.from_numpy(self.npdata["F"][idx]).type(self.default_dtype)
+            atoms_dict[properties.forces] = torch.as_tensor(self.npdata["F"][idx]).type(self.default_dtype)
         except (AttributeError, RuntimeError, KeyError):
             pass
         
         try: 
-            atoms_dict[properties.stress] = torch.from_numpy(self.npdata["stress"][idx]).type(self.default_dtype)
+            atoms_dict[properties.stress] = torch.as_tensor(self.npdata["stress"][idx]).type(self.default_dtype)
         except (AttributeError, RuntimeError, KeyError):
             pass
         

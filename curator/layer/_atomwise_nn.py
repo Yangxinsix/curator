@@ -360,6 +360,8 @@ class MACEAtomwiseNN(AtomwiseNN):
                 self.in_features_list.insert(-1, self.hidden_irreps.dim)
                 self.readouts.append(Dense(self.hidden_irreps, self.out_features, activation=None, use_e3nn=True))
             self.readouts.append(self.readout_mlp)
+        invariant_dim = self._invariant_dim(self.hidden_irreps)
+        self.invariant_features_list = [invariant_dim for _ in range(num_interactions)]
 
     def _compute(self, input: torch.Tensor, index: Optional[torch.Tensor] = None, domain: Optional[str] = None) -> properties.Type:
         # split node features to list then calculate contributions from different parts
@@ -384,6 +386,10 @@ class MACEAtomwiseNN(AtomwiseNN):
                 raise ValueError(f"Head '{head.key}' has no compatible MACE readout contributions.")
             outputs.append(torch.sum(torch.stack(contribs, dim=0), dim=0))
         return torch.cat(outputs, dim=-1)
+
+    @staticmethod
+    def _invariant_dim(irreps: o3.Irreps) -> int:
+        return int(sum(mul * ir.dim for mul, ir in irreps if ir.l == 0 and ir.p == 1))
 
 
 class MultiDomainAtomwiseNN(nn.Module):

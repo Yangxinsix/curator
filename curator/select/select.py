@@ -236,6 +236,10 @@ def direct_birch(
         raise RuntimeError("BIRCH clustering failed to initialize.")
 
     labels = model.predict(pca_features)
+    label_centers = {
+        int(label): center
+        for label, center in zip(model.subcluster_labels_, model.subcluster_centers_)
+    }
     rng = np.random.default_rng(random_state)
     selected: list[int] = []
     for label in sorted(np.unique(labels)):
@@ -246,11 +250,11 @@ def direct_birch(
             size = min(k, cluster_indices.size)
             chosen = rng.choice(cluster_indices, size=size, replace=False)
         elif k >= cluster_indices.size:
-            center = pca_features[cluster_indices].mean(axis=0)
+            center = label_centers.get(int(label), pca_features[cluster_indices].mean(axis=0))
             distances = np.linalg.norm(pca_features[cluster_indices] - center, axis=1)
             chosen = cluster_indices[np.argsort(distances)]
         else:
-            center = pca_features[cluster_indices].mean(axis=0)
+            center = label_centers.get(int(label), pca_features[cluster_indices].mean(axis=0))
             distances = np.linalg.norm(pca_features[cluster_indices] - center, axis=1)
             ranked = cluster_indices[np.argsort(distances)]
             positions = np.linspace(0, cluster_indices.size - 1, k).astype(int)

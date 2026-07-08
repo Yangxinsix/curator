@@ -33,7 +33,9 @@ class FeatureStatistics:
         dataset: torch.utils.data.Dataset,
         kernels: Optional[Sequence[Union[KernelName, FeatureSpec, dict]]] = None,
         calculators: Optional[List[FeatureCalculator]] = None,
-        target_layer: str = "readout_mlp",
+        target_layer: str = "readout",
+        num_layers: Optional[Union[int, str]] = None,
+        invariants_only: bool = True,
         batch_size: int = 8,
         device: Optional[str] = None,
         store: Optional[H5Feature] = None,
@@ -45,6 +47,8 @@ class FeatureStatistics:
         self.kernels = kernels
         self.calculators = calculators
         self.target_layer = target_layer
+        self.num_layers = num_layers
+        self.invariants_only = invariants_only
         self.batch_size = batch_size
         self.device = device or next(models[0].parameters()).device
         self.store = store
@@ -103,7 +107,12 @@ class FeatureStatistics:
         kernel_specs = self._resolve_kernel_specs()
         calculators = []
         for model in self.models:
-            extractor = FeatureExtractor(repr_callback=model, target_layer=self.target_layer)
+            extractor = FeatureExtractor(
+                repr_callback=model,
+                target_layer=self.target_layer,
+                num_layers=self.num_layers,
+                invariants_only=self.invariants_only,
+            )
             calculators.append(FeatureCalculator(extractor=extractor, kernels=kernel_specs))
         kernel_names = [spec.kernel_name for spec in kernel_specs]
         return calculators, kernel_names
