@@ -1,5 +1,37 @@
+import inspect
+import math
+import warnings
+from typing import Any, Callable, Optional
+
+import numpy as np
 import torch
 from .kernel import KernelMatrix
+
+
+def _call_selection(
+    selection_fn: Callable[..., torch.Tensor],
+    *,
+    selection_kwargs: Optional[dict[str, Any]] = None,
+    **base_kwargs: Any,
+) -> torch.Tensor:
+    """Call a selection function with shared framework kwargs plus user options."""
+    signature = inspect.signature(selection_fn)
+    params = signature.parameters
+    accepts_kwargs = any(param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values())
+    user_kwargs = dict(selection_kwargs or {})
+    if not accepts_kwargs:
+        unknown = sorted(key for key in user_kwargs if key not in params)
+        if unknown:
+            name = getattr(selection_fn, "__name__", str(selection_fn))
+            raise TypeError(f"{name} got unsupported selection_kwargs: {unknown}")
+
+    call_kwargs = {
+        key: value
+        for key, value in base_kwargs.items()
+        if accepts_kwargs or key in params
+    }
+    call_kwargs.update(user_kwargs)
+    return selection_fn(**call_kwargs)
 
 def max_diag(matrix: KernelMatrix, batch_size: int) -> torch.Tensor:
     """
@@ -136,6 +168,103 @@ def lcmd_greedy(matrix: KernelMatrix, batch_size: int, n_train: int) -> torch.Te
         min_sq_dists = torch.where(new_min, sq_dists, min_sq_dists)
 
     return torch.hstack(batch_idxs[n_train:])
+
+
+def direct_birch(
+    matrix: KernelMatrix,
+    batch_size: int,
+    n_train: int = 0,
+    n_clusters: Optional[int] = None,
+    k: int = 1,
+    threshold: float = 0.5,
+    weighting_pcs: bool = True,
+    selection_criteria: str = "center",
+    random_state: Optional[int] = None,
+    max_threshold_adjustments: int = 20,
+) -> torch.Tensor:
+    """DIRECT-style PCA + BIRCH stratified sampling over stored features."""
+    if not hasattr(matrix, "mat"):
+        raise ValueError("direct_birch requires a FeatureKernelMatrix with stored features.")
+    if batch_size <= 0:
+        return torch.empty(0, dtype=torch.long)
+    if k <= 0:
+        raise ValueError("k must be positive.")
+    if threshold <= 0:
+        raise ValueError("threshold must be positive.")
+    if selection_criteria not in {"center", "random"}:
+        raise ValueError("selection_criteria must be 'center' or 'random'.")
+
+    try:
+        from sklearn.cluster import Birch
+        from sklearn.decomposition import PCA
+        from sklearn.exceptions import ConvergenceWarning
+        from sklearn.preprocessing import StandardScaler
+    except ImportError as exc:
+        raise ImportError("direct_birch requires scikit-learn to be installed.") from exc
+
+    mat = matrix.mat
+    n_pool = matrix.get_number_of_columns() - n_train
+    if n_pool <= 0:
+        return torch.empty(0, dtype=torch.long, device=mat.device)
+    if batch_size >= n_pool:
+        return torch.arange(n_pool, dtype=torch.long, device=mat.device)
+
+    target_clusters = int(n_clusters) if n_clusters is not None else math.ceil(batch_size / k)
+    target_clusters = max(1, min(target_clusters, n_pool))
+    features = mat[:, :n_pool, :].detach().permute(1, 0, 2).reshape(n_pool, -1).cpu().numpy()
+    features = StandardScaler().fit_transform(features)
+
+    pca = PCA()
+    transformed = pca.fit_transform(features)
+    n_pcs = int(np.sum(pca.explained_variance_ > 1.0))
+    n_pcs = max(1, min(n_pcs, transformed.shape[1]))
+    pca_features = transformed[:, :n_pcs]
+    if weighting_pcs:
+        pca_features = pca_features * pca.explained_variance_ratio_[:n_pcs]
+
+    current_threshold = float(threshold)
+    model = None
+    for _ in range(max(int(max_threshold_adjustments), 1)):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", ConvergenceWarning)
+            model = Birch(n_clusters=target_clusters, threshold=current_threshold).fit(pca_features)
+        n_subclusters = len(set(model.subcluster_labels_))
+        if n_subclusters >= target_clusters:
+            break
+        current_threshold *= max(n_subclusters, 1) / target_clusters
+    if model is None:
+        raise RuntimeError("BIRCH clustering failed to initialize.")
+
+    labels = model.predict(pca_features)
+    label_centers = {
+        int(label): center
+        for label, center in zip(model.subcluster_labels_, model.subcluster_centers_)
+    }
+    rng = np.random.default_rng(random_state)
+    selected: list[int] = []
+    for label in sorted(np.unique(labels)):
+        cluster_indices = np.where(labels == label)[0]
+        if cluster_indices.size == 0:
+            continue
+        if selection_criteria == "random":
+            size = min(k, cluster_indices.size)
+            chosen = rng.choice(cluster_indices, size=size, replace=False)
+        elif k >= cluster_indices.size:
+            center = label_centers.get(int(label), pca_features[cluster_indices].mean(axis=0))
+            distances = np.linalg.norm(pca_features[cluster_indices] - center, axis=1)
+            chosen = cluster_indices[np.argsort(distances)]
+        else:
+            center = label_centers.get(int(label), pca_features[cluster_indices].mean(axis=0))
+            distances = np.linalg.norm(pca_features[cluster_indices] - center, axis=1)
+            ranked = cluster_indices[np.argsort(distances)]
+            positions = np.linspace(0, cluster_indices.size - 1, k).astype(int)
+            chosen = ranked[positions]
+        selected.extend(int(idx) for idx in chosen)
+        if len(selected) >= batch_size:
+            break
+
+    selected = selected[:batch_size]
+    return torch.tensor(selected, dtype=torch.long, device=mat.device)
 
 def deterministic_CUR(matrix: KernelMatrix, batch_size: int, lambd: float=0.1, eposilon: float=1E-3) -> torch.Tensor:
     """

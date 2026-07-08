@@ -65,16 +65,24 @@ def extract_cells(data: properties.Type, batch_size: int) -> Optional[torch.Tens
 def extract_pbc(data: properties.Type, batch_size: int) -> torch.Tensor:
     pbc = data.get(properties.pbc)
     if pbc is None:
+        if extract_cells(data, batch_size) is not None:
+            return torch.ones((batch_size, 3), dtype=torch.bool)
         return torch.zeros((batch_size, 3), dtype=torch.bool)
     if isinstance(pbc, bool):
         return torch.full((batch_size, 3), bool(pbc), dtype=torch.bool)
     if not torch.is_tensor(pbc):
         pbc = torch.as_tensor(pbc, dtype=torch.bool)
     pbc = pbc.to(torch.bool)
+    if pbc.dim() == 0:
+        return torch.full((batch_size, 3), bool(pbc.item()), dtype=torch.bool)
     if pbc.dim() == 1 and pbc.numel() == 3:
         return pbc.view(1, 3).expand(batch_size, 3).clone()
+    if pbc.dim() == 1 and pbc.numel() == batch_size:
+        return pbc.view(batch_size, 1).expand(batch_size, 3).clone()
     if pbc.dim() == 2 and pbc.shape == (batch_size, 3):
         return pbc
+    if pbc.dim() == 2 and pbc.shape == (batch_size, 1):
+        return pbc.expand(batch_size, 3).clone()
     raise ValueError(f"Unsupported pbc shape: {tuple(pbc.shape)}")
 
 
@@ -287,9 +295,10 @@ def resolve_target_layer(
 
 
 def bind_target_layer_aliases(adapter: nn.Module, target_layer: str, module: nn.Module) -> None:
+    adapter.readout = module
     adapter.readout_mlp = module
     adapter.final_layer = module
-    if target_layer not in {"readout_mlp", "final_layer"}:
+    if target_layer not in {"readout", "readout_mlp", "final_layer"}:
         setattr(adapter, target_layer, module)
 
 

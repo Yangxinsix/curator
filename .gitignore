@@ -8,6 +8,7 @@ dist/
 build/
 test/*
 !test/test_native_neighborlist.py
+!test/test_direct_birch_selection.py
 scripts/
 
 # model files

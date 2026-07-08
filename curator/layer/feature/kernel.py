@@ -33,6 +33,11 @@ class FeatureKernel(nn.Module):
 
     def _resolve_raw_feature(self, extracted: ExtractedFeatures):
         if self.spec.source == "full-gradient":
+            if not extracted.grads:
+                raise ValueError(
+                    "full-gradient requires gradient hooks. "
+                    "Use a linear target_layer such as 'readout_mlp'."
+                )
             return extracted.feats, extracted.grads
         if self.spec.source == "ll-gradient":
             return extracted.feats[-1][:, :-1]

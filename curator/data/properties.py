@@ -123,6 +123,7 @@ _DEFAULT_GRAPH_FIELDS: Set[str] = {
     stress,
     strain,
     virial,
+    pbc,
     cell,
     n_atoms,
     n_pairs,

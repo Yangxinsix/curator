@@ -27,6 +27,8 @@ from curator.layer import (
     MultiDomainMACEAtomwiseNN,
     PairRepulsionEnergy,
     PairwiseDistance,
+    RealAgnosticDensityInteractionBlock,
+    RealAgnosticDensityResidualInteractionBlock,
     RealAgnosticInteractionBlock,
     RealAgnosticResidualInteractionBlock,
     SoftTransform,
@@ -511,21 +513,39 @@ def _create_curator_mace_representation(
     mace_model,
 ) -> MACE:
     interaction_map = {
+        "RealAgnosticDensityInteractionBlock": RealAgnosticDensityInteractionBlock,
+        "RealAgnosticDensityResidualInteractionBlock": RealAgnosticDensityResidualInteractionBlock,
         "RealAgnosticInteractionBlock": RealAgnosticInteractionBlock,
         "RealAgnosticResidualInteractionBlock": RealAgnosticResidualInteractionBlock,
     }
     num_mace_heads = max(len(list(getattr(mace_model, "heads", []) or [])), 1)
-    interaction_cls_first = interaction_map.get(
-        mace_model.interactions[0].__class__.__name__,
-        RealAgnosticInteractionBlock,
-    )
-    if len(mace_model.interactions) > 1:
-        interaction_cls = interaction_map.get(
-            mace_model.interactions[1].__class__.__name__,
-            RealAgnosticResidualInteractionBlock,
+    first_interaction_name = mace_model.interactions[0].__class__.__name__
+    if first_interaction_name not in interaction_map:
+        raise NotImplementedError(
+            f"Unsupported MACE interaction block '{first_interaction_name}' in first interaction."
         )
+    interaction_cls_first = interaction_map[first_interaction_name]
+    if len(mace_model.interactions) > 1:
+        interaction_name = mace_model.interactions[1].__class__.__name__
+        if interaction_name not in interaction_map:
+            raise NotImplementedError(
+                f"Unsupported MACE interaction block '{interaction_name}' in interaction 1."
+            )
+        interaction_cls = interaction_map[interaction_name]
     else:
         interaction_cls = interaction_cls_first
+    for idx, interaction in enumerate(mace_model.interactions[2:], start=2):
+        interaction_name = interaction.__class__.__name__
+        if interaction_name not in interaction_map:
+            raise NotImplementedError(
+                f"Unsupported MACE interaction block '{interaction_name}' in interaction {idx}."
+            )
+        if interaction_map[interaction_name] is not interaction_cls:
+            raise NotImplementedError(
+                "Curator MACE conversion expects all non-first interaction blocks to share "
+                f"one class, but interaction 1 is '{mace_model.interactions[1].__class__.__name__}' "
+                f"and interaction {idx} is '{interaction_name}'."
+            )
 
     distance_transform = None
     transform = getattr(getattr(mace_model, "radial_embedding", None), "distance_transform", None)
@@ -613,6 +633,8 @@ def _create_curator_mace_representation(
                 key: value.detach().cpu()
                 for key, value in mace_model.interactions[idx].state_dict().items()
             },
+            strict_shapes=True,
+            label=f"official MACE interaction {idx}",
         )
         _load_state_dict_by_shape(
             curator_mace.products[idx],

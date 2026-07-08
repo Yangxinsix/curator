@@ -103,13 +103,19 @@ def select(config: DictConfig):
         selection=config.method,
         feature_specs=feature_specs,
         selection_feature=OmegaConf.select(config, "selection_feature"),
-        target_layer=OmegaConf.select(config, "target_layer", default="readout_mlp"),
+        target_layer=OmegaConf.select(config, "target_layer", default="readout"),
+        num_layers=OmegaConf.select(config, "num_layers"),
+        invariants_only=OmegaConf.select(config, "invariants_only", default=True),
         batch_size=data_batch_size,
         device=config.device,
         dataset_cutoff=cutoff,
         transforms=transforms,
         save_features=save_features,
         target_domain=OmegaConf.select(config, "target_domain"),
+        selection_kwargs=OmegaConf.to_container(
+            OmegaConf.select(config, "selection_kwargs", default={}),
+            resolve=True,
+        ),
     )
     save_json = os.path.join(config.run_path, "selected.json")
     indices = al.select(

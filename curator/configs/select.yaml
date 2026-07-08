@@ -10,6 +10,7 @@ data_url: null # URL string; use pool_set for local paths
 data_batch_size: 8
 select_batch_size: 100
 method: lcmd_greedy
+selection_kwargs: {}
 selection_feature: fg-sketch
 feature_specs:
   - preset: fg-sketch
@@ -32,7 +33,18 @@ feature_specs:
 # - Local full-gradient for atom-level selection:
 #   preset: local_fg-sketch
 #   seed: ${seed}
-target_layer: readout_mlp # External defaults: MatGL -> final_layer, Allegro -> edge_readout, eSEN -> energy_block
+#
+# DIRECT/BIRCH selection over global structure-level features:
+# method: direct_birch
+# selection_kwargs:
+#   n_clusters: ${select_batch_size}
+#   k: 1
+#   threshold: 0.5
+#   weighting_pcs: true
+#   selection_criteria: center
+target_layer: readout # External models may override this, e.g. MatGL -> final_layer, Allegro -> edge_readout, eSEN -> energy_block
+num_layers: null # For segmented readouts: positive N selects the first N segments; -1 selects all segments; last selects the final segment
+invariants_only: true # For segmented equivariant inputs, keep only invariant channels from each selected segment
 save_features: null # H5 cache file path when set
 save_selected_features: null # Selected feature file path when set
 export_normalized_features: true
