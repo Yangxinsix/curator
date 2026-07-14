@@ -6,6 +6,7 @@ from torchmetrics import Metric
 import torch
 from collections import OrderedDict
 from omegaconf import OmegaConf
+from curator.data import properties
 from .metrics import AtomsMetric
 from .sampling import OutputSampler
 
@@ -24,6 +25,7 @@ class ModelOutput(nn.Module):
         sample_index_key: Optional[str] = None,
         sample_fn: Optional[Callable] = None,
         is_penalty: bool = False,
+        per_atom_loss: bool = False,
         # per_species_loss: bool=False,
         # per_species_metrics: bool=False,
     ) -> None:
@@ -35,12 +37,15 @@ class ModelOutput(nn.Module):
             loss_weight (float, optional): Loss weight. Defaults to 1.0.
             metrics (Optional[Dict[str, Metric]], optional): Metrics. Defaults to None.
             target_property (Optional[str], optional): Target property. Defaults to None.
+            per_atom_loss (bool, optional): Whether to compute the loss from values
+                normalized by the number of atoms. Defaults to False.
         """
         super().__init__()
         self.name = name
         self.prediction_property = prediction_property or name
         self.target_property = target_property or name
         self.is_penalty = is_penalty
+        self.per_atom_loss = per_atom_loss
         self.loss_fn = loss_fn
         self.loss_weight = loss_weight
         self.sampler = OutputSampler(
@@ -117,6 +122,14 @@ class ModelOutput(nn.Module):
             loss = self.loss_weight * pred_value.square().mean()
             num_obs = 1
         elif self.loss_fn is not None:
+            if self.per_atom_loss and target is not None and properties.n_atoms in target:
+                n_atoms = self._flatten_value(target[properties.n_atoms])
+                if torch.is_tensor(n_atoms) and pred_value.shape[:1] == n_atoms.shape[:1]:
+                    scale = n_atoms.to(dtype=pred_value.dtype, device=pred_value.device)
+                    if pred_value.dim() > 1:
+                        scale = scale.reshape(scale.shape + (1,) * (pred_value.dim() - 1))
+                    pred_value = pred_value / scale
+                    target_value = target_value / scale
             loss = self.loss_weight * self.loss_fn(
                 pred_value, target_value
             )
