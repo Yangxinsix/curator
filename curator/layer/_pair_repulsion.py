@@ -99,19 +99,36 @@ class ZBLBasis(nn.Module):
         node_atomic_numbers = atomic_numbers[species_index].reshape(-1, 1)
         Z_u = node_atomic_numbers[edge_center].to(x.dtype)
         Z_v = node_atomic_numbers[edge_neighbor].to(x.dtype)
+        screening_exponent = getattr(self, "screening_exponent", None)
+        if screening_exponent is None:
+            screening_exponent = torch.tensor(0.300, device=x.device)
+        screening_length = getattr(self, "screening_length", None)
+        if screening_length is None:
+            screening_length = torch.tensor(0.4543 * 0.529, device=x.device)
+        phi_exponents = getattr(self, "phi_exponents", None)
+        if phi_exponents is None:
+            phi_exponents = torch.tensor((3.2, 0.9423, 0.4028, 0.2016), device=x.device)
+        energy_prefactor = getattr(self, "energy_prefactor", None)
+        if energy_prefactor is None:
+            energy_prefactor = torch.tensor(14.3996 * 0.5, device=x.device)
+        covalent_radii = getattr(self, "covalent_radii", None)
+        if covalent_radii is None:
+            covalent_radii = torch.tensor(ase_data.covalent_radii, device=x.device)
         screening_arg = (
-            torch.pow(Z_u, self.screening_exponent.to(x.dtype))
-            + torch.pow(Z_v, self.screening_exponent.to(x.dtype))
-        ) * x / self.screening_length.to(x.dtype)
+            torch.pow(Z_u, screening_exponent.to(x.dtype))
+            + torch.pow(Z_v, screening_exponent.to(x.dtype))
+        ) * x / screening_length.to(x.dtype)
         phi = (
-            self.c[0] * torch.exp(-self.phi_exponents[0].to(x.dtype) * screening_arg)
-            + self.c[1] * torch.exp(-self.phi_exponents[1].to(x.dtype) * screening_arg)
-            + self.c[2] * torch.exp(-self.phi_exponents[2].to(x.dtype) * screening_arg)
-            + self.c[3] * torch.exp(-self.phi_exponents[3].to(x.dtype) * screening_arg)
+            self.c[0] * torch.exp(-phi_exponents[0].to(x.dtype) * screening_arg)
+            + self.c[1] * torch.exp(-phi_exponents[1].to(x.dtype) * screening_arg)
+            + self.c[2] * torch.exp(-phi_exponents[2].to(x.dtype) * screening_arg)
+            + self.c[3] * torch.exp(-phi_exponents[3].to(x.dtype) * screening_arg)
         )
-        v_edges = self.energy_prefactor.to(x.dtype) * (Z_u * Z_v) / x * phi
-        if self.cutoff_by_species:
-            r_max = self.covalent_radii[Z_u.to(torch.int64)] + self.covalent_radii[Z_v.to(torch.int64)]
+        v_edges = energy_prefactor.to(x.dtype) * (Z_u * Z_v) / x * phi
+        cutoff_by_species = getattr(self, "cutoff_by_species", True)
+        scatter_to = getattr(self, "scatter_to", "receiver")
+        if cutoff_by_species:
+            r_max = covalent_radii[Z_u.to(torch.int64)] + covalent_radii[Z_v.to(torch.int64)]
         else:
             cutoff = getattr(self, "cutoff", None)
             if cutoff is None:
@@ -120,7 +137,7 @@ class ZBLBasis(nn.Module):
         envelope = _poly_envelope(x, r_max, self.p)
         v_edges = v_edges * envelope
         v_edges = v_edges.squeeze(-1) if v_edges.dim() > 1 and v_edges.shape[-1] == 1 else v_edges
-        scatter_index = edge_neighbor if self.scatter_to == "receiver" else edge_center
+        scatter_index = edge_neighbor if scatter_to == "receiver" else edge_center
         v_nodes = scatter_add(v_edges, scatter_index, dim=0, dim_size=node_attrs.size(0))
         return v_nodes.squeeze(-1) if v_nodes.dim() > 1 and v_nodes.shape[-1] == 1 else v_nodes
 
