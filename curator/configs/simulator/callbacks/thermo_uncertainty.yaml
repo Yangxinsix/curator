@@ -1,6 +1,6 @@
 _target_: curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty  # logs thermo data with uncertainty metrics
 variables: basic_energies                                                       # variables to record
-interval: 1                                                                     # logging frequency in steps
+interval: 10                                                                    # logging frequency in steps
 header: true                                                                    # print column headers
 monitor: maha_dist                                                              # uncertainty metric to watch
 low: null                                                                       # lower alert threshold

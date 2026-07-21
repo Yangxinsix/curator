@@ -5,4 +5,4 @@ callbacks:
     require_forces: false                                       # skip force requirement check
   - _target_: curator.simulate.callbacks.thermo.MDThermoLogger  # log thermodynamic quantities
     variables: basic_energies                                   # variables to record
-    interval: 1                                                 # logging interval in steps
+    interval: 10                                                # logging interval in steps
