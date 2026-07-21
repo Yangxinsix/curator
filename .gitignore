@@ -9,6 +9,7 @@ build/
 test/*
 !test/test_native_neighborlist.py
 !test/test_direct_birch_selection.py
+!test/test_training_loss_consistency.py
 scripts/
 
 # model files

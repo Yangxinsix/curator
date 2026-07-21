@@ -422,6 +422,30 @@ class LitNNP(pl.LightningModule):
     
     def on_train_epoch_end(self):
         pass
+
+    @staticmethod
+    def _multi_domain_validation_total(
+        metrics: Dict[str, Any],
+        datamodule: Any,
+    ) -> Optional[float]:
+        """Sum per-domain validation losses that already include domain weights."""
+        total = 0.0
+        found = False
+        domain_to_id = getattr(datamodule, "domain_to_id", {})
+        for name, module in datamodule.domain_modules.items():
+            dom_id = domain_to_id.get(name)
+            if dom_id is None or module.val_dataset is None:
+                continue
+            key = f"val_total_loss_epoch/dataloader_idx_{dom_id}"
+            if key not in metrics:
+                continue
+            val = metrics[key]
+            if torch.is_tensor(val):
+                val = val.detach().cpu()
+                val = val.mean().item() if val.numel() > 1 else val.item()
+            total += float(val)
+            found = True
+        return total if found else None
     
     def on_validation_epoch_end(self):
         if self.trainer.sanity_checking:
@@ -431,25 +455,9 @@ class LitNNP(pl.LightningModule):
         dm = getattr(self.trainer, "datamodule", None)
         if dm is not None and hasattr(dm, "domain_modules"):
             metrics = self.trainer.callback_metrics
-            total = 0.0
-            weight_sum = 0.0
-            domain_to_id = getattr(dm, "domain_to_id", {})
-            for name, module in dm.domain_modules.items():
-                dom_id = domain_to_id.get(name)
-                if dom_id is None or module.val_dataset is None:
-                    continue
-                key = f"val_total_loss_epoch/dataloader_idx_{dom_id}"
-                if key not in metrics:
-                    continue
-                val = metrics[key]
-                if torch.is_tensor(val):
-                    val = val.detach().cpu()
-                    val = val.mean().item() if val.numel() > 1 else val.item()
-                weight = len(module.val_dataset)
-                total += float(val) * weight
-                weight_sum += weight
-            if weight_sum > 0:
-                self.log("val_total_loss", total / weight_sum, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
+            total = self._multi_domain_validation_total(metrics, dm)
+            if total is not None:
+                self.log("val_total_loss", total, on_step=False, on_epoch=True, prog_bar=False, sync_dist=True)
         
         self._write_log_only("\n")
         self._write_log_and_console("Epoch summary", level=logging.DEBUG, progress=False)

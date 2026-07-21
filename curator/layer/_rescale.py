@@ -15,6 +15,8 @@ from ase.data import atomic_numbers, chemical_symbols
 
 def _effective_rescale_heads(dm) -> List[HeadConfig]:
     specs: List[Any] = [properties.energy]
+    if getattr(dm, "scale_forces", False):
+        specs.append(properties.forces)
     specs.extend(getattr(dm, "rescale_shift_heads", None) or [])
 
     by_key: Dict[str, HeadConfig] = {}
