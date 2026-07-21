@@ -324,3 +324,6 @@ class ExternalBackboneRepresentation(Representation):
         data[properties.node_feat] = projected
         data = self.readout(data)
         return data
+
+
+ExternalRepresentation = ExternalBackboneRepresentation

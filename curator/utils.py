@@ -1,9 +1,11 @@
 import torch
 import json
+import datetime as _dt
+import importlib.util
+import os
 from ._torch_compat import ensure_torch_safe_globals
 
 ensure_torch_safe_globals()
-
 from e3nn.util.jit import script
 from omegaconf import open_dict, OmegaConf, DictConfig, ListConfig
 from hydra import compose, initialize, initialize_config_dir
@@ -15,16 +17,147 @@ import logging
 import re
 from ase import units
 from pathlib import Path, PosixPath
-from typing import Any, List, Optional, Tuple, Union, Dict, Literal
+from typing import Any, List, Mapping, Optional, Sequence, Tuple, Union, Dict, Literal
 import numpy as np
 
 from curator.data import properties
-def write_json(path: Union[str, Path], payload: Any, indent: int = 2) -> Path:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w") as handle:
-        json.dump(payload, handle, indent=indent)
+
+
+def ensure_dir(path: Union[str, Path]) -> Path:
+    path = Path(path).expanduser().resolve()
+    path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def single_or_list(values: List[Any]) -> Any:
+    return values[0] if len(values) == 1 else values
+
+
+def as_dict(value: Optional[Mapping[str, Any]], *, name: str = "value") -> Dict[str, Any]:
+    if value is None:
+        return {}
+    if isinstance(value, DictConfig):
+        value = OmegaConf.to_container(value, resolve=False)
+    if not isinstance(value, Mapping):
+        raise TypeError(f"{name} must be a mapping.")
+    return dict(value)
+
+
+def as_list(value: Any, default: Optional[Sequence[Any]] = None) -> List[Any]:
+    if value is None:
+        return list(default or [])
+    if isinstance(value, ListConfig):
+        return list(value)
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def normalize_string_list(value: Any, default: Sequence[str]) -> List[str]:
+    return [str(item).strip().lower() for item in as_list(value, default) if str(item).strip()]
+
+
+def safe_label(value: Any) -> str:
+    text = str(value).strip().replace(".", "p")
+    return "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in text) or "item"
+
+
+def module_available(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
+
+
+def normalize_model_paths(model_path: Any) -> List[str]:
+    paths = [str(path) for path in as_list(model_path)]
+    if not paths:
+        raise ValueError("model_path must contain at least one model path or adapter spec.")
+    return paths
+
+
+def utc_now() -> str:
+    return _dt.datetime.now(_dt.timezone.utc).isoformat()
+
+
+def to_jsonable(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {str(k): to_jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [to_jsonable(v) for v in value]
+    if isinstance(value, Path):
+        return str(value)
+    if hasattr(value, "item") and callable(value.item):
+        try:
+            return value.item()
+        except Exception:
+            pass
+    return value
+
+
+def write_json(
+    path: Union[str, Path],
+    payload: Any,
+    indent: int = 2,
+    *,
+    sort_keys: bool = False,
+    atomic: bool = False,
+) -> Path:
+    path = Path(path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = json.dumps(to_jsonable(payload), indent=indent, sort_keys=sort_keys) + "\n"
+    if atomic:
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(data, encoding="utf-8")
+        os.replace(tmp, path)
+        return path
+    path.write_text(data, encoding="utf-8")
+    return path
+
+
+def read_json(path: Union[str, Path]) -> Any:
+    return json.loads(Path(path).expanduser().read_text(encoding="utf-8"))
+
+
+def write_text(path: Union[str, Path], text: str) -> Path:
+    path = Path(path).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text or "", encoding="utf-8")
+    return path
+
+
+def path_status(path: Optional[Union[str, Path, list, tuple]]) -> Dict[str, Any]:
+    if path is None:
+        return {"path": None, "exists": False}
+    if isinstance(path, (list, tuple)):
+        items = [path_status(item) for item in path]
+        return {"paths": items, "exists": all(bool(item.get("exists")) for item in items)}
+    target = Path(path).expanduser()
+    info: Dict[str, Any] = {"path": str(target), "exists": target.exists()}
+    if target.exists() and target.is_file():
+        info["size_bytes"] = target.stat().st_size
+    return info
+
+
+def error_result(
+    error_type: str,
+    message: str,
+    *,
+    recoverable: bool = True,
+    log_path: Optional[str] = None,
+    artifacts: Optional[Mapping[str, Any]] = None,
+    **extra: Any,
+) -> Dict[str, Any]:
+    payload: Dict[str, Any] = {
+        "ok": False,
+        "status": "failed",
+        "error_info": {
+            "type": error_type,
+            "message": message,
+            "recoverable": recoverable,
+            "log_path": log_path,
+        },
+        "artifacts": dict(artifacts or {}),
+    }
+    payload.update(extra)
+    return payload
 
 
 def save_npz(path: Union[str, Path], **payload: Any) -> Path:

@@ -59,7 +59,7 @@ class FeatureCalculator(nn.Module):
             self.kernels = self._build_kernels(
                 kernels
             )
-        self.repr_callback: Optional[nn.Module] = None
+        self._set_repr_callback(None)
         self.output_features = output_features
         self.model_outputs = [properties.feature] if self.output_features else []
         self.compute_maha_dist = compute_maha_dist
@@ -85,7 +85,7 @@ class FeatureCalculator(nn.Module):
         )
 
     def register_repr_callback(self, repr_callback: nn.Module) -> None:
-        self.repr_callback = repr_callback
+        self._set_repr_callback(repr_callback)
         self.extractor.attach(repr_callback)
         self._resolved_distance_kernel = None
         if self.compute_maha_dist and self.dataset is not None:
@@ -214,6 +214,11 @@ class FeatureCalculator(nn.Module):
             cutoff = find_layer_by_name_recursive(self.repr_callback, "cutoff") if self.repr_callback else None
             return AseDataset(dataset, cutoff=cutoff or 5.0)
         return dataset
+
+    def _set_repr_callback(self, repr_callback: Optional[nn.Module]) -> None:
+        if "repr_callback" in self._modules:
+            del self._modules["repr_callback"]
+        object.__setattr__(self, "repr_callback", repr_callback)
 
     @staticmethod
     def _build_kernels(

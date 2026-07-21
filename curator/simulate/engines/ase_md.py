@@ -38,20 +38,14 @@ class MDEngine(BaseEngine):
                 dyn_kwargs = dict(self.kw)
                 timestep = dyn_kwargs.pop("timestep", None)
                 dt = dyn_kwargs.pop("dt", None)
-                friction = dyn_kwargs.get("friction", None)
-                temp_k = dyn_kwargs.get("temperature_K", dyn_kwargs.get("temperature", None))
                 try:
                     self.dyn = self.dynamics_cls(self.atoms, **dyn_kwargs)
                 except TypeError:
-                    # Retry with explicit timestep/temperature/friction if provided
+                    # Retry with timestep passed positionally, preserving any
+                    # remaining dynamics-specific kwargs such as pressure_au.
                     if timestep is not None or dt is not None:
                         tval = timestep if timestep is not None else dt
-                        extra = {}
-                        if temp_k is not None:
-                            extra["temperature_K"] = temp_k
-                        if friction is not None:
-                            extra["friction"] = friction
-                        self.dyn = self.dynamics_cls(self.atoms, tval, **extra)
+                        self.dyn = self.dynamics_cls(self.atoms, tval, **dyn_kwargs)
                     else:
                         # support functools.partial or callables expecting atoms only
                         self.dyn = self.dynamics_cls(self.atoms)

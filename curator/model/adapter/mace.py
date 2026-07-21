@@ -22,6 +22,7 @@ from curator.model.utils import (
     split_batch_structures,
 )
 
+from .ase import ASECalculatorAdapter
 from .utils import ExternalModelSpec, build_representation, parse_bool, register_adapter_loader
 
 
@@ -200,8 +201,14 @@ class MACEAdapter(nn.Module):
 
 
 def _load_mace(spec: ExternalModelSpec, device: Optional[torch.device]) -> nn.Module:
+    omol_model_name = _mace_omol_model_name(spec.resource)
+    if omol_model_name is not None and parse_bool(spec.params.get("as_calculator"), True):
+        return _load_mace_omol_calculator(
+            omol_model_name,
+            device=device or torch.device("cpu"),
+        )
     head = _parse_head(spec.params.get("head"))
-    model_ref = _resolve_model_ref(spec.resource)
+    model_ref = _resolve_mace_resource(_resolve_model_ref(spec.resource))
     runtime = str(spec.params.get("runtime", spec.params.get("mode", ""))).strip().lower()
     use_adapter = parse_bool(
         spec.params.get("adapter"),
@@ -228,6 +235,122 @@ def _load_mace(spec: ExternalModelSpec, device: Optional[torch.device]) -> nn.Mo
         head=head,
         device=device or torch.device("cpu"),
     )
+
+
+def _mace_omol_model_name(resource: str) -> Optional[str]:
+    resource_key = str(resource).strip()
+    omol_aliases = {
+        "omol-extra-large": "extra_large",
+        "omol-extra_large": "extra_large",
+        "MACE-OMOL-0-extra-large": "extra_large",
+    }
+    return omol_aliases.get(resource_key)
+
+
+def _resolve_mace_resource(resource: str):
+    path = Path(resource).expanduser()
+    if path.exists():
+        return path
+
+    resource_key = str(resource).strip()
+    off_aliases = {
+        "off23-small": "small",
+        "off-small": "small",
+        "small-off": "small",
+        "MACE-OFF23-small": "small",
+        "off23-medium": "medium",
+        "off-medium": "medium",
+        "medium-off": "medium",
+        "MACE-OFF23-medium": "medium",
+        "off23-large": "large",
+        "off-large": "large",
+        "large-off": "large",
+        "MACE-OFF23-large": "large",
+    }
+    if resource_key in off_aliases:
+        return _resolve_mace_off_resource(off_aliases[resource_key])
+
+    omol_model_name = _mace_omol_model_name(resource_key)
+    if omol_model_name is not None:
+        return _resolve_mace_omol_resource(omol_model_name)
+
+    try:
+        from mace.calculators import mace_mp
+    except Exception as exc:
+        raise ModuleNotFoundError(
+            "MACE support requires a local checkpoint path, or the mace package "
+            "for official foundation model names."
+        ) from exc
+
+    known_names = set(mace_mp.__globals__.get("mace_mp_names") or ())
+    model_name = None if resource in {"", "default", "None", "none"} else resource
+    if model_name not in known_names:
+        raise FileNotFoundError(
+            f"MACE resource {resource!r} is neither a local checkpoint nor a known "
+            f"MACE foundation model name. Known names: {sorted(name for name in known_names if name is not None)}"
+        )
+    downloader = mace_mp.__globals__.get("download_mace_mp_checkpoint")
+    if not callable(downloader):
+        raise RuntimeError("The installed mace package does not expose download_mace_mp_checkpoint().")
+    return downloader(model_name)
+
+
+def _resolve_mace_off_resource(model_name: str):
+    try:
+        from mace.calculators import mace_off
+    except Exception as exc:
+        raise ModuleNotFoundError(
+            "MACE-OFF support requires the mace package."
+        ) from exc
+
+    raw_model = mace_off(model=model_name, device="cpu", return_raw_model=True)
+    model_path = getattr(raw_model, "_mace_model_path", None)
+    if model_path is not None:
+        return model_path
+
+    # The MACE-OFF loader does not expose its cached path, so reproduce its
+    # deterministic cache naming from the loader source.
+    get_cache_dir = mace_off.__globals__.get("get_cache_dir")
+    if not callable(get_cache_dir):
+        raise RuntimeError("The installed mace package does not expose get_cache_dir().")
+    filename = {
+        "small": "MACE-OFF23_small.model",
+        "medium": "MACE-OFF23_medium.model",
+        "large": "MACE-OFF23_large.model",
+    }[model_name]
+    return Path(get_cache_dir()) / filename
+
+
+def _resolve_mace_omol_resource(model_name: str):
+    try:
+        from mace.calculators import mace_omol
+    except Exception as exc:
+        raise ModuleNotFoundError(
+            "MACE-OMOL support requires the mace package."
+        ) from exc
+
+    raw_model = mace_omol(model=model_name, device="cpu", return_raw_model=True)
+    model_path = getattr(raw_model, "_mace_model_path", None)
+    if model_path is not None:
+        return model_path
+    get_cache_dir = mace_omol.__globals__.get("get_cache_dir")
+    if not callable(get_cache_dir):
+        raise RuntimeError("The installed mace package does not expose get_cache_dir().")
+    return Path(get_cache_dir()) / "MACE-omol-0-extra-large-1024.model"
+
+
+def _load_mace_omol_calculator(model_name: str, *, device: torch.device) -> nn.Module:
+    try:
+        from mace.calculators import mace_omol
+    except Exception as exc:
+        raise ModuleNotFoundError(
+            "MACE-OMOL support requires the mace package."
+        ) from exc
+
+    calc = mace_omol(model=model_name, device=str(device))
+    raw_model = mace_omol(model=model_name, device="cpu", return_raw_model=True)
+    cutoff = float(getattr(raw_model, "r_max", 0.0) or 0.0)
+    return ASECalculatorAdapter(calc, cutoff=cutoff).eval()
 
 
 register_adapter_loader("mace", _load_mace)

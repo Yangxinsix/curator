@@ -2,14 +2,12 @@ import logging
 import os
 import socket
 
-import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from .common import CONFIGS_PATH, configure_cli_logger, ensure_resolvers, log, log_logo, prepare_cli_environment, prepare_run_path
+from .common import configure_cli_logger, ensure_resolvers, log, log_logo, prepare_cli_environment, prepare_run_path
 
 
-@hydra.main(config_path=CONFIGS_PATH, config_name="select", version_base=None)
-def select(config: DictConfig):
+def run_select_config(config: DictConfig):
     prepare_cli_environment()
     ensure_resolvers()
     from hydra.utils import instantiate
@@ -136,3 +134,6 @@ def select(config: DictConfig):
         os.path.abspath(save_json),
         len(indices),
     )
+
+
+select = run_select_config

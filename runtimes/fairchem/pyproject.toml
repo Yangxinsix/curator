@@ -1,0 +1,13 @@
+[project]
+name = "curator-runtime-fairchem"
+version = "0.1.0"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "curator-torch",
+  "fairchem-core",
+  "huggingface-hub",
+  "matscipy",
+]
+
+[tool.uv.sources]
+curator-torch = { path = "../..", editable = true }

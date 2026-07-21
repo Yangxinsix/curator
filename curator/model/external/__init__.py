@@ -1,6 +1,7 @@
 from .allegro import AllegroRepresentation
-from .backbone import ExternalBackboneRepresentation
+from .backbone import ExternalBackboneRepresentation, ExternalRepresentation
 from .esen import ESENRepresentation
+from .matgl import MatGLRepresentation
 from ..adapter import (
     ExternalModelSpec,
     format_external_model_spec,
@@ -16,6 +17,8 @@ __all__ = [
     "ExternalModelSpec",
     "ExternalBackboneRepresentation",
     "format_external_model_spec",
+    "ExternalRepresentation",
+    "MatGLRepresentation",
     "is_external_model_spec",
     "load_external_model",
     "parse_external_model_spec",

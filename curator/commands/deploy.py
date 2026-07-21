@@ -217,6 +217,8 @@ def _disable_internal_neighborlists(model_obj) -> int:
 
 
 def _prepare_torchscript_model(model) -> None:
+    import torch
+
     readout = getattr(getattr(model, "representation", None), "readout", None)
     if hasattr(readout, "domain_modules"):
         domain_modules = list(readout.domain_modules.values())
@@ -229,6 +231,17 @@ def _prepare_torchscript_model(model) -> None:
                 domain_modules = list(module.domain_modules.values())
                 if len(domain_modules) == 1:
                     model.output_modules[i] = domain_modules[0]
+
+    for module in model.modules():
+        if module.__class__.__name__ == "AtomwiseNN":
+            if not hasattr(module, "shared_mlp"):
+                module.shared_mlp = torch.nn.Identity()
+            if not hasattr(module, "head_modules"):
+                module.head_modules = torch.nn.ModuleDict()
+            if not hasattr(module, "shared_out_features"):
+                module.shared_out_features = getattr(module, "in_features", 0)
+        if module.__class__.__name__ == "GlobalRescaleShift" and hasattr(module, "_configure_sync_reduced_outputs"):
+            module._configure_sync_reduced_outputs()
 
 
 def deploy_main(argv: Optional[List[str]] = None):
@@ -328,7 +341,8 @@ def deploy(
     disabled_neighborlist_modules = _disable_internal_neighborlists(model)
 
     if lammps_mliap:
-        prepare_deploy_uncertainty(model, uncertainty_spec, lammps_mliap=True)
+        if uncertainty_method not in ("", "none", "null"):
+            prepare_deploy_uncertainty(model, uncertainty_spec, lammps_mliap=True)
         if not element_types:
             raise ValueError("element_types must be provided when exporting LAMMPS MLIAP models.")
         from ..simulate.lammps_mliap_interface import LAMMPS_MLIAP
@@ -357,7 +371,8 @@ def deploy(
             disabled_neighborlist_modules,
         )
 
-    prepare_deploy_uncertainty(model, uncertainty_spec, lammps_mliap=False)
+    if uncertainty_method not in ("", "none", "null"):
+        prepare_deploy_uncertainty(model, uncertainty_spec, lammps_mliap=False)
     model_compiled = script(model)
     metadata = {"cutoff": str(find_layer_by_name_recursive(model_compiled, "cutoff")).encode("ascii")}
     model_compiled.save(target_path, _extra_files=metadata)

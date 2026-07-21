@@ -6,14 +6,14 @@ Real command entrypoints now live under ``curator.commands``.
 from importlib import import_module
 
 _EXPORTS = {
-    "train": ("curator.commands.train", "train"),
+    "train": ("curator.commands.hydra_entrypoints", "train"),
     "_resolve_checkpoint_mode": ("curator.commands.train", "_resolve_checkpoint_mode"),
-    "tmp_train": ("curator.commands.train", "tmp_train"),
-    "tmptrain": ("curator.commands.train", "tmp_train"),
-    "simulate": ("curator.commands.simulate", "simulate"),
-    "select": ("curator.commands.select", "select"),
-    "label": ("curator.commands.label", "label"),
-    "evaluate": ("curator.commands.evaluate", "evaluate"),
+    "tmp_train": ("curator.commands.hydra_entrypoints", "tmp_train"),
+    "tmptrain": ("curator.commands.hydra_entrypoints", "tmp_train"),
+    "simulate": ("curator.commands.hydra_entrypoints", "simulate"),
+    "select": ("curator.commands.hydra_entrypoints", "select"),
+    "label": ("curator.commands.hydra_entrypoints", "label"),
+    "evaluate": ("curator.commands.hydra_entrypoints", "evaluate"),
     "evaluate_main": ("curator.commands.evaluate", "evaluate_main"),
     "deploy": ("curator.commands.deploy", "deploy"),
     "deploy_main": ("curator.commands.deploy", "deploy_main"),

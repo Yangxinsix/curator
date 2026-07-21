@@ -6,11 +6,9 @@ import sys
 from pathlib import Path
 from typing import List, Optional
 
-import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from .common import (
-    CONFIGS_PATH,
     argcomplete,
     configure_cli_logger,
     ensure_resolvers,
@@ -21,8 +19,7 @@ from .common import (
 from .deploy import deploy
 
 
-@hydra.main(config_path=CONFIGS_PATH, config_name="evaluate", version_base=None)
-def evaluate(config: DictConfig):
+def run_evaluate_config(config: DictConfig):
     prepare_cli_environment()
     ensure_resolvers()
     import torch
@@ -76,6 +73,9 @@ def evaluate(config: DictConfig):
     evaluator.evaluate(config.datapath)
 
 
+evaluate = run_evaluate_config
+
+
 def evaluate_main(argv: Optional[List[str]] = None):
     prepare_cli_environment()
 
@@ -127,6 +127,8 @@ def evaluate_main(argv: Optional[List[str]] = None):
     if argv is None:
         argv = sys.argv[1:]
     if _is_hydra_args(argv):
+        from .hydra_entrypoints import evaluate
+
         return evaluate()
     args = _parse_args(argv)
 

@@ -47,6 +47,7 @@ class AutoUncertainty:
             return EnsembleUncertainty(calculator=self.calculator, **self.ensemble_kwargs)
 
         if has_dataset:
+            self._prepare_runtime_mahalanobis(model)
             if "dataset" not in self.maha_kwargs:
                 self.maha_kwargs["dataset"] = self.dataset
             if "kernel" not in self.maha_kwargs:
@@ -54,6 +55,55 @@ class AutoUncertainty:
             return MahalanobisUncertainty(calculator=self.calculator, **self.maha_kwargs)
 
         return None
+
+    def _prepare_runtime_mahalanobis(self, model: Any) -> None:
+        """Attach Mahalanobis feature scoring for raw single-model calculators.
+
+        Deploy already prepares FeatureCalculator for exported models. Runtime MD
+        often receives a plain checkpoint, so prepare the same adapter in memory
+        before MahalanobisUncertainty inspects the calculator.
+        """
+
+        if model is None:
+            return
+        if self._model_has_mahalanobis_output(model):
+            return
+        try:
+            from curator.layer import FeatureCalculator
+            from curator.simulate.uncertainty._deploy import prepare_deploy_uncertainty
+        except Exception:
+            return
+
+        for module in getattr(model, "output_modules", []):
+            if isinstance(module, FeatureCalculator) and getattr(module, "compute_maha_dist", False):
+                return
+
+        maha_cfg = dict(self.maha_kwargs or {})
+        spec = {
+            "method": "mahalanobis",
+            "dataset": self.dataset,
+            "maha": {
+                "kernel": maha_cfg.get("kernel", "local-full-g"),
+                "max_structures": maha_cfg.get("max_structures"),
+                "regularization": maha_cfg.get("regularization", 1e-6),
+                "streaming": maha_cfg.get("streaming", False),
+            },
+        }
+        prepare_deploy_uncertainty(model, spec, lammps_mliap=True)
+
+    @staticmethod
+    def _model_has_mahalanobis_output(model: Any) -> bool:
+        try:
+            from curator.data import properties
+        except Exception:
+            return False
+        outputs = getattr(model, "model_outputs", ())
+        if properties.maha_dist in outputs:
+            return True
+        for module in getattr(model, "output_modules", []):
+            if properties.maha_dist in getattr(module, "model_outputs", ()):
+                return True
+        return False
 
     def __call__(self, atoms: Atoms):
         if self._backend is None:

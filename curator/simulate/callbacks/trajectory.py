@@ -75,6 +75,12 @@ class TrajectoryWriter(Callback):
                 self._trajs[0].write(atoms)
 
     def on_sim_end(self, ctx: SimContext):
+        self._close()
+
+    def on_exception(self, ctx: SimContext, exc: BaseException):
+        self._close()
+
+    def _close(self):
         for t in self._trajs:
             try:
                 t.close()

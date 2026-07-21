@@ -42,15 +42,16 @@ class MahalanobisUncertainty(BaseUncertainty):
 
         if self.calc is not None:
             for module in self.calc.model.output_modules:
-                if isinstance(module, FeatureCalculator):
+                if isinstance(module, FeatureCalculator) or hasattr(module, "maha_dist"):
                     self.feature_calculator = module
                     break
 
             if self.feature_calculator is None:
-                raise RuntimeError(
-                    "MahalanobisUncertainty requires the model/calculator to already expose maha_dist. "
-                    "Attach/configure FeatureCalculator during deploy or model setup."
+                self._logger.warning(
+                    "MahalanobisUncertainty did not find fitted reference distances on the model; "
+                    "using the provided low/high thresholds directly."
                 )
+                return
 
             if not hasattr(self.feature_calculator, "maha_dist"):
                 raise RuntimeError("FeatureCalculator must be initialized with mahalanobis statistics.")

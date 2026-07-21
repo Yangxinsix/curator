@@ -352,11 +352,31 @@ class GlobalRescaleShift(nn.Module):
         self.shifts = nn.ModuleList(shifts)
         self.atomic_scales = nn.ModuleList(per_species_scales)
         self.atomic_shifts = nn.ModuleList(per_species_shifts)
+        self._configure_sync_reduced_outputs()
         self._initialized = not any(
             normalize_head_flag(h.scale_by) in ("default", "rms")
             or normalize_head_flag(h.shift_by) == "default"
             for h in self.heads
         )
+
+    @torch.jit.unused
+    def _configure_sync_reduced_outputs(self) -> None:
+        head_keys: List[str] = []
+        atomwise_keys: List[str] = []
+        reductions: List[str] = []
+        for head in self.heads:
+            atomwise_key = getattr(head, "atomwise_key", None)
+            reduction = getattr(head, "reduction", None)
+            if not head.is_atomwise or atomwise_key is None or atomwise_key == head.key:
+                continue
+            if reduction != "sum" and reduction != "mean":
+                continue
+            head_keys.append(head.key)
+            atomwise_keys.append(atomwise_key)
+            reductions.append(reduction)
+        self._sync_head_keys = torch.jit.annotate(List[str], head_keys)
+        self._sync_atomwise_keys = torch.jit.annotate(List[str], atomwise_keys)
+        self._sync_reductions = torch.jit.annotate(List[str], reductions)
 
     @staticmethod
     def _format_scalar(val: Any):
@@ -378,36 +398,28 @@ class GlobalRescaleShift(nn.Module):
         if properties.n_atoms not in data:
             return False
         n_atoms = data[properties.n_atoms]
-        if torch.is_tensor(n_atoms):
-            if n_atoms.numel() == 0:
-                return False
-            n_atoms_val = int(n_atoms.reshape(-1)[0].item())
-            device = n_atoms.device
-        else:
-            n_atoms_val = int(n_atoms)
-            device = None
-        ref = data.get(key)
-        if torch.is_tensor(ref):
-            device = ref.device
+        if n_atoms.numel() == 0:
+            return False
+        n_atoms_val = int(n_atoms.reshape(-1)[0].item())
+        device = n_atoms.device
+        if key in data:
+            device = data[key].device
         data[properties.image_idx] = torch.zeros(n_atoms_val, dtype=torch.long, device=device)
         return True
 
     def _sync_reduced_outputs(self, data: properties.Type) -> properties.Type:
-        for head in self.heads:
-            atomwise_key = getattr(head, "atomwise_key", None)
-            reduction = getattr(head, "reduction", None)
-            if not head.is_atomwise or atomwise_key is None or atomwise_key == head.key:
-                continue
-            if reduction not in {"sum", "mean"}:
-                continue
+        for i in range(len(self._sync_head_keys)):
+            head_key = self._sync_head_keys[i]
+            atomwise_key = self._sync_atomwise_keys[i]
+            reduction = self._sync_reductions[i]
             if atomwise_key not in data:
                 continue
             if not self._ensure_image_idx(data, atomwise_key):
                 continue
             if reduction == "sum":
-                data[head.key] = scatter_add(data[atomwise_key], data[properties.image_idx], dim=0)
+                data[head_key] = scatter_add(data[atomwise_key], data[properties.image_idx], dim=0)
             else:
-                data[head.key] = scatter_mean(data[atomwise_key], data[properties.image_idx], dim=0)
+                data[head_key] = scatter_mean(data[atomwise_key], data[properties.image_idx], dim=0)
         return data
 
     def forward(self, data: properties.Type) -> properties.Type:
@@ -429,10 +441,7 @@ class GlobalRescaleShift(nn.Module):
         for sh in self.atomic_shifts:
             data = sh(data)
         for sh in self.shifts:
-            if isinstance(sh, AtomwiseShift):
-                data = sh(data)
-            else:
-                data = sh(data)
+            data = sh(data)
         return self._sync_reduced_outputs(data)
 
     def unscale(

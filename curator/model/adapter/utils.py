@@ -64,6 +64,10 @@ def register_adapter_loader(
     _ADAPTER_LOADERS[scheme.lower()] = loader
 
 
+def registered_adapter_schemes() -> list[str]:
+    return sorted(_ADAPTER_LOADERS.keys())
+
+
 def is_external_model_spec(raw: str) -> bool:
     spec = parse_external_model_spec(raw)
     return spec is not None and spec.scheme in _ADAPTER_LOADERS
@@ -97,6 +101,7 @@ __all__ = [
     "ensure_local_nequip_source_on_path",
     "parse_bool",
     "parse_external_model_spec",
+    "registered_adapter_schemes",
     "format_external_model_spec",
     "register_adapter_loader",
     "is_external_model_spec",

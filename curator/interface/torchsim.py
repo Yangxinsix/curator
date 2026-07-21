@@ -61,7 +61,7 @@ class CuratorTorchSimAdapter(ModelInterface):
         forces_scale: float = 1.0,
         stress_scale: float = 1.0,
         detach: bool = True,
-        dtype: Optional[torch.dtype] = None,
+        dtype: Optional[Union[str, torch.dtype]] = None,
     ) -> None:
         if not _HAS_TORCHSIM:
             raise ImportError("torch-sim is required for CuratorTorchSimAdapter. Install `torch-sim` to use this feature.")
@@ -77,7 +77,7 @@ class CuratorTorchSimAdapter(ModelInterface):
         self.model = EnsembleModel(models) if len(models) > 1 else models[0]
         self.model.eval()
         self._device = next(self.model.parameters()).device
-        self._dtype = dtype or next(self.model.parameters()).dtype or torch.get_default_dtype()
+        self._dtype = self._resolve_dtype(dtype) or next(self.model.parameters()).dtype or torch.get_default_dtype()
         self._compute_stress = outputs is None or properties.stress in (outputs or []) or properties.virial in (outputs or [])
         self._compute_forces = True
 
@@ -340,6 +340,28 @@ class CuratorTorchSimAdapter(ModelInterface):
                 warnings.warn(f"CUDA device '{dev}' unavailable ({exc}); falling back to CPU.")
                 dev = torch.device("cpu")
         return dev
+
+    @staticmethod
+    def _resolve_dtype(dtype_like: Optional[Union[str, torch.dtype]]) -> Optional[torch.dtype]:
+        if dtype_like is None or isinstance(dtype_like, torch.dtype):
+            return dtype_like
+        normalized = str(dtype_like).replace("torch.", "").strip().lower()
+        aliases = {
+            "float": torch.float32,
+            "float32": torch.float32,
+            "fp32": torch.float32,
+            "float64": torch.float64,
+            "double": torch.float64,
+            "fp64": torch.float64,
+            "float16": torch.float16,
+            "half": torch.float16,
+            "fp16": torch.float16,
+            "bfloat16": torch.bfloat16,
+            "bf16": torch.bfloat16,
+        }
+        if normalized not in aliases:
+            raise ValueError(f"Unsupported torch dtype {dtype_like!r}.")
+        return aliases[normalized]
 
     def _move_transforms_to_device(self, device: torch.device) -> None:
         for t in getattr(self, "transforms", []):

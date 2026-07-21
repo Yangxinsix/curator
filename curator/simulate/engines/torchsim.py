@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any, Optional, Union
+from typing import Any, Callable, Optional, Union
+import inspect
 
 import torch
 try:
@@ -76,12 +77,24 @@ class TorchSimEngine(BaseEngine):
         dt = torch.tensor(dt_val * self.unit_system.time, dtype=self.state.dtype, device=self.state.device)
 
         init_func, step_func = INTEGRATOR_REGISTRY[self.integrator]
-        state = init_func(state=self.state, model=self.model, kT=kT, dt=dt, **self.integrator_kwargs, **kwargs)
+        integrator_kwargs = dict(self.integrator_kwargs)
+        integrator_kwargs.update(kwargs)
+        pressure_gpa = integrator_kwargs.pop("external_pressure_GPa", None)
+        if pressure_gpa is not None and "external_pressure" not in integrator_kwargs:
+            integrator_kwargs["external_pressure"] = (
+                torch.tensor(float(pressure_gpa), dtype=self.state.dtype, device=self.state.device)
+                * 10000.0
+                * float(self.unit_system.pressure)
+            )
+
+        init_kwargs = _accepted_kwargs(init_func, integrator_kwargs)
+        step_kwargs = _accepted_kwargs(step_func, integrator_kwargs)
+        state = init_func(state=self.state, model=self.model, kT=kT, dt=dt, **init_kwargs)
 
         reporter = trajectory_reporter
 
         for step in range(1, steps + 1):
-            state = step_func(state=state, model=self.model, dt=dt, kT=kT, **self.integrator_kwargs, **kwargs)
+            state = step_func(state=state, model=self.model, dt=dt, kT=kT, **step_kwargs)
             if reporter is not None:
                 reporter.report(state, step, model=self.model)
 
@@ -104,3 +117,10 @@ class TorchSimEngine(BaseEngine):
     def _attach_to_backend(self, fn, interval: int) -> None:
         # No backend attach required; we call callbacks explicitly in run.
         return
+
+
+def _accepted_kwargs(fn: Callable[..., Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    signature = inspect.signature(fn)
+    if any(param.kind == inspect.Parameter.VAR_KEYWORD for param in signature.parameters.values()):
+        return dict(kwargs)
+    return {key: value for key, value in kwargs.items() if key in signature.parameters}

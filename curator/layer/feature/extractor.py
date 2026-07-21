@@ -26,7 +26,7 @@ class FeatureExtractor(nn.Module):
         invariants_only: bool = True,
     ) -> None:
         super().__init__()
-        self.repr_callback = repr_callback
+        self._set_repr_callback(repr_callback)
         self._features: List[torch.Tensor] = []
         self._grads: List[torch.Tensor] = []
         self.hooks = []
@@ -64,12 +64,12 @@ class FeatureExtractor(nn.Module):
     def attach(self, repr_callback: nn.Module) -> None:
         if self.hooks:
             self.unhook()
-        self.repr_callback = repr_callback
+        self._set_repr_callback(repr_callback)
         self.add_hooks()
 
     def detach(self) -> None:
         self.unhook()
-        self.repr_callback = None
+        self._set_repr_callback(None)
 
     def register_repr_callback(self, repr_callback: nn.Module) -> None:
         self.attach(repr_callback)
@@ -127,6 +127,11 @@ class FeatureExtractor(nn.Module):
     def _reset(self) -> None:
         self._features = []
         self._grads = []
+
+    def _set_repr_callback(self, repr_callback: Optional[Callable]) -> None:
+        if "repr_callback" in self._modules:
+            del self._modules["repr_callback"]
+        object.__setattr__(self, "repr_callback", repr_callback)
 
     def _select_segmented_feat(self, module: nn.Module, feat: torch.Tensor) -> torch.Tensor:
         widths = [int(width) for width in getattr(module, "in_features_list")]

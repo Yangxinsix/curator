@@ -4,14 +4,12 @@ import os
 import socket
 from shutil import copy
 
-import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from .common import CONFIGS_PATH, configure_cli_logger, ensure_resolvers, log, log_logo, prepare_cli_environment, prepare_run_path
+from .common import configure_cli_logger, ensure_resolvers, log, log_logo, prepare_cli_environment, prepare_run_path
 
 
-@hydra.main(config_path=CONFIGS_PATH, config_name="label", version_base=None)
-def label(config: DictConfig):
+def run_label_config(config: DictConfig):
     prepare_cli_environment()
     ensure_resolvers()
     from ase.db import connect
@@ -99,3 +97,6 @@ def label(config: DictConfig):
     if not all(all_converged):
         raise RuntimeError(f"Structures {[row.id - 1 for row in db.select(converged=False)]} are not converged!")
     annotator.sweep()
+
+
+label = run_label_config

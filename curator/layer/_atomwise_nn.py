@@ -1,7 +1,7 @@
 import torch
 from torch import nn
 from torch.nn import functional as F
-from typing import List, Union, Optional, Callable, Dict, Tuple, Literal
+from typing import Final, List, Union, Optional, Callable, Dict, Tuple, Literal
 from e3nn import o3
 from e3nn.nn import Activation
 from curator.data.properties import activation_fn, HeadConfig, resolve_heads
@@ -57,6 +57,8 @@ class Dense(nn.Module):
         return y
 
 class AtomwiseNN(nn.Module):
+    separate_heads: Final[bool]
+
     def __init__(
         self,
         in_features: Union[int, o3.Irreps, str],
@@ -118,6 +120,9 @@ class AtomwiseNN(nn.Module):
             self.shared_mlp, self.head_modules, self.shared_out_features = self._make_separate_readout()
             self.readout_mlp = self.shared_mlp
         else:
+            self.shared_mlp = nn.Identity()
+            self.head_modules = nn.ModuleDict()
+            self.shared_out_features = self.in_features
             self.readout_mlp = self._make_readout()
 
         self._n_out = sum(int(h.dim) for h in self.heads)

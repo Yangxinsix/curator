@@ -20,8 +20,10 @@ from .utils import (
     ExternalModelSpec,
     build_representation,
     ensure_local_nequip_source_on_path,
+    parse_bool,
     register_adapter_loader,
 )
+from .nequip_net import resolve_nequip_net_artifact
 
 
 class AllegroAdapter(nn.Module):
@@ -48,19 +50,23 @@ class AllegroAdapter(nn.Module):
         from nequip.data import from_dict as nequip_from_dict
         from nequip.data._nl import compute_neighborlist_
 
+        # nequip.data.from_dict casts cell-like inputs to torch.get_default_dtype()
+        # but leaves tensor positions unchanged, so provide all float fields in
+        # the same dtype before handing the frame to NequIP.
+        float_dtype = torch.get_default_dtype()
         frame = {
-            AtomicDataDict.POSITIONS_KEY: struct.positions,
+            AtomicDataDict.POSITIONS_KEY: struct.positions.to(dtype=float_dtype),
             AtomicDataDict.ATOMIC_NUMBERS_KEY: struct.numbers,
             AtomicDataDict.ATOM_TYPE_KEY: map_atomic_numbers_to_types(struct.numbers, self.z_to_type),
             AtomicDataDict.PBC_KEY: struct.pbc.view(1, 3),
         }
         if struct.cell is not None:
-            frame[AtomicDataDict.CELL_KEY] = struct.cell.view(1, 3, 3)
+            frame[AtomicDataDict.CELL_KEY] = struct.cell.to(dtype=float_dtype).view(1, 3, 3)
         if struct.edge_index is not None and struct.edge_diff is not None:
             frame[AtomicDataDict.EDGE_INDEX_KEY] = struct.edge_index.transpose(0, 1).contiguous()
-            frame[AtomicDataDict.EDGE_VECTORS_KEY] = struct.edge_diff
+            frame[AtomicDataDict.EDGE_VECTORS_KEY] = struct.edge_diff.to(dtype=float_dtype)
             if struct.edge_dist is not None:
-                frame[AtomicDataDict.EDGE_LENGTH_KEY] = struct.edge_dist.view(-1, 1)
+                frame[AtomicDataDict.EDGE_LENGTH_KEY] = struct.edge_dist.to(dtype=float_dtype).view(-1, 1)
         data = nequip_from_dict(frame)
         if AtomicDataDict.EDGE_INDEX_KEY not in data:
             data = compute_neighborlist_(data, self.cutoff, backend=self.neighborlist_backend)
@@ -93,7 +99,14 @@ def _load_allegro(spec: ExternalModelSpec, device: Optional[torch.device]) -> nn
     target_layer = spec.params.get("target_layer", "edge_readout")
     type_map = spec.params.get("type_map")
     neighborlist_backend = spec.params.get("neighborlist_backend", "matscipy")
-    model = load_saved_model(spec.resource, compile_mode=compile_mode)
+    resource = resolve_nequip_net_artifact(
+        spec.resource,
+        version=spec.params.get("version", "0.1"),
+        cache_dir=spec.params.get("cache_dir"),
+        download=parse_bool(spec.params.get("download"), True),
+        timeout_sec=int(spec.params.get("timeout_sec", "300")),
+    )
+    model = load_saved_model(resource, compile_mode=compile_mode)
     adapter = AllegroAdapter(
         model=model,
         target_layer=target_layer,
@@ -106,6 +119,23 @@ def _load_allegro(spec: ExternalModelSpec, device: Optional[torch.device]) -> nn
     return adapter
 
 
+def _load_allegro_net(spec: ExternalModelSpec, device: Optional[torch.device]) -> nn.Module:
+    params = dict(spec.params)
+    version = params.get("version", "0.1")
+    resource = spec.resource
+    if not resource.startswith("nequip.net:"):
+        resource = f"nequip.net:{resource}:{version}"
+    return _load_allegro(
+        ExternalModelSpec(
+            scheme="allegro",
+            resource=resource,
+            params=params,
+        ),
+        device=device,
+    )
+
+
 register_adapter_loader("allegro", _load_allegro)
+register_adapter_loader("allegro_net", _load_allegro_net)
 
 __all__ = ["AllegroAdapter"]

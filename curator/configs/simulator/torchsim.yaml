@@ -1,8 +1,8 @@
 defaults:
   - engine: torchsim                                   # TorchSim integration engine
-  - /simulator/callbacks@callbacks.calc: calc_assign   # attach calculator to TorchSim
   - /simulator/callbacks@callbacks.traj: trajectory_writer  # dump simulated trajectory
   - /simulator/callbacks@callbacks.thermo: torchsim_logger # log thermo metrics
+  - /simulator/callbacks@callbacks.summary: summary_writer # structured MCP/runner summary
   - /simulator/callbacks@callbacks.stop: early_stop         # early termination handler
   - _self_
 
@@ -11,3 +11,7 @@ init_traj: null                                        # initial structure/traje
 start_index: null                                      # frame index to start from
 run_kwargs:
   steps: 100                                           # number of simulation steps
+
+callbacks:
+  summary:
+    initial_step_included: false                       # TorchSim callbacks fire once per integrated step

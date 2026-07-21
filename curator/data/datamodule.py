@@ -874,7 +874,9 @@ def build_datamodule(datapath=None, domain_weights: Optional[Dict[str, float]] =
             if isinstance(domain_cfg, dict):
                 if "weight" in domain_cfg:
                     collected_weights[domain] = float(domain_cfg["weight"])
-                domain_kwargs.update({k: v for k, v in domain_cfg.items() if k not in ("datapath",)})
+                domain_kwargs.update(
+                    {k: v for k, v in domain_cfg.items() if k not in ("datapath", "weight")}
+                )
                 domain_kwargs["datapath"] = domain_cfg.get("datapath", None)
             else:
                 domain_kwargs["datapath"] = domain_cfg

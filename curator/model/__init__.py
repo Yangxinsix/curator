@@ -22,6 +22,8 @@ from .multi_domain import (
 from .external import (
     AllegroRepresentation,
     ESENRepresentation,
+    ExternalRepresentation,
+    MatGLRepresentation,
 )
 from .adapter import (
     AllegroAdapter,

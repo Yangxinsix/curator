@@ -1,0 +1,7 @@
+_target_: curator.simulate.callbacks.summary.SimulationSummaryWriter  # write structured JSON simulation summary
+path: ${run_path}/simulation_summary.json                             # output JSON path
+interval: 1                                                           # collect every N callback steps
+timestep_fs: null                                                     # set to compute per-ps drift
+compute_min_distance: true                                            # include minimum pair distance
+compute_forces: true                                                  # include max force norm
+initial_step_included: true                                           # ASE callbacks include an initial state before integrated steps

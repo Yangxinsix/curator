@@ -1,0 +1,12 @@
+[project]
+name = "curator-runtime-orb"
+version = "0.1.0"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "curator-torch",
+  "orb-models",
+  "matscipy",
+]
+
+[tool.uv.sources]
+curator-torch = { path = "../..", editable = true }

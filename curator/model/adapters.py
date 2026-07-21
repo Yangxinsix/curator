@@ -1,23 +1,31 @@
 from .adapter import (
+    ASECalculatorAdapter,
     AllegroAdapter,
     ESENAdapter,
     ExternalModelSpec,
+    format_external_model_spec,
     MACEAdapter,
     MatGLAdapter,
     is_external_model_spec,
     load_external_model,
+    parse_bool,
     parse_external_model_spec,
+    registered_adapter_schemes,
     register_adapter_loader,
 )
 
 __all__ = [
     "ExternalModelSpec",
+    "ASECalculatorAdapter",
     "MatGLAdapter",
     "MACEAdapter",
     "AllegroAdapter",
     "ESENAdapter",
     "register_adapter_loader",
+    "registered_adapter_schemes",
+    "parse_bool",
     "parse_external_model_spec",
+    "format_external_model_spec",
     "is_external_model_spec",
     "load_external_model",
 ]

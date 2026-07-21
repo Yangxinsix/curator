@@ -704,6 +704,11 @@ def _build_curator_mace_model(
         )
 
     template_head_idx = next(iter(domain_to_head_idx.values()))
+    if len(mace_model.readouts) != len(curator_mace.interactions):
+        raise NotImplementedError(
+            "Curator MACE conversion currently supports official MACE checkpoints with "
+            "one readout per interaction. Use the official ASE calculator path for this checkpoint."
+        )
     _load_official_mace_energy_head(
         curator_mace.readout,
         mace_model,

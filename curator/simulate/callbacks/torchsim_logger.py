@@ -232,11 +232,14 @@ class TorchSimThermoLogger(ThermoWithUncertainty):
         unc_data = ctx.state.get("uncertainty", {})
         atoms_obj = ctx.atoms
         if isinstance(unc_data, list):
+            processed_uncertainties: List[Dict[str, Any]] = []
             for i, d in enumerate(unc_data):
                 atom_ref = atoms_obj[i] if isinstance(atoms_obj, list) and i < len(atoms_obj) else atoms_obj
                 ctx.state["system_index"] = i
                 ctx.state["uncertainty"] = d
                 self._apply_band_and_stop(ctx)
+                processed_uncertainties.append(dict(ctx.state.get("uncertainty") or {}))
+            ctx.state["uncertainty"] = processed_uncertainties
         else:
             ctx.state["system_index"] = None
             self._apply_band_and_stop(ctx)

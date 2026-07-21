@@ -1,41 +1,29 @@
 from __future__ import annotations
 
-"""Unified deploy-time uncertainty entrypoint.
+"""Compatibility wrapper for legacy deploy-time uncertainty injection.
 
-Long-term maintenance rule:
-- deploy-time uncertainty extensions must enter through this module
-- do not add deploy-only uncertainty implementations elsewhere
+New code should import :func:`curator.simulate.uncertainty.inject.inject_uncertainty`.
+This module only keeps older train/evaluate/deploy paths working while the CLI
+surface is cleaned up.
 """
 
-from typing import Any, Mapping, Optional
+from typing import Any, Optional
 
 from omegaconf import DictConfig, OmegaConf
 
-from curator.data import properties
 from curator.data._uncertainty import collect_uncertainty_outputs
-import logging
+from curator.simulate.uncertainty.inject import inject_uncertainty
 
 
-logger = logging.getLogger(__name__)
-
-
-def _as_plain_spec(spec: Optional[Any]) -> Optional[dict[str, Any]]:
+def _plain_spec(spec: Optional[Any]) -> Optional[dict[str, Any]]:
     if spec is None:
         return None
     if isinstance(spec, DictConfig):
         spec = OmegaConf.to_container(spec, resolve=False)
-    if not isinstance(spec, Mapping):
-        raise TypeError(f"deploy.uncertainty must be a mapping, got {type(spec)}")
-    plain = dict(spec)
-    method = plain.get("method", "none")
-    plain["method"] = None if method is None else str(method).strip().lower()
-    output_keys = plain.get("output_keys")
-    if output_keys is not None:
-        plain["output_keys"] = [str(key) for key in output_keys]
-    return plain
+    return dict(spec)
 
 
-def _prepare_ensemble(model, spec: dict[str, Any]) -> None:
+def _prepare_legacy_ensemble(model, spec: dict[str, Any]) -> None:
     from curator.model import EnsembleModel
 
     if not isinstance(model, EnsembleModel) or len(model.models) <= 1:
@@ -51,96 +39,6 @@ def _prepare_ensemble(model, spec: dict[str, Any]) -> None:
         raise ValueError(f"Requested deploy ensemble uncertainty keys are not present in model outputs: {missing}")
 
 
-def _prepare_mahalanobis(
-    model,
-    spec: dict[str, Any],
-    *,
-    lammps_mliap: bool,
-    torchscript: bool = True,
-) -> None:
-    from curator.layer import FeatureCalculator
-    from curator.layer._feature import normalize_kernel
-    from curator.model import EnsembleModel
-
-    if isinstance(model, EnsembleModel):
-        raise ValueError("deploy.uncertainty.method=mahalanobis requires a single model, not an ensemble.")
-
-    dataset = spec.get("dataset")
-    if dataset in (None, "", "none", "null"):
-        raise ValueError("deploy.uncertainty.method=mahalanobis requires deploy.uncertainty.dataset.")
-
-    output_keys = spec.get("output_keys")
-
-    maha_cfg = spec.get("maha") or {}
-    kernel = str(maha_cfg.get("kernel", "local-full-g"))
-    normalized_kernel = normalize_kernel(kernel)
-    local_kernel = normalized_kernel.startswith("local_")
-    max_structures = maha_cfg.get("max_structures", None)
-    regularization = float(maha_cfg.get("regularization", 1e-6))
-    streaming = bool(maha_cfg.get("streaming", False))
-    pair_scriptable = normalized_kernel in {"gnn", "local_gnn"}
-    allowed_output_keys = {properties.maha_dist}
-    if local_kernel:
-        allowed_output_keys.add(properties.maha_dist_per_atom)
-
-    if output_keys is not None:
-        invalid_output_keys = [key for key in output_keys if key not in allowed_output_keys]
-        if invalid_output_keys:
-            raise ValueError(
-                f"Mahalanobis deploy output_keys {invalid_output_keys} are not supported for kernel={kernel}."
-            )
-
-    if torchscript and not lammps_mliap and not pair_scriptable:
-        raise RuntimeError(
-            "pair_style curator Mahalanobis is TorchScript-safe only for kernel=gnn/local-gnn. "
-            "Hook-based full-g/local-full-g remains MLIAP-only."
-        )
-
-    n_random_features = 0 if pair_scriptable else 500
-    target_kind = "mliap" if lammps_mliap else ("torchscript" if torchscript else "python-object")
-    logger.info(
-        "Preparing Mahalanobis deploy uncertainty: dataset=%s kernel=%s max_structures=%s streaming=%s target=%s",
-        dataset,
-        kernel,
-        max_structures if max_structures is not None else "all",
-        streaming,
-        target_kind,
-    )
-
-    for module in model.output_modules:
-        if isinstance(module, FeatureCalculator):
-            module.dataset = dataset
-            module.compute_maha_dist = True
-            module.output_features = False
-            module.distance_kernel = kernel
-            module.update_uncertainty_outputs()
-            module.max_dataset_size = max_structures
-            module.streaming = streaming
-            module.regularization = regularization
-            if properties.feature in module.model_outputs:
-                module.model_outputs.remove(properties.feature)
-            module.kernels = module._build_kernels(
-                [(kernel, n_random_features)],
-                repr_callback=model,
-                target_layer=module.extractor.target_layer,
-                target_domain=module.extractor.target_domain,
-            )
-            model.register_callbacks(module)
-            return
-
-    feature_calculator = FeatureCalculator(
-        kernels=[(kernel, n_random_features)],
-        dataset=dataset,
-        compute_maha_dist=True,
-        output_features=False,
-        distance_kernel=kernel,
-        max_dataset_size=max_structures,
-        streaming=streaming,
-        regularization=regularization,
-    )
-    model.output_modules.append(feature_calculator)
-
-
 def prepare_deploy_uncertainty(
     model,
     spec: Optional[Any],
@@ -148,17 +46,14 @@ def prepare_deploy_uncertainty(
     lammps_mliap: bool = False,
     torchscript: bool = True,
 ) -> None:
-    spec = _as_plain_spec(spec)
+    spec = _plain_spec(spec)
     if spec is None:
         return
-
-    method = spec.get("method", "none")
-    if method in ("", "none", None):
+    method = str(spec.get("method", "none")).strip().lower()
+    if method in ("", "none", "null"):
         return
     if method == "ensemble":
-        _prepare_ensemble(model, spec)
+        _prepare_legacy_ensemble(model, spec)
         return
-    if method == "mahalanobis":
-        _prepare_mahalanobis(model, spec, lammps_mliap=lammps_mliap, torchscript=torchscript)
-        return
-    raise ValueError(f"Unknown deploy uncertainty method '{method}'.")
+    implementation = "native" if lammps_mliap or not torchscript else "scriptable"
+    inject_uncertainty(model, spec, implementation=implementation)

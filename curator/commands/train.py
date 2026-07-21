@@ -4,11 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
 
-import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from .common import (
-    CONFIGS_PATH,
     configure_cli_logger,
     ensure_resolvers,
     log,
@@ -63,7 +61,7 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
         convert_model_wrapper,
         load_pretrained_weights_from_model,
     )
-    from ..model.external import (
+    from ..model.adapter import (
         format_external_model_spec,
         is_external_model_spec,
         load_external_model,
@@ -101,7 +99,7 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
             return model
         spec = format_external_model_spec(parsed)
         setattr(model, "_curator_external_model_spec", spec)
-        if parsed.scheme in {"matgl", "nequip"}:
+        if parsed.scheme in {"matgl", "nequip", "nequip_hf", "nequip_net"}:
             setattr(model, "_curator_checkpoint_save_mode", "state_dict")
         return model
 
@@ -163,10 +161,10 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
         parsed = parse_external_model_spec(source_path)
         if parsed is None:
             raise ValueError(f"Invalid external model spec: {source_path}")
-        if parsed.scheme not in {"mace", "nequip", "matgl"}:
+        if parsed.scheme not in {"mace", "nequip", "nequip_hf", "nequip_net", "matgl"}:
             raise ValueError(
                 "Fine-tuning only supports external pretrained specs for "
-                f"'mace', 'nequip', and 'matgl', got {parsed.scheme!r}."
+                f"'mace', 'nequip', 'nequip_hf', 'nequip_net', and 'matgl', got {parsed.scheme!r}."
             )
         if source_mode == "resume":
             raise ValueError(
@@ -357,8 +355,7 @@ def _prepare_model(
     return model
 
 
-@hydra.main(config_path=CONFIGS_PATH, config_name="train", version_base=None)
-def train(config: DictConfig) -> None:
+def run_train_config(config: DictConfig) -> None:
     prepare_cli_environment()
     ensure_resolvers()
     import torch
@@ -470,8 +467,7 @@ def train(config: DictConfig) -> None:
             log.debug("Deploying compiled model at <%s/compiled_model.pt>", config.run_path)
 
 
-@hydra.main(config_path=CONFIGS_PATH, config_name="train", version_base=None)
-def tmp_train(config: DictConfig):
+def run_tmp_train_config(config: DictConfig):
     prepare_cli_environment()
     ensure_resolvers()
     import torch
@@ -498,7 +494,7 @@ def tmp_train(config: DictConfig):
 
     configure_cli_logger(log, os.path.join(config.run_path, "training.log"), CustomFormatter(), stream=True)
     log.debug(f"Instantiating datamodule <{config.data._target_}> from dataset {config.data.datapath or config.data.train_path}")
-    datamodule = hydra.utils.instantiate(config.data)
+    datamodule = instantiate(config.data)
     datamodule.setup()
     if hasattr(datamodule, "domain_modules") and OmegaConf.select(config, "task.normalize_domain_loss", default=None) is None:
         config.task.normalize_domain_loss = True
@@ -549,4 +545,6 @@ def tmp_train(config: DictConfig):
         log.debug(f"Deploying compiled model at <{config.run_path}/compiled_model.pt>")
 
 
-tmptrain = tmp_train
+train = run_train_config
+tmp_train = run_tmp_train_config
+tmptrain = run_tmp_train_config

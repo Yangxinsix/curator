@@ -1,0 +1,5 @@
+_target_: curator.simulate.callbacks.velocity.VelocityInitializer # initialize velocities before MD engine setup
+temperature_K: 300.0                                              # target Maxwell-Boltzmann temperature
+force: false                                                      # overwrite existing momenta if true
+remove_translation: true                                          # remove center-of-mass translation
+remove_rotation: true                                             # remove rigid-body rotation

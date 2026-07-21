@@ -13,7 +13,10 @@ from curator.model.utils import (
     bind_target_layer_aliases,
     resolve_target_layer,
 )
+from curator.model.base import NeuralNetworkPotential
+from curator.model.external.matgl import MatGLRepresentation
 
+from .ase import ASECalculatorAdapter
 from .utils import (
     ExternalModelSpec,
     build_representation,
@@ -21,22 +24,28 @@ from .utils import (
     register_adapter_loader,
 )
 
+_MATGL_MODEL_ALIASES = {
+    "M3GNet": "M3GNet-PES-MatPES-PBE-2025.2",
+    "M3GNet-MatPES-PBE": "M3GNet-PES-MatPES-PBE-2025.2",
+    "M3GNet-MatPES-r2SCAN": "M3GNet-PES-MatPES-r2SCAN-2025.2",
+    "CHGNet": "CHGNet-PES-MatPES-PBE-2025.2.10",
+    "CHGNet-MatPES-PBE": "CHGNet-PES-MatPES-PBE-2025.2.10",
+    "CHGNet-MatPES-r2SCAN": "CHGNet-PES-MatPES-r2SCAN-2025.2.10",
+    "TensorNet": "TensorNet-PES-MatPES-r2SCAN-2025.2",
+    "TensorNet-MatPES-PBE": "TensorNet-PES-MatPES-PBE-2025.2",
+    "TensorNet-MatPES-r2SCAN": "TensorNet-PES-MatPES-r2SCAN-2025.2",
+    "QET": "QET-PES-MatPES-PBE-2025.2",
+}
+
 
 class _MatGLAtoms2GraphFallback:
     """Fallback converter avoiding optional MatGL neighbor-list dependencies."""
 
-    def __init__(self, element_types: tuple[str, ...], cutoff: float, backend: str) -> None:
+    def __init__(self, element_types: tuple[str, ...], cutoff: float) -> None:
         self.element_types = tuple(element_types)
         self.cutoff = float(cutoff)
-        self.backend = backend.upper()
 
-        if self.backend == "DGL":
-            from matgl.graph._converters_dgl import GraphConverter
-        else:
-            try:
-                from matgl.graph._converters_pyg import GraphConverter
-            except ModuleNotFoundError:
-                from matgl.graph._converters import GraphConverter
+        from matgl.graph._converters_pyg import GraphConverter
 
         class _Converter(GraphConverter):
             def get_graph(self, structure):
@@ -99,7 +108,6 @@ class MatGLAdapter(nn.Module):
     def __init__(
         self,
         model: nn.Module,
-        backend: str = "PYG",
         target_layer: str = "final_layer",
         use_potential: bool = True,
         calc_forces: bool = True,
@@ -107,7 +115,6 @@ class MatGLAdapter(nn.Module):
         calc_hessian: bool = False,
     ) -> None:
         super().__init__()
-        self.backend = backend.upper()
         self.target_layer = target_layer
         self.model = model
 
@@ -132,8 +139,6 @@ class MatGLAdapter(nn.Module):
         cutoff = getattr(self.core_model, "cutoff", None)
         if element_types is None or cutoff is None:
             raise ValueError("MatGL model must define 'element_types' and 'cutoff'.")
-        if self.backend not in {"DGL", "PYG"}:
-            raise ValueError(f"Unsupported MatGL backend: {self.backend}")
         self.graph_converter = self._build_graph_converter(tuple(element_types), float(cutoff))
         self.representation = build_representation(float(cutoff))
         target_module = resolve_target_layer(
@@ -145,16 +150,10 @@ class MatGLAdapter(nn.Module):
 
     def _build_graph_converter(self, element_types: tuple[str, ...], cutoff: float):
         try:
-            if self.backend == "DGL":
-                from matgl.ext._ase_dgl import Atoms2Graph
-            else:
-                try:
-                    from matgl.ext._ase_pyg import Atoms2Graph
-                except ModuleNotFoundError:
-                    from matgl.ext._ase import Atoms2Graph
+            from matgl.ext.ase import Atoms2Graph
             return Atoms2Graph(element_types, cutoff)
         except Exception:
-            return _MatGLAtoms2GraphFallback(element_types, cutoff, self.backend)
+            return _MatGLAtoms2GraphFallback(element_types, cutoff)
 
     @staticmethod
     def _normalize_lattice(lat: torch.Tensor) -> torch.Tensor:
@@ -176,14 +175,9 @@ class MatGLAdapter(nn.Module):
             graphs.append(g)
             lattices.append(self._normalize_lattice(lat))
             state_attrs.append(np.asarray(state_attr, dtype=np.float32))
-        if self.backend == "DGL":
-            import dgl
+        from torch_geometric.data import Batch
 
-            graph_batch = dgl.batch(graphs)
-        else:
-            from torch_geometric.data import Batch
-
-            graph_batch = Batch.from_data_list(graphs)
+        graph_batch = Batch.from_data_list(graphs)
         lat_batch = torch.stack(lattices, dim=0)
         state_attr_batch = torch.tensor(np.vstack(state_attrs), dtype=lat_batch.dtype)
         return graph_batch, lat_batch, state_attr_batch
@@ -196,9 +190,18 @@ class MatGLAdapter(nn.Module):
         lat_batch = lat_batch.to(device)
         state_attr_batch = state_attr_batch.to(device)
         if self.potential is not None:
-            self.potential(g=graph_batch, lat=lat_batch, state_attr=state_attr_batch)
+            energies, forces, stresses, *_ = self.potential(
+                g=graph_batch,
+                lat=lat_batch,
+                state_attr=state_attr_batch,
+            )
+            data[properties.energy] = torch.atleast_1d(energies)
+            data[properties.forces] = forces
+            if stresses.numel() > 1:
+                data[properties.stress] = stresses
         else:
-            self.core_model(g=graph_batch, state_attr=state_attr_batch)
+            energies = self.core_model(g=graph_batch, state_attr=state_attr_batch)
+            data[properties.energy] = torch.atleast_1d(energies)
         return data
 
 
@@ -206,27 +209,64 @@ def _load_matgl(spec: ExternalModelSpec, device: Optional[torch.device]) -> nn.M
     import matgl
 
     backend = spec.params.get("backend", "PYG").upper()
-    target_layer = spec.params.get("target_layer", "final_layer")
+    if backend != "PYG":
+        raise ValueError("Curator uses MatGL >=4 with PyG-only support; DGL backend is not supported.")
+    as_calculator = parse_bool(spec.params.get("as_calculator"), True)
     use_potential = parse_bool(spec.params.get("use_potential"), True)
     calc_forces = parse_bool(spec.params.get("calc_forces"), True)
     calc_stresses = parse_bool(spec.params.get("calc_stresses"), False)
     calc_hessian = parse_bool(spec.params.get("calc_hessian"), False)
 
-    matgl.set_backend(backend)
-    model = matgl.load_model(spec.resource)
-    adapter = MatGLAdapter(
-        model=model,
-        backend=backend,
-        target_layer=target_layer,
-        use_potential=use_potential,
-        calc_forces=calc_forces,
-        calc_stresses=calc_stresses,
-        calc_hessian=calc_hessian,
+    model_name = _MATGL_MODEL_ALIASES.get(spec.resource, spec.resource)
+    model = matgl.load_model(model_name)
+    if as_calculator:
+        from matgl.ext.ase import PESCalculator
+
+        model.to(device or torch.device("cpu"))
+        calc = PESCalculator(
+            potential=model,
+            device=str(device or torch.device("cpu")),
+            stress_unit=spec.params.get("stress_unit", "eV/A3"),
+        )
+        cutoff = getattr(getattr(model, "model", model), "cutoff", None)
+        return ASECalculatorAdapter(calc, cutoff=float(cutoff or spec.params.get("cutoff", "0.0"))).eval()
+
+    from matgl.apps.pes import Potential
+
+    if isinstance(model, Potential):
+        potential = model
+        potential.calc_forces = calc_forces
+        potential.calc_stresses = calc_stresses
+        potential.calc_hessian = calc_hessian
+    elif use_potential:
+        potential = Potential(
+            model=model,
+            calc_forces=calc_forces,
+            calc_stresses=calc_stresses,
+            calc_hessian=calc_hessian,
+        )
+    else:
+        raise ValueError("MatGL Curator forward mode requires use_potential=true.")
+
+    outputs = [properties.energy]
+    if calc_forces:
+        outputs.append(properties.forces)
+    if calc_stresses:
+        outputs.append(properties.stress)
+    representation = MatGLRepresentation(
+        potential=potential,
+        model_outputs=outputs,
+        stress_unit=spec.params.get("stress_unit", "GPa"),
+    )
+    model = NeuralNetworkPotential(
+        representation=representation,
+        input_modules=[],
+        output_modules=[],
+        model_outputs=outputs,
     )
     if device is not None:
-        adapter.to(device)
-    adapter.eval()
-    return adapter
+        model.to(device)
+    return model
 
 
 register_adapter_loader("matgl", _load_matgl)

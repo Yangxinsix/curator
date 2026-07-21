@@ -1,14 +1,23 @@
+from __future__ import annotations
+
 import os
 import socket
+from pathlib import Path
+from typing import Union
 
-import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from .common import CONFIGS_PATH, configure_cli_logger, ensure_resolvers, log, log_logo, prepare_cli_environment, prepare_run_path
+from .common import (
+    configure_cli_logger,
+    ensure_resolvers,
+    log,
+    log_logo,
+    prepare_cli_environment,
+    prepare_run_path,
+)
 
 
-@hydra.main(config_path=CONFIGS_PATH, config_name="simulate", version_base=None)
-def simulate(config: DictConfig):
+def run_simulation_config(config: DictConfig, *, stream: bool = True) -> None:
     prepare_cli_environment()
     ensure_resolvers()
     from hydra.utils import instantiate
@@ -30,7 +39,7 @@ def simulate(config: DictConfig):
         log,
         os.path.join(config.run_path, "simulation.log"),
         CustomFormatter(),
-        stream=True,
+        stream=stream,
     )
     log_logo(log)
     log.debug("Running on host: " + str(socket.gethostname()))
@@ -43,3 +52,14 @@ def simulate(config: DictConfig):
 
     simulator = instantiate(config.simulator)
     simulator.run()
+
+
+def run_simulation_config_file(config_path: Union[str, os.PathLike], *, stream: bool = True) -> None:
+    run_simulation_config(OmegaConf.load(Path(config_path).expanduser()), stream=stream)
+
+
+def run_simulate_config(config: DictConfig):
+    return run_simulation_config(config, stream=True)
+
+
+simulate = run_simulate_config
