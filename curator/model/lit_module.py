@@ -90,6 +90,9 @@ class LitNNP(pl.LightningModule):
             for layer in self.model.output_modules:
                 if hasattr(layer, "unscale"):
                     self.rescale_layers.append(layer)
+            for output in self.outputs:
+                if hasattr(output, "bind_rescale_layers"):
+                    output.bind_rescale_layers(self.rescale_layers)
             self._domain_loss_scales = self._build_domain_loss_scales()
             self._log_runtime_configuration()
         logger.info(self.model)
@@ -519,8 +522,15 @@ class LitNNP(pl.LightningModule):
         checkpoint['wrapper_config'] = get_model_wrapper_config(self.model).to_dict()
         checkpoint['outputs'] = self.outputs
         checkpoint['optimizer'] = self.optimizer
-        if self.save_entire_model:
+        external_model_spec = getattr(self.model, "_curator_external_model_spec", None)
+        if external_model_spec is not None:
+            checkpoint["external_model_spec"] = external_model_spec
+        checkpoint_save_mode = getattr(self.model, "_curator_checkpoint_save_mode", None)
+        if self.save_entire_model and checkpoint_save_mode != "state_dict":
             checkpoint['model'] = self.model
+            checkpoint["model_save_mode"] = "full"
+        else:
+            checkpoint["model_save_mode"] = "state_dict"
 
     def _optimizer_parameter_groups(self) -> List[ParameterGroup]:
         adapter_groups = collect_adapter_parameter_groups(self.model)
@@ -823,6 +833,10 @@ class LitNNP(pl.LightningModule):
             values.append(float(val))
         return values
 
+    def _metric_column_widths(self) -> List[int]:
+        base_width = self._col_widths["metric"]
+        return [max(base_width, len(str(name)) + 2) for name in self.metric_names or []]
+
     def _format_header(self, include_loader: bool) -> str:
         parts = [
             f'{"# epoch":>{self._col_widths["epoch"]}s}',
@@ -830,7 +844,10 @@ class LitNNP(pl.LightningModule):
         ]
         if include_loader:
             parts.append(f'{"domain":>{self._col_widths["domain"]}s}')
-        parts.append("".join([f'{m:>{self._col_widths["metric"]}s}' for m in self.metric_names or []]))
+        parts.extend(
+            f'{name:>{width}s}'
+            for name, width in zip(self.metric_names or [], self._metric_column_widths())
+        )
         return "".join(parts)
 
     def _format_row(self, epoch: int, batch: int, loader: Optional[str], values: List[float]) -> str:
@@ -840,7 +857,10 @@ class LitNNP(pl.LightningModule):
         ]
         if loader is not None:
             parts.append(f'{loader:>{self._col_widths["domain"]}s}')
-        parts.extend([f'{v:>{self._col_widths["metric"]}.3g}' for v in values])
+        parts.extend(
+            f'{value:>{width}.3g}'
+            for value, width in zip(values, self._metric_column_widths())
+        )
         return "".join(parts)
 
     def _format_epoch_header(self) -> str:
@@ -849,7 +869,10 @@ class LitNNP(pl.LightningModule):
             f'{"epoch":>{self._col_widths["epoch"]}s}',
             f'{"domain":>{self._col_widths["domain"]}s}',
         ]
-        parts.append("".join([f'{m:>{self._col_widths["metric"]}s}' for m in self.metric_names or []]))
+        parts.extend(
+            f'{name:>{width}s}'
+            for name, width in zip(self.metric_names or [], self._metric_column_widths())
+        )
         return "".join(parts)
 
     def _format_epoch_row(self, stage_label: str, epoch: int, loader: Optional[str], values: List[float]) -> str:
@@ -859,7 +882,10 @@ class LitNNP(pl.LightningModule):
             f'{epoch:>{self._col_widths["epoch"]}d}',
             f'{loader_str:>{self._col_widths["domain"]}s}',
         ]
-        parts.extend([f'{v:>{self._col_widths["metric"]}.3g}' for v in values])
+        parts.extend(
+            f'{value:>{width}.3g}'
+            for value, width in zip(values, self._metric_column_widths())
+        )
         return "".join(parts)
 
     def _loader_label(self, loader_idx: Optional[int]) -> Optional[str]:

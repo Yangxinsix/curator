@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, Dict, Optional
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlencode
 import sys
 
 import torch
@@ -69,6 +69,13 @@ def is_external_model_spec(raw: str) -> bool:
     return spec is not None and spec.scheme in _ADAPTER_LOADERS
 
 
+def format_external_model_spec(spec: ExternalModelSpec) -> str:
+    query = urlencode(sorted(spec.params.items()))
+    if query:
+        return f"{spec.scheme}:{spec.resource}?{query}"
+    return f"{spec.scheme}:{spec.resource}"
+
+
 def load_external_model(raw: str, device: Optional[torch.device] = None) -> nn.Module:
     spec = parse_external_model_spec(raw)
     if spec is None:
@@ -90,6 +97,7 @@ __all__ = [
     "ensure_local_nequip_source_on_path",
     "parse_bool",
     "parse_external_model_spec",
+    "format_external_model_spec",
     "register_adapter_loader",
     "is_external_model_spec",
     "load_external_model",

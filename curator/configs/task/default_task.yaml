@@ -13,4 +13,5 @@ normalize_domain_loss: null          # auto-enable for multi-domain training whe
 
 # optional task-side loss overrides keyed by output name, e.g. {energy: 2, forces: 98}
 loss_weights: {}
+energy_per_atom_loss: true            # match MACE: compute energy MSE from (E_pred - E_ref) / n_atoms
 patience: 200                        # early stopping patience (epochs)

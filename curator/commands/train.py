@@ -20,6 +20,10 @@ from .common import (
 from .deploy import deploy
 
 _ALLOWED_FINETUNE = {None, "full", "head_only", "lora"}
+_CURATOR_MODEL_METADATA = (
+    "_curator_external_model_spec",
+    "_curator_checkpoint_save_mode",
+)
 
 
 @dataclass
@@ -29,6 +33,13 @@ class LoadedModel:
     resume_from: Optional[Path] = None
     wrapper_from_checkpoint: Any = None
     wrapper_transform_applied: bool = False
+
+
+def _copy_curator_model_metadata(source: Any, target: Any) -> Any:
+    for name in _CURATOR_MODEL_METADATA:
+        if hasattr(source, name):
+            setattr(target, name, getattr(source, name))
+    return target
 
 
 def _resolve_data_dtype(datamodule: Any) -> Any:
@@ -52,7 +63,12 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
         convert_model_wrapper,
         load_pretrained_weights_from_model,
     )
-    from ..model.external import is_external_model_spec, load_external_model, parse_external_model_spec
+    from ..model.external import (
+        format_external_model_spec,
+        is_external_model_spec,
+        load_external_model,
+        parse_external_model_spec,
+    )
     from ..utils import find_best_model
 
     def instantiate_model(model_config: Any) -> Any:
@@ -78,6 +94,32 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
         if not transforms:
             return model
         return apply_model_transforms(model, transforms, target_dtype=build_dtype)
+
+    def mark_external_checkpoint_metadata(model: Any, raw_spec: str) -> Any:
+        parsed = parse_external_model_spec(raw_spec)
+        if parsed is None:
+            return model
+        spec = format_external_model_spec(parsed)
+        setattr(model, "_curator_external_model_spec", spec)
+        if parsed.scheme in {"matgl", "nequip"}:
+            setattr(model, "_curator_checkpoint_save_mode", "state_dict")
+        return model
+
+    def external_checkpoint_spec(checkpoint_payload: Any) -> Optional[str]:
+        if not isinstance(checkpoint_payload, dict):
+            return None
+        spec = checkpoint_payload.get("external_model_spec")
+        if isinstance(spec, str) and is_external_model_spec(spec):
+            return spec
+        return None
+
+    def load_external_checkpoint_model(raw_spec: str) -> Any:
+        log.debug("Reconstructing external checkpoint model from spec %s", raw_spec)
+        with temporary_default_dtype(build_dtype):
+            model = load_external_model(raw_spec, device=torch.device("cpu"))
+        if not isinstance(model, NeuralNetworkPotential):
+            raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
+        return mark_external_checkpoint_metadata(model, raw_spec)
 
     if config.model_path is None:
         source_path, source_mode, transforms = None, "model", []
@@ -121,13 +163,11 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
         parsed = parse_external_model_spec(source_path)
         if parsed is None:
             raise ValueError(f"Invalid external model spec: {source_path}")
-        if parsed.scheme not in {"mace", "nequip"}:
+        if parsed.scheme not in {"mace", "nequip", "matgl"}:
             raise ValueError(
-                f"Fine-tuning only supports external pretrained specs for 'mace' and 'nequip', got {parsed.scheme!r}."
+                "Fine-tuning only supports external pretrained specs for "
+                f"'mace', 'nequip', and 'matgl', got {parsed.scheme!r}."
             )
-        checkpoint_mode = str(OmegaConf.select(config, "task.checkpoint_mode", default="model")).strip().lower()
-        if checkpoint_mode != "model":
-            raise ValueError("External pretrained spec requires task.checkpoint_mode='model'.")
         if source_mode == "resume":
             raise ValueError(
                 f"External pretrained spec {source_path!r} does not support model_path.mode='resume'."
@@ -138,9 +178,14 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
             source_model = load_external_model(source_path, device=torch.device("cpu"))
         if not isinstance(source_model, NeuralNetworkPotential):
             raise TypeError(f"Expected NeuralNetworkPotential, got {type(source_model)}")
+        source_model = mark_external_checkpoint_metadata(source_model, source_path)
 
+        transformed_model = mark_external_checkpoint_metadata(
+            apply_transforms(source_model),
+            source_path,
+        )
         loaded = LoadedModel(
-            model=apply_transforms(source_model),
+            model=transformed_model,
             wrapper_from_checkpoint=None,
             wrapper_transform_applied=wrapper_transform_applied,
         )
@@ -179,8 +224,16 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
             "Resuming training from checkpoint; optimizer and scheduler states will be restored from %s",
             model_path,
         )
+        external_spec = external_checkpoint_spec(checkpoint_data)
+        if external_spec is not None:
+            model = load_external_checkpoint_model(external_spec)
+            if wrapper_from_checkpoint is not None:
+                model = convert_model_wrapper(model, wrapper_from_checkpoint, target_dtype=build_dtype)
+                model = mark_external_checkpoint_metadata(model, external_spec)
+        else:
+            model = instantiate_model(config.model)
         return LoadedModel(
-            model=instantiate_model(config.model),
+            model=model,
             resume_from=model_path,
             wrapper_from_checkpoint=wrapper_from_checkpoint,
         )
@@ -206,6 +259,23 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
     elif isinstance(saved_model, torch.nn.Module):
         model = saved_model
     else:
+        external_spec = external_checkpoint_spec(checkpoint_data)
+        if external_spec is not None:
+            model = load_external_checkpoint_model(external_spec)
+            if wrapper_from_checkpoint is not None:
+                model = convert_model_wrapper(model, wrapper_from_checkpoint, target_dtype=build_dtype)
+                model = mark_external_checkpoint_metadata(model, external_spec)
+            model.load_state_dict(
+                checkpoint_state_dict(checkpoint_data, context="external model reconstruction"),
+                strict=False,
+            )
+            model = apply_transforms(model)
+            return LoadedModel(
+                model=model,
+                outputs=None if transforms else outputs,
+                wrapper_from_checkpoint=get_model_wrapper_config(model),
+                wrapper_transform_applied=wrapper_transform_applied,
+            )
         model_config = checkpoint_data.get("model_params") or checkpoint_data.get("model_cfg")
         if model_config is None:
             raise ValueError(
@@ -271,7 +341,9 @@ def _prepare_model(
 
     model = align_model_domains_from_datamodule(model, datamodule, logger=log)
     if wrapper_to_apply is not None:
+        source_model = model
         model = convert_model_wrapper(model, wrapper_to_apply, target_dtype=data_dtype)
+        model = _copy_curator_model_metadata(source_model, model)
 
     model.initialize_modules(datamodule)
     log.debug("Initialized model modules from datamodule before task setup.")
@@ -299,6 +371,9 @@ def train(config: DictConfig) -> None:
     from ..utils import (
         CustomFormatter,
         find_best_model,
+        normalize_config_sequences,
+        prune_config_targets,
+        read_user_config,
         update_config_from_datamodule,
     )
 

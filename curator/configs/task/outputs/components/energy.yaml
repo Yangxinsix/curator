@@ -3,6 +3,7 @@ name: energy
 loss_fn:
   _target_: torch.nn.MSELoss
 loss_weight: ${oc.select:task.loss_weights.energy,1.0}
+per_atom_loss: ${task.energy_per_atom_loss}
 metrics:
   mae:
     _target_: torchmetrics.regression.MeanAbsoluteError

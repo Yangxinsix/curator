@@ -1,6 +1,6 @@
 _target_: curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty
 variables: basic_energies
-interval: 1
+interval: 10
 header: true
 monitor: maha_dist
 low: null

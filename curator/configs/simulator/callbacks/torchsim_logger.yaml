@@ -1,6 +1,6 @@
 _target_: curator.simulate.callbacks.torchsim_logger.TorchSimThermoLogger   # logger tailored for TorchSim runs
 variables: basic_energies                                                   # variables to record
-interval: 1                                                                 # logging interval
+interval: 10                                                                # logging interval
 header: true                                                                # print header row
 per_system_logs: true                                                       # log each system separately
 log_dir: ${run_path}                                                        # directory for log files

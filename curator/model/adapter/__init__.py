@@ -1,5 +1,6 @@
 from .utils import (
     ExternalModelSpec,
+    format_external_model_spec,
     is_external_model_spec,
     load_external_model,
     parse_external_model_spec,
@@ -20,6 +21,7 @@ __all__ = [
     "ESENAdapter",
     "register_adapter_loader",
     "parse_external_model_spec",
+    "format_external_model_spec",
     "is_external_model_spec",
     "load_external_model",
 ]

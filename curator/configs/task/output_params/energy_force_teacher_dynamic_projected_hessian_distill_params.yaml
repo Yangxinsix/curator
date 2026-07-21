@@ -1,0 +1,33 @@
+# @package _global_
+model:
+  input_modules:
+    pairwise_distance:
+      compute_distance_from_R: true
+      compute_forces: true
+  output_modules:
+    gradient_output:
+      _target_: curator.layer.GradientOutput
+      grad_on_edge_diff: false
+      grad_on_positions: true
+      model_outputs:
+        - energy
+        - forces
+    energy_hessian_output:
+      _target_: curator.layer.EnergyHessianOutput
+      model_outputs:
+        - energy_hessian_projected
+        - energy_hessian_probe_vectors
+      num_probes: ${task.projected_hessian.num_probes}
+      probe_key: energy_hessian_probe_vectors
+      normalize_probes: ${oc.select:task.projected_hessian.normalize,true}
+      probe_distribution: ${oc.select:task.projected_hessian.distribution,rademacher}
+      vectorize: ${oc.select:task.projected_hessian.vectorize,false}
+    global_rescale_shift:
+      _target_: curator.layer.GlobalRescaleShift
+task:
+  loss_weights:
+    energy_hessian_projected_distill: 1.0
+  projected_hessian:
+    num_probes: 4
+    normalize: true
+    distribution: rademacher
