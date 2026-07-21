@@ -396,7 +396,10 @@ def prepare_distillation(config: DictConfig, logger: Optional[logging.Logger] = 
             plot_figure=False,
             output_dir=Path(config.run_path) / "distill",
             device=device,
-            batch_size=int(getattr(config.data, "batch_size", 8)),
+            batch_size=int(
+                distill_cfg.get("batch_size")
+                or getattr(config.data, "batch_size", 8)
+            ),
             num_workers=int(getattr(config.data, "num_workers", 0)),
             pin_memory=bool(getattr(config.data, "pin_memory", False)),
         )

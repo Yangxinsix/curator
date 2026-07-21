@@ -97,6 +97,8 @@ class ModelOutput(nn.Module):
         if isinstance(value, list):
             if len(value) == 0:
                 raise ValueError(f"{self.__class__.__name__} received an empty list for '{self.prediction_property}'.")
+            if all(v.dim() > 0 and v.shape[-1] == value[0].shape[-1] for v in value):
+                return torch.cat([v.reshape(-1, v.shape[-1]) for v in value], dim=0)
             return torch.cat([v.reshape(-1) for v in value])
         return value
 
@@ -130,9 +132,10 @@ class ModelOutput(nn.Module):
                         scale = scale.reshape(scale.shape + (1,) * (pred_value.dim() - 1))
                     pred_value = pred_value / scale
                     target_value = target_value / scale
-            loss = self.loss_weight * self.loss_fn(
-                pred_value, target_value
-            )
+            if getattr(self.loss_fn, "requires_batch", False):
+                loss = self.loss_weight * self.loss_fn(pred_value, target_value, target)
+            else:
+                loss = self.loss_weight * self.loss_fn(pred_value, target_value)
             num_obs = target_value.view(-1).shape[0]
         else:
             return 0.0
@@ -423,7 +426,10 @@ class DistillOutput(ModelOutput):
                 return zero, num_obs
             return zero
 
-        loss = self.loss_weight * self.loss_fn(student_value, target_value)
+        if getattr(self.loss_fn, "requires_batch", False):
+            loss = self.loss_weight * self.loss_fn(student_value, target_value, target)
+        else:
+            loss = self.loss_weight * self.loss_fn(student_value, target_value)
         self.loss += loss.item() * num_obs
         self.num_obs += num_obs
 

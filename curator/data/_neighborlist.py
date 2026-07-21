@@ -2,7 +2,7 @@ from abc import abstractmethod
 import torch
 from torch import nn
 import numpy as np
-from typing import Dict, Tuple, Union, Literal
+from typing import Dict, Tuple, Union, Literal, Optional
 from . import properties
 from ._transform import Transform
 import sys, warnings
@@ -32,17 +32,51 @@ class NeighborListTransform(Transform):
         cutoff: float,
         requires_grad: bool = False,
         return_distance: bool = False,
+        max_neighbors: Optional[int] = None,
     ) -> None:
         super().__init__()
         self.cutoff = cutoff
         self.requires_grad = requires_grad
         self.return_distance = return_distance
+        self.max_neighbors = None if max_neighbors is None else int(max_neighbors)
+        if self.max_neighbors is not None and self.max_neighbors <= 0:
+            raise ValueError("max_neighbors must be positive when provided.")
+
+    def _limit_neighbors(self, edge_info: properties.Type) -> properties.Type:
+        if self.max_neighbors is None:
+            return edge_info
+        edge_idx = edge_info[properties.edge_idx]
+        num_edges = edge_idx.shape[0]
+        if num_edges == 0:
+            return edge_info
+
+        distance = edge_info.get(properties.edge_dist)
+        if distance is None:
+            distance = torch.linalg.vector_norm(edge_info[properties.edge_diff], dim=-1)
+        by_distance = torch.argsort(distance, stable=True)
+        by_center = torch.argsort(edge_idx[by_distance, 0], stable=True)
+        order = by_distance[by_center]
+        centers = edge_idx[order, 0]
+        positions = torch.arange(num_edges, device=edge_idx.device)
+        starts = torch.where(
+            torch.cat((torch.ones(1, dtype=torch.bool, device=edge_idx.device), centers[1:] != centers[:-1])),
+            positions,
+            torch.zeros_like(positions),
+        )
+        starts = torch.cummax(starts, dim=0).values
+        keep = order[(positions - starts) < self.max_neighbors]
+
+        return {
+            key: value[keep] if torch.is_tensor(value) and value.shape[:1] == (num_edges,) else value
+            for key, value in edge_info.items()
+        }
     
     def forward(self, data: properties.Type) -> properties.Type:
         if properties.cell in data:
             edge_info = self._build_neighbor_list(data[properties.positions], data[properties.cell])
         else:
             edge_info = self._simple_neighbor_list(data[properties.positions])
+        edge_info = self._limit_neighbors(edge_info)
         data.update(edge_info)
         data[properties.n_pairs] = torch.tensor([data[properties.edge_idx].shape[0]])
         
@@ -297,7 +331,7 @@ class NativeNeighborList(NeighborListTransform):
         return outputs
 
     def __repr__(self):
-        return f"{self.__class__.__name__}(cutoff={self.cutoff}, return_distance={self.return_distance}, return_cell_displacements={self.return_cell_displacements}, num_threads={self.num_threads})"
+        return f"{self.__class__.__name__}(cutoff={self.cutoff}, max_neighbors={self.max_neighbors}, return_distance={self.return_distance}, return_cell_displacements={self.return_cell_displacements}, num_threads={self.num_threads})"
         
 class Asap3NeighborList(NeighborListTransform):
     def __init__(
