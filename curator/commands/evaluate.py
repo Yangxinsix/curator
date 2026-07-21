@@ -80,12 +80,21 @@ def evaluate_main(argv: Optional[List[str]] = None):
     prepare_cli_environment()
 
     def _is_hydra_args(args: List[str]) -> bool:
+        argparse_flags = {
+            "-d", "--data", "-m", "--model", "--device", "--out", "--no-plot",
+            "--save-data", "--batch-size", "--num-workers", "--pin-memory",
+            "--benchmark", "--benchmark-warmup-batches",
+        }
+        if any(arg.split("=", 1)[0] in argparse_flags for arg in args):
+            return False
+        if any(arg.startswith("--") for arg in args):
+            return True
         for arg in args:
             if not arg:
                 continue
             if arg.startswith(("+", "~")):
                 return True
-            if "=" in arg and not arg.startswith("-"):
+            if "=" in arg and not arg.startswith("-") and not (":" in arg and "?" in arg):
                 return True
         return False
 
@@ -120,6 +129,8 @@ def evaluate_main(argv: Optional[List[str]] = None):
         parser.add_argument("--batch-size", type=int, default=8, help="Batch size for evaluation (default: 8)")
         parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers (default: 0)")
         parser.add_argument("--pin-memory", action="store_true", help="Enable DataLoader pin_memory")
+        parser.add_argument("--benchmark", action="store_true", help="Measure synchronized model throughput")
+        parser.add_argument("--benchmark-warmup-batches", type=int, default=3, help="Warmup batches excluded from throughput")
         if argcomplete:
             argcomplete.autocomplete(parser)
         return parser.parse_args(args)
@@ -163,5 +174,7 @@ def evaluate_main(argv: Optional[List[str]] = None):
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         pin_memory=args.pin_memory,
+        benchmark=args.benchmark,
+        benchmark_warmup_batches=args.benchmark_warmup_batches,
     )
     evaluator.evaluate(datapath)
