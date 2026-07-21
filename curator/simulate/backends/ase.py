@@ -129,7 +129,7 @@ class AseSimulationBackend(SimulationBackend):
         force_temperature = bool(protocol.get("force_temperature", initialize_velocities))
         remove_translation = bool(protocol.get("remove_translation", True))
         remove_rotation = bool(protocol.get("remove_rotation", True))
-        log_interval = int(protocol.get("log_interval", 1))
+        log_interval = int(protocol.get("log_interval", 10))
         trajectory_interval = int(protocol.get("trajectory_interval", 1))
         summary_interval = int(protocol.get("summary_interval", 1))
         summary_compute_min_distance = bool(protocol.get("summary_compute_min_distance", True))

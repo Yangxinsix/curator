@@ -6,7 +6,7 @@ fix_under: null         # minimum coordination enforcement
 friction: 0.003         # Langevin friction coefficient
 temperature: 300 #K     # target temperature in Kelvin
 time_step: 1.0 #fs      # integrator timestep in femtoseconds
-print_step: 1           # logging interval
+print_step: 10          # logging interval
 dump_step: 100          # trajectory writing interval
 min_steps: 1000         # minimum steps before adaptive stopping
 max_steps: 10000        # maximum allowed simulation steps

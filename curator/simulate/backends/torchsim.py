@@ -132,7 +132,7 @@ class TorchSimSimulationBackend(SimulationBackend):
         model_like = single_or_list(case.model_paths)
         timestep_ps = float(case.timestep_fs) / 1000.0
         temperature_K = float(case.temperature_K or 300.0)
-        log_interval = int(protocol.get("log_interval", 1))
+        log_interval = int(protocol.get("log_interval", 10))
         trajectory_interval = int(protocol.get("trajectory_interval", 1))
         summary_interval = int(protocol.get("summary_interval", 1))
         summary_compute_min_distance = bool(protocol.get("summary_compute_min_distance", True))

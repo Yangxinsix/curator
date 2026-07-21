@@ -1,5 +1,5 @@
 _target_: curator.simulate.callbacks.thermo_uncertainty.ThermoWithUncertainty  # log thermo metrics with uncertainty checks
-interval: 1                                                                     # logging interval in steps
+interval: 10                                                                    # logging interval in steps
 variables: basic_energies                                                       # variables to record
 monitor: null                                                                   # which uncertainty metric to monitor (null = disabled)
 save_path: warning_struct.traj                                                  # file for saving uncertain structures

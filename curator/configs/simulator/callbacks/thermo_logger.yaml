@@ -1,4 +1,4 @@
 _target_: curator.simulate.callbacks.thermo.MDThermoLogger   # basic thermodynamic logger
 variables: basic_energies                                   # variables to record
-interval: 1                                                 # logging interval in steps
+interval: 10                                                # logging interval in steps
 header: true                                                # print header row
