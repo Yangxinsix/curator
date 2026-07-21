@@ -90,6 +90,9 @@ class MACEAdapter(nn.Module):
         self.head = _resolve_head_name(model, head)
         self.compute_force = bool(compute_force)
         self.training_flag = bool(training)
+        self.model_outputs = [properties.energy]
+        if self.compute_force:
+            self.model_outputs.append(properties.forces)
         self.cutoff = float(getattr(model, "r_max"))
         self.representation = build_representation(self.cutoff)
         self.atomic_numbers = (

@@ -1,4 +1,5 @@
 import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Union
 
@@ -30,6 +31,8 @@ class Evaluator:
         num_workers: int = 0,
         pin_memory: Optional[bool] = None,
         device: Optional[str] = None,
+        benchmark: bool = False,
+        benchmark_warmup_batches: int = 3,
     ) -> None:
         self.model = model
         self.data_reader = data_reader
@@ -42,6 +45,8 @@ class Evaluator:
         self.num_workers = num_workers
         self.pin_memory = pin_memory
         self.device = device
+        self.benchmark = benchmark
+        self.benchmark_warmup_batches = benchmark_warmup_batches
 
     def _init_reader(self) -> AseDataReader:
         if isinstance(self.data_reader, AseDataReader):
@@ -160,7 +165,11 @@ class Evaluator:
             "forces_true": [],
             "forces_pred": [],
             "atomic_numbers": [],
+            "n_atoms": [],
         }
+        benchmark_seconds = 0.0
+        benchmark_batches = 0
+        benchmark_structures = 0
 
         model_outputs = getattr(self.model, "model_outputs", []) or []
         needs_grad = any(
@@ -174,6 +183,7 @@ class Evaluator:
                 if isinstance(transform, NeighborListTransform):
                     transform.requires_grad = True
 
+        owned_dataset = None
         if isinstance(datapath, (Dataset, DataLoader)):
             dataset = datapath
             if needs_grad:
@@ -192,6 +202,7 @@ class Evaluator:
                 task="ase",
                 return_atoms_data=True,
             )
+            owned_dataset = dataset
         if start_index:
             if start_index < 0 or start_index > len(dataset):
                 raise ValueError(
@@ -247,7 +258,7 @@ class Evaluator:
             raise ValueError("`sqlite_output` is required when sqlite column mappings are provided.")
 
         with torch.set_grad_enabled(needs_grad):
-            for batch in iter_batches(
+            for batch_index, batch in enumerate(iter_batches(
                 dataset=dataset,
                 batch_size=self.batch_size,
                 device=model_device,
@@ -255,14 +266,30 @@ class Evaluator:
                 desc=desc,
                 num_workers=self.num_workers,
                 pin_memory=self.pin_memory,
-            ):
+            )):
                 if needs_grad:
                     if properties.positions in batch:
                         batch[properties.positions].requires_grad_()
                     if properties.edge_diff in batch:
                         batch[properties.edge_diff].requires_grad_()
 
+                true_energy = batch.get(properties.energy)
+                if isinstance(true_energy, torch.Tensor):
+                    true_energy = true_energy.detach().cpu().numpy().reshape(-1)
+                true_forces = batch.get(properties.forces)
+                if isinstance(true_forces, torch.Tensor):
+                    true_forces = true_forces.detach().cpu().numpy()
+
+                if self.benchmark and model_device.type == "cuda":
+                    torch.cuda.synchronize(model_device)
+                start = time.perf_counter() if self.benchmark else None
                 outputs = self.model(batch)
+                if self.benchmark and model_device.type == "cuda":
+                    torch.cuda.synchronize(model_device)
+                if self.benchmark and batch_index >= self.benchmark_warmup_batches:
+                    benchmark_seconds += time.perf_counter() - start
+                    benchmark_batches += 1
+                    benchmark_structures += int(batch[properties.n_atoms].numel())
                 if not isinstance(outputs, dict):
                     raise RuntimeError("Model output must be a dict with energy/forces.")
                 if db is not None:
@@ -281,16 +308,10 @@ class Evaluator:
                 if isinstance(pred_forces, torch.Tensor):
                     pred_forces = pred_forces.detach().cpu().numpy()
 
-                true_energy = batch.get(properties.energy)
-                if isinstance(true_energy, torch.Tensor):
-                    true_energy = true_energy.detach().cpu().numpy().reshape(-1)
-                true_forces = batch.get(properties.forces)
-                if isinstance(true_forces, torch.Tensor):
-                    true_forces = true_forces.detach().cpu().numpy()
-
                 if pred_energy is not None and true_energy is not None:
                     labels["energy_true"].extend(true_energy.tolist())
                     labels["energy_pred"].extend(pred_energy.tolist())
+                    labels["n_atoms"].extend(batch[properties.n_atoms].detach().cpu().view(-1).tolist())
 
                 if pred_forces is not None and true_forces is not None:
                     labels["forces_true"].append(true_forces)
@@ -298,6 +319,15 @@ class Evaluator:
                     if properties.Z in batch:
                         labels["atomic_numbers"].append(batch[properties.Z].detach().cpu().numpy())
 
+        if benchmark_structures:
+            labels["throughput"] = {
+                "warmup_batches": self.benchmark_warmup_batches,
+                "timed_batches": benchmark_batches,
+                "timed_structures": benchmark_structures,
+                "seconds": benchmark_seconds,
+            }
+        if owned_dataset is not None and hasattr(owned_dataset.db, "close"):
+            owned_dataset.db.close()
         return labels
 
     def calculate_metrics(self, labels: Dict[str, Any]) -> Dict[str, Any]:
@@ -313,6 +343,10 @@ class Evaluator:
                 "rmse": float(np.sqrt(np.mean(e_err ** 2))),
                 "count": int(e_true.size),
             }
+            if len(labels["n_atoms"]) == e_true.size:
+                n_atoms = np.asarray(labels["n_atoms"])
+                metrics["energy"]["mae_per_atom"] = float(np.mean(np.abs(e_err) / n_atoms))
+                metrics["energy"]["rmse_per_atom"] = float(np.sqrt(np.mean((e_err / n_atoms) ** 2)))
         else:
             log.warning("No reference energies found; skipping energy metrics/plots.")
 
@@ -340,6 +374,15 @@ class Evaluator:
                     metrics["forces"]["norm_mae_by_element"] = per_elem
         else:
             log.warning("No reference forces found; skipping force metrics/plots.")
+
+        if labels.get("throughput"):
+            timing = labels["throughput"]
+            samples_per_second = timing["timed_structures"] / timing["seconds"]
+            metrics["throughput"] = {
+                **timing,
+                "samples_per_second": samples_per_second,
+                "ns_per_day_at_1fs": samples_per_second * 0.0864,
+            }
 
         return metrics
 
