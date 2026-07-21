@@ -2,3 +2,5 @@ teacher_model_path: null     # checkpoint, compiled model, or run directory used
 teacher_labels_path: null    # optional sqlite override; defaults to run_path/distill_dataset/{dataset,train,val,test}.sqlite
 teacher_cfg: null            # optional cfg override when loading older teacher checkpoints
 overwrite: false             # regenerate sqlite even if the target file already exists
+resume: false                # append missing source rows to an existing partial sqlite
+label_scope: dataset         # dataset | split; default labels the full datapath once so split/seed changes can reuse it

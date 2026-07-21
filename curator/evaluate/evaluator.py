@@ -1,9 +1,10 @@
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Iterable, List, Optional, Union
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader, Dataset
 
 from curator.data import AseDataset, properties
 from curator.data._data_reader import AseDataReader
@@ -62,21 +63,43 @@ class Evaluator:
             raise RuntimeError("Failed to infer model cutoff; please pass a data_reader with cutoff.")
         return AseDataReader(cutoff=cutoff, compute_neighbor_list=True)
 
-    def _resolve_output_dir(self, datapath: Union[str, List[str]]) -> Path:
+    def _resolve_output_dir(self, datapath: Union[str, List[str], Dataset, DataLoader]) -> Path:
         if isinstance(datapath, (str, Path)):
             tag = Path(datapath).stem or "dataset"
         elif isinstance(datapath, list) and datapath:
             tag = Path(datapath[0]).stem if len(datapath) == 1 else "multi_dataset"
+        elif isinstance(datapath, DataLoader):
+            tag = datapath.dataset.__class__.__name__ if hasattr(datapath, "dataset") else "dataloader"
+        elif isinstance(datapath, Dataset):
+            tag = datapath.__class__.__name__
         else:
             tag = "dataset"
         return (self.output_dir / tag).resolve()
 
+    def _iter_dataset_transforms(self, dataset) -> Iterable[object]:
+        seen = set()
+
+        def visit(obj):
+            obj_id = id(obj)
+            if obj_id in seen:
+                return
+            seen.add(obj_id)
+            for transform in getattr(obj, "transforms", []) or []:
+                yield transform
+            nested = getattr(obj, "dataset", None)
+            if nested is not None:
+                yield from visit(nested)
+
+        yield from visit(dataset)
+
     def evaluate(
         self,
-        datapath: Union[str, List[str]],
+        datapath: Union[str, List[str], Dataset, DataLoader],
         sqlite_output: Optional[Union[str, Path]] = None,
         batch_columns: Optional[Dict[str, str]] = None,
         output_columns: Optional[Dict[str, str]] = None,
+        sqlite_append: bool = False,
+        start_index: int = 0,
     ) -> None:
         out_dir = self._resolve_output_dir(datapath)
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -93,6 +116,8 @@ class Evaluator:
             sqlite_output=resolved_sqlite,
             batch_columns=batch_columns,
             output_columns=output_columns,
+            sqlite_append=sqlite_append,
+            start_index=start_index,
         )
         metrics = self.calculate_metrics(labels)
         self.save_results(out_dir, labels, metrics)
@@ -103,10 +128,12 @@ class Evaluator:
 
     def get_labels(
         self,
-        datapath: Union[str, List[str]],
+        datapath: Union[str, List[str], Dataset, DataLoader],
         sqlite_output: Optional[Union[str, Path]] = None,
         batch_columns: Optional[Dict[str, str]] = None,
         output_columns: Optional[Dict[str, str]] = None,
+        sqlite_append: bool = False,
+        start_index: int = 0,
     ) -> Dict[str, Any]:
         reader = self._init_reader()
         batch_columns = {} if batch_columns is None else {str(key): str(value) for key, value in batch_columns.items()}
@@ -147,15 +174,30 @@ class Evaluator:
                 if isinstance(transform, NeighborListTransform):
                     transform.requires_grad = True
 
-        dataset = AseDataset(
-            datapath,
-            cutoff=reader.cutoff,
-            compute_neighbor_list=reader.compute_neighbor_list,
-            transforms=reader.transforms,
-            default_dtype=reader.default_dtype,
-            task="ase",
-            return_atoms_data=True,
-        )
+        if isinstance(datapath, (Dataset, DataLoader)):
+            dataset = datapath
+            if needs_grad:
+                from curator.data._neighborlist import NeighborListTransform
+
+                for transform in self._iter_dataset_transforms(dataset):
+                    if isinstance(transform, NeighborListTransform):
+                        transform.requires_grad = True
+        else:
+            dataset = AseDataset(
+                datapath,
+                cutoff=reader.cutoff,
+                compute_neighbor_list=reader.compute_neighbor_list,
+                transforms=reader.transforms,
+                default_dtype=reader.default_dtype,
+                task="ase",
+                return_atoms_data=True,
+            )
+        if start_index:
+            if start_index < 0 or start_index > len(dataset):
+                raise ValueError(
+                    f"start_index must be between 0 and {len(dataset)}, got {start_index}."
+                )
+            dataset = torch.utils.data.Subset(dataset, range(start_index, len(dataset)))
         labels["num_structures"] = len(dataset) if hasattr(dataset, "__len__") else 0
         desc = f"evaluate size={labels['num_structures'] if labels['num_structures'] else '?'} bs={self.batch_size}"
 
@@ -187,13 +229,20 @@ class Evaluator:
 
             sqlite_output = Path(sqlite_output).expanduser()
             if sqlite_output.exists():
-                raise FileExistsError(f"SQLite file already exists: {sqlite_output}")
-            sqlite_output.parent.mkdir(parents=True, exist_ok=True)
-            db = QMDatabase(
-                str(sqlite_output),
-                flags=apsw.SQLITE_OPEN_READWRITE | apsw.SQLITE_OPEN_CREATE,
-                extra_columns=extra_columns,
-            )
+                if not sqlite_append:
+                    raise FileExistsError(f"SQLite file already exists: {sqlite_output}")
+                db = QMDatabase(
+                    str(sqlite_output),
+                    flags=apsw.SQLITE_OPEN_READWRITE,
+                    extra_columns=extra_columns,
+                )
+            else:
+                sqlite_output.parent.mkdir(parents=True, exist_ok=True)
+                db = QMDatabase(
+                    str(sqlite_output),
+                    flags=apsw.SQLITE_OPEN_READWRITE | apsw.SQLITE_OPEN_CREATE,
+                    extra_columns=extra_columns,
+                )
         elif batch_columns or output_columns:
             raise ValueError("`sqlite_output` is required when sqlite column mappings are provided.")
 

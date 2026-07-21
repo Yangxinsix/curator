@@ -1,5 +1,6 @@
 
 defaults:
+  - _self_
   - trainer: default_trainer       # training loop and callbacks used by PyTorch Lightning
   - task: default_task             # task-specific model wrapper (losses, optimizer, scheduler)
   - model: nnp                     # base model architecture to train
@@ -7,7 +8,6 @@ defaults:
   - optional model/repr_params: ${model/representation}_params  # representation-specific hyperparameters (batch size, optimizer, lr, etc.)
   - optional task/output_params: ${task/outputs}_params         # task output-specific overrides
   - finetune: full                 # training policy: `full`, `head_only`, `lora`
-  - _self_
 
 # Some parameters that are important for training
 seed: 3407                         # random seed for reproducibility

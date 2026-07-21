@@ -24,6 +24,37 @@ def _missing_atoms_value(key: str, atoms: Dict[str, torch.Tensor]) -> torch.Tens
     return torch.tensor([])
 
 
+def _collate_tensor_property(key: str, tensors: List[torch.Tensor]) -> torch.Tensor:
+    if key.endswith(properties.energy_hessian_projected) or key.endswith(
+        properties.energy_hessian_probe_vectors
+    ):
+        num_probes = tensors[0].shape[0]
+        if any(value.dim() != 3 or value.shape[0] != num_probes for value in tensors):
+            raise ValueError(
+                f"Cannot collate '{key}': expected [num_probes, n_atoms, 3] "
+                "with the same num_probes for every structure."
+            )
+        return torch.cat(tensors, dim=1)
+
+    if key.endswith(properties.energy_hessian):
+        total_atoms = sum(value.shape[0] for value in tensors)
+        collated = tensors[0].new_zeros((total_atoms, 3, total_atoms, 3))
+        offset = 0
+        for value in tensors:
+            num_atoms = value.shape[0]
+            expected = (num_atoms, 3, num_atoms, 3)
+            if tuple(value.shape) != expected:
+                raise ValueError(
+                    f"Cannot collate '{key}': expected per-structure Hessian "
+                    f"shape {expected}, got {tuple(value.shape)}."
+                )
+            collated[offset : offset + num_atoms, :, offset : offset + num_atoms, :] = value
+            offset += num_atoms
+        return collated
+
+    return cat_tensors(tensors)
+
+
 def _collate_atoms_dicts(atoms_list: List[Dict[str, torch.Tensor]], pin_memory: bool) -> Dict[str, torch.Tensor]:
     keys = []
     for atoms in atoms_list:
@@ -36,7 +67,7 @@ def _collate_atoms_dicts(atoms_list: List[Dict[str, torch.Tensor]], pin_memory: 
     }
     pin = (lambda x: x.pin_memory()) if pin_memory else (lambda x: x)
 
-    collated = {k: pin(cat_tensors(v)) for k, v in dict_of_lists.items()}
+    collated = {k: pin(_collate_tensor_property(k, v)) for k, v in dict_of_lists.items()}
 
     image_idx = torch.repeat_interleave(
         torch.arange(len(atoms_list)), collated[properties.n_atoms], dim=0
@@ -115,7 +146,7 @@ def collate_atoms_data(samples: List[Any], pin_memory: bool = False) -> Dict[str
                 mask_vals.append(True)
             values.append(val)
 
-        targets_batch[key] = cat_tensors(values)
+        targets_batch[key] = _collate_tensor_property(key, values)
         masks[key] = torch.tensor(mask_vals, dtype=torch.bool)
         collated[key] = targets_batch[key]
 

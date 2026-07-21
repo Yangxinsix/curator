@@ -142,6 +142,7 @@ def sample_hessian_projections(
     forces: torch.Tensor,
     positions: torch.Tensor,
     num_probes: int,
+    n_atoms: Optional[torch.Tensor] = None,
     probe_vectors: Optional[torch.Tensor] = None,
     create_graph: bool = False,
     vectorize: bool = True,
@@ -169,8 +170,18 @@ def sample_hessian_projections(
             )
 
     if normalize_probes:
-        denom = probe_vectors.flatten(1).norm(dim=1).clamp_min(1e-12).view(-1, 1, 1)
-        probe_vectors = probe_vectors / denom
+        if n_atoms is None:
+            denom = probe_vectors.flatten(1).norm(dim=1).clamp_min(1e-12).view(-1, 1, 1)
+            probe_vectors = probe_vectors / denom
+        else:
+            probe_vectors = probe_vectors.clone()
+            offset = 0
+            for count in n_atoms.tolist():
+                stop = offset + int(count)
+                block = probe_vectors[:, offset:stop]
+                denom = block.flatten(1).norm(dim=1).clamp_min(1e-12).view(-1, 1, 1)
+                probe_vectors[:, offset:stop] = block / denom
+                offset = stop
 
     projected = -get_jacobian(
         forces,
@@ -180,6 +191,30 @@ def sample_hessian_projections(
         vectorize=vectorize,
     )
     return probe_vectors, projected
+
+
+def project_hessian(
+    energy_hessian: torch.Tensor,
+    probe_vectors: torch.Tensor,
+) -> torch.Tensor:
+    """Apply a full, possibly block-diagonal Hessian to dense probes."""
+    if energy_hessian.dim() != 4:
+        raise ValueError(
+            "Energy Hessian must have shape [n_atoms, 3, n_atoms, 3], "
+            f"got {tuple(energy_hessian.shape)}."
+        )
+    if probe_vectors.dim() != 3:
+        raise ValueError(
+            "Energy Hessian probes must have shape [num_probes, n_atoms, 3], "
+            f"got {tuple(probe_vectors.shape)}."
+        )
+    expected = (energy_hessian.shape[2], energy_hessian.shape[3])
+    if tuple(probe_vectors.shape[1:]) != expected:
+        raise ValueError(
+            "Energy Hessian and probe dimensions do not match: expected probes "
+            f"with trailing shape {expected}, got {tuple(probe_vectors.shape[1:])}."
+        )
+    return torch.einsum("aibj,kbj->kai", energy_hessian, probe_vectors)
 
 
 def sample_hessian_indices(
@@ -356,6 +391,7 @@ class EnergyHessianOutput(torch.nn.Module):
                 forces,
                 positions,
                 num_probes=int(self.num_probes or probe_vectors.shape[0]),
+                n_atoms=data[properties.n_atoms],
                 probe_vectors=probe_vectors,
                 create_graph=create_graph,
                 vectorize=self.vectorize,

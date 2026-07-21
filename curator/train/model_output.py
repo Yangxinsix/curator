@@ -255,6 +255,7 @@ class DistillOutput(ModelOutput):
         teacher_cfg: Optional[Any] = None,
         only_train: bool = True,
         cache_key: Optional[str] = None,
+        teacher_projection_probe_key: Optional[str] = None,
     ) -> None:
         super().__init__(
             name=name,
@@ -280,7 +281,12 @@ class DistillOutput(ModelOutput):
         )
         self.only_train = bool(only_train)
         self.cache_key = cache_key or self.teacher_model_path or self.name
+        self.teacher_projection_probe_key = teacher_projection_probe_key
         self._teacher_state: Dict[str, Any] = {}
+        self._student_rescale_layers = []
+
+    def bind_rescale_layers(self, layers) -> None:
+        self._student_rescale_layers = list(layers)
 
     def _teacher_target_from_batch(self, target: Dict) -> torch.Tensor:
         if self.teacher_property not in target:
@@ -288,7 +294,26 @@ class DistillOutput(ModelOutput):
                 f"Offline distillation batch is missing '{self.teacher_property}'. "
                 f"Available keys: {sorted(target.keys())}"
             )
-        return target[self.teacher_property]
+        value = target[self.teacher_property]
+        if self.student_property in {
+            properties.energy_hessian,
+            properties.energy_hessian_sampled,
+            properties.energy_hessian_projected,
+        }:
+            for layer in self._student_rescale_layers:
+                rescale = layer
+                if hasattr(layer, "domain_modules"):
+                    rescale = layer.domain_modules[layer._get_domain(target)]
+                for scale in getattr(rescale, "scales", []):
+                    if scale.key == properties.energy:
+                        value = value / scale.scale
+            return value
+
+        normalized = target.copy()
+        normalized[self.student_property] = value
+        for layer in self._student_rescale_layers:
+            normalized = layer.unscale(normalized, force_process=True)
+        return normalized[self.student_property]
 
     def _resolve_teacher_model(self, reference: torch.Tensor):
         teacher = self._teacher_state.get("model")
@@ -364,6 +389,19 @@ class DistillOutput(ModelOutput):
             teacher_value = teacher_pred[self.teacher_output_property]
         else:
             teacher_value = self._teacher_target_from_batch(target)
+
+        if self.teacher_projection_probe_key is not None:
+            if self.teacher_projection_probe_key not in pred:
+                raise KeyError(
+                    "Dynamic projected-Hessian distillation requires probe key "
+                    f"'{self.teacher_projection_probe_key}'. Available keys: {sorted(pred.keys())}"
+                )
+            from curator.layer._energy_hessian import project_hessian
+
+            teacher_value = project_hessian(
+                teacher_value,
+                pred[self.teacher_projection_probe_key],
+            )
 
         target[self.target_property] = teacher_value
         if not apply_sampling:

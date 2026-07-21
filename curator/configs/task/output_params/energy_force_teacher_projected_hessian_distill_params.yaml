@@ -14,14 +14,17 @@ model:
         - forces
     energy_hessian_output:
       _target_: curator.layer.EnergyHessianOutput
-      vectorize: false
       model_outputs:
-        - energy_hessian_sampled
-        - energy_hessian_sample_indices
-      num_samples: ${task.hessian_num_samples}
-      mask_key: ${task.hessian_mask_key}
+        - energy_hessian_projected
+      num_probes: ${task.projected_hessian.num_probes}
+      probe_key: energy_hessian_probe_vectors
+      vectorize: ${oc.select:task.projected_hessian.vectorize,false}
     global_rescale_shift:
       _target_: curator.layer.GlobalRescaleShift
 task:
-  hessian_num_samples: 4
-  hessian_mask_key: null
+  loss_weights:
+    energy_hessian_projected_distill: 1.0
+  projected_hessian:
+    num_probes: 4
+    normalize: true
+    distribution: rademacher
