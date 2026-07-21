@@ -26,7 +26,7 @@
 
 ---
 
-CURATOR is a config-driven framework for building robust machine-learned interatomic potentials (MLIPs). It brings equivariant neural networks, atomistic simulation, uncertainty-aware batch selection, first-principles labeling, evaluation, and deployment into a single workflow.
+CURATOR is a config-driven framework for building robust machine-learned interatomic potentials (MLIPs). It brings equivariant neural networks, model fine-tuning and knowledge distillation, atomistic simulation, uncertainty-aware batch selection, first-principles labeling, evaluation, and deployment into a single workflow.
 
 <p align="center">
   <b>Reference data</b> &nbsp;→&nbsp; <b>Train</b> &nbsp;→&nbsp; <b>Simulate</b> &nbsp;→&nbsp; <b>Select</b> &nbsp;→&nbsp; <b>Label</b> &nbsp;↺
@@ -38,18 +38,18 @@ Every stage can run independently, while [MyQueue](https://myqueue.readthedocs.i
 
 ## Why CURATOR
 
-| | What CURATOR provides |
+| | Where CURATOR is strongest |
 |---|---|
-| **Models** | Native [PaiNN](https://arxiv.org/abs/2102.03150), [NequIP](https://arxiv.org/abs/2101.03164), and [MACE](https://arxiv.org/abs/2206.07697) representations; trainable Allegro and eSEN backbone wrappers; external model adapters for MACE, NequIP, Allegro, MatGL, and eSEN. |
-| **Training** | PyTorch Lightning training, distributed execution, energy/force/virial objectives, multi-domain datasets, full/head-only/LoRA fine-tuning, and teacher distillation with Hessian-aware objectives. |
-| **Exploration** | ASE molecular dynamics, geometry optimization and NEB, plus TorchSim and LAMMPS execution paths. |
-| **Uncertainty** | Ensemble and Mahalanobis uncertainty, uncertainty-aware simulation callbacks, and early stopping for out-of-domain structures. |
-| **Selection** | Gradient and latent-feature kernels with max-diagonal, max-distance, max-determinant, LCMD, deterministic CUR, and DIRECT/BIRCH batch selection. |
-| **Labeling** | Configurable VASP and GPAW annotators, split labeling jobs, ASE database tracking, and automatic dataset append. |
-| **Evaluation** | Energy/force metrics, parity plots, error histograms, raw prediction export, and single-model or ensemble evaluation. |
-| **Deployment** | TorchScript and LAMMPS ML-IAP export, uncertainty-enabled ensembles, e3nn ↔ cuEquivariance conversion, MACE interoperability, and checkpoint upgrades. |
+| **Models** | **PaiNN · NequIP · MACE · Allegro · eSEN · MatGL.** Train CURATOR's native architectures, attach CURATOR heads to external backbones, or bring pretrained models into the same workflow through dedicated adapters. |
+| **Training** | **Train, adapt, or compress.** PyTorch Lightning powers distributed training and composite energy/force/virial/Hessian objectives; full, head-only, and LoRA **fine-tuning** sit alongside hessian-based **knowledge distillation**. |
+| **Exploration** | Run ASE or **TorchSim** directly, or use **`pair_style curator`** and **`pair_style mliap unified`** in LAMMPS. |
+| **Uncertainty** | **Uncertainty-aware simulation** Ensemble disagreement and Mahalanobis distance can be evaluated at run time, globally or per atom. |
+| **Selection** | **Model-aware data curation.** Build feature space from gradient-based or learned latent features, then collect structures with active learning algorithms like **LCMD** or **DIRECT/BIRCH**,  Max-distance, max-determinant, and CUR.
+| **Labeling** | VASP and GPAW adapters for DFT labeling. |
+| **Evaluation** | Built-in energy/force metrics and diagnostic plots support. |
+| **Deployment** | Produce TorchScript for `pair_style curator` or ML-IAP models for `mliap`; augment a trained model with **uncertainty** (ensemble or Mahalanobis); **cuEquivariance** or **OpenEquivariance** backends. |
 
-CURATOR keeps these capabilities composable through [Hydra](https://hydra.cc/) configuration. Swap a representation, simulator, uncertainty method, optimizer, or fine-tuning policy without rewriting the pipeline.
+All stages use the same YAML configuration system without requiring the full workflow to run as one monolith.
 
 ## Installation
 
@@ -188,7 +188,7 @@ curator/configs/
 ├── data/                   # single- and multi-domain datasets
 ├── finetune/               # full, head-only, LoRA
 ├── simulator/              # engines, callbacks, uncertainty
-├── task/                   # objectives, optimizers, schedulers
+├── task/                   # objectives, distillation, optimizers, schedulers
 ├── trainer/                # Lightning runtime, logging, callbacks
 └── annotator/              # VASP and GPAW labeling
 ```
@@ -197,6 +197,7 @@ curator/configs/
 
 - [Documentation](https://curator-gnn.readthedocs.io/en/latest/)
 - [Training tutorial](https://curator-gnn.readthedocs.io/en/latest/tutorials/training.html)
+- [Fine-tuning and knowledge distillation](https://curator-gnn.readthedocs.io/en/latest/tutorials/fine_tuning_and_distillation.html)
 - [LAMMPS interface guide](interface/README.md)
 - [LAMMPS ML-IAP documentation](docs/source/interface/lammps_mliap.rst)
 - [OpenMM interface notes](docs/source/interface/openmm.rst)
@@ -218,7 +219,3 @@ If CURATOR contributes to your research, please cite the [CURATOR preprint](http
   doi     = {10.26434/chemrxiv-2024-p5t3l}
 }
 ```
-
-## License
-
-CURATOR is distributed under the [MIT License](LICENSE). Copyright © 2024 Technical University of Denmark.
