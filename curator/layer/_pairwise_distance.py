@@ -9,6 +9,16 @@ def get_pair_distance(data: properties.Type, force_process: bool=False) -> prope
         edge_diff = pos[edge[:, 1]] - pos[edge[:, 0]]
         if properties.cell_displacements in data:
             edge_diff = edge_diff + data[properties.cell_displacements]
+        elif properties.edge_diff in data:
+            # Some periodic neighbor-list backends provide the already shifted
+            # edge vector but not the cell displacement separately. Recover the
+            # constant image shift from the reference geometry so gradients still
+            # flow through positions without collapsing periodic self-images to
+            # zero-length edges.
+            reference_pair_diff = (
+                pos.detach()[edge[:, 1]] - pos.detach()[edge[:, 0]]
+            )
+            edge_diff = edge_diff + data[properties.edge_diff].detach() - reference_pair_diff
         data[properties.edge_diff] = edge_diff 
         data[properties.edge_dist] = torch.linalg.norm(edge_diff, dim=1)
     

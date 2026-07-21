@@ -24,9 +24,19 @@ _DISTILL_OUTPUT_GROUPS = {
     "energy_force_hessian": "energy_force_hessian_distill",
     "energy_force_hessian_distill": "energy_force_hessian_distill",
     "hessian": "energy_force_hessian_distill",
+    "energy_force_teacher_hessian": "energy_force_teacher_hessian_distill",
+    "energy_force_teacher_hessian_distill": "energy_force_teacher_hessian_distill",
+    "teacher_hessian": "energy_force_teacher_hessian_distill",
     "energy_force_projected_hessian": "energy_force_projected_hessian_distill",
     "energy_force_projected_hessian_distill": "energy_force_projected_hessian_distill",
     "projected_hessian": "energy_force_projected_hessian_distill",
+    "energy_force_teacher_projected_hessian": "energy_force_teacher_projected_hessian_distill",
+    "energy_force_teacher_projected_hessian_distill": "energy_force_teacher_projected_hessian_distill",
+    "teacher_projected_hessian": "energy_force_teacher_projected_hessian_distill",
+    "energy_force_teacher_dynamic_projected_hessian": "energy_force_teacher_dynamic_projected_hessian_distill",
+    "energy_force_teacher_dynamic_projected_hessian_distill": "energy_force_teacher_dynamic_projected_hessian_distill",
+    "teacher_dynamic_projected_hessian": "energy_force_teacher_dynamic_projected_hessian_distill",
+    "dynamic_projected_hessian": "energy_force_teacher_dynamic_projected_hessian_distill",
 }
 
 _STANDARD_OUTPUT_GROUPS = {
@@ -234,6 +244,7 @@ def build_train_config(request: Mapping[str, Any]) -> DictConfig:
             ("teacher_labels_path", "teacher_labels_path"),
             ("teacher_cfg", "teacher_cfg"),
             ("overwrite", "overwrite"),
+            ("resume", "resume"),
             ("label_scope", "label_scope"),
         ):
             if source_key in distill:

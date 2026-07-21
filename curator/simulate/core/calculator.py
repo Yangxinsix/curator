@@ -38,7 +38,10 @@ class MLCalculator(Calculator):
         self.model.eval()
         self.model_device = next(self.model.parameters()).device
         if cutoff is None:
-            cutoff = find_layer_by_name_recursive(self.model, 'cutoff')
+            # Official/exported MACE `.model` files may not retain a
+            # discoverable cutoff module. MACE medium uses 5 Å, matching
+            # the fallback used by the uncertainty feature pipeline.
+            cutoff = find_layer_by_name_recursive(self.model, 'cutoff') or 5.0
         
         assert cutoff is not None, "Valid cutoff value should be given or inferred from model!"
         self.ase_data_reader = AseDataReader(cutoff, compute_neighbor_list=compute_neighbor_list, transforms=transforms)

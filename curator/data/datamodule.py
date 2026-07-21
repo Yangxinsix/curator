@@ -779,31 +779,32 @@ class AtomsDataModule(pl.LightningDataModule):
         if isinstance(heads, str):
             heads = [heads]
 
-        rescale_heads = [properties.energy]
-        for h in self.rescale_shift_heads or []:
-            if h not in rescale_heads:
-                rescale_heads.append(h)
+        configured_heads = resolve_heads(heads)
+        configured_by_key = {h.key: h for h in configured_heads}
+        rescale_keys = [properties.energy]
+        for key in self.rescale_shift_heads or []:
+            if key not in rescale_keys:
+                rescale_keys.append(key)
 
-        display_heads = list(heads)
-        for h in rescale_heads:
-            if h not in display_heads:
-                display_heads.append(h)
+        rescale_config = {
+            key: configured_by_key.get(key, resolve_heads([key])[0])
+            for key in rescale_keys
+        }
+        display_config = list(configured_heads)
+        display_keys = {h.key for h in display_config}
+        for key, head in rescale_config.items():
+            if key not in display_keys:
+                display_config.append(head)
+                display_keys.add(key)
 
         ctx = None
         try:
-            resolved = resolve_heads(rescale_heads)
-            ctx = self.build_context(resolved)
+            ctx = self.build_context(list(rescale_config.values()))
         except Exception:
             ctx = None
 
-        rescale_config = {}
-        try:
-            rescale_config = {h.key: h for h in resolve_heads(rescale_heads)}
-        except Exception:
-            rescale_config = {}
-
         head_parts = []
-        for h in resolve_heads(display_heads):
+        for h in display_config:
             rescale_head = rescale_config.get(h.key)
             if rescale_head is None:
                 head_parts.append(str(h.key))
