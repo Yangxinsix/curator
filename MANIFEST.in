@@ -1,8 +1,7 @@
 include README.md
+include .github/scripts/check_native_wheel.py
 
-recursive-include curator *.py
-recursive-include curator *.cpp
-recursive-include curator *.yaml *.yml *.toml *.json *.txt
+recursive-include curator *.py *.cpp *.yaml
 recursive-include scripts *
 
 global-exclude *.pyc

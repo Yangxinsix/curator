@@ -3,7 +3,7 @@ import torch
 from typing import Union, Optional, List, Dict, Callable, Tuple, Literal
 from dataclasses import dataclass, field
 from ._transform import Transform
-from ._neighborlist import NeighborListTransform, TorchNeighborList
+from ._neighborlist import NeighborListTransform, NativeNeighborList
 from .dataset import collate_atomsdata, AseDataset
 from .atoms_data import get_sample_atoms, get_sample_target
 import math
@@ -403,7 +403,7 @@ class AtomsDataModule(pl.LightningDataModule):
                         }
                         if ase_atoms.pbc.any():
                             atoms[properties.cell] = torch.tensor(ase_atoms.cell[:], dtype=self.default_dtype)
-                        atoms = TorchNeighborList(
+                        atoms = NativeNeighborList(
                             cutoff=self.cutoff,
                             wrap_atoms=True,
                             requires_grad=False,
@@ -417,8 +417,8 @@ class AtomsDataModule(pl.LightningDataModule):
                     n_atoms += atoms[properties.n_atoms].sum()
                     # TODO: add compute_neighbor_list here if neighbors are not computed
                     if not self.compute_neighbor_list and not any(isinstance(t, NeighborListTransform) for t in self.transforms):
-                        torch_nl = TorchNeighborList(cutoff=self.cutoff, wrap_atoms=True, requires_grad=False, return_distance=False)
-                        atoms = torch_nl(atoms)
+                        native_nl = NativeNeighborList(cutoff=self.cutoff, wrap_atoms=True, requires_grad=False, return_distance=False)
+                        atoms = native_nl(atoms)
                     n_neighbors += atoms[properties.n_pairs].sum()
             n_atoms_value = float(n_atoms.item()) if isinstance(n_atoms, torch.Tensor) else float(n_atoms)
             n_neighbors_value = float(n_neighbors.item()) if isinstance(n_neighbors, torch.Tensor) else float(n_neighbors)

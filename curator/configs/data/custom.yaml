@@ -5,7 +5,7 @@ train_path: null                         # explicit training data path (override
 val_path: null                           # explicit validation data path
 test_path: null                          # explicit test data path
 batch_size: 8                            # training batch size
-compute_neighbor_list: True              # precompute neighbor lists during loading
+compute_neighbor_list: True              # precompute neighbor lists with the native backend during loading
 cutoff: 5.0                              # cutoff radius used for neighbor finding
 num_train: 0.9                           # fraction or count of samples for training split
 num_val: 0.1                             # fraction or count of samples for validation split

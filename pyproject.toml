@@ -1,3 +1,22 @@
 [build-system]
-requires = ["setuptools>=42", "wheel"]
+requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
+
+[tool.cibuildwheel]
+build = "cp3{10,11,12,13}-*"
+skip = [
+    "*-manylinux_i686",
+    "*-musllinux_*",
+    "*-win32",
+]
+manylinux-x86_64-image = "manylinux2014"
+manylinux-aarch64-image = "manylinux2014"
+
+# Test the installed binary wheel without pulling CURATOR's full ML stack into
+# every build environment. Full dependency and model tests remain in normal CI.
+test-environment = { PIP_NO_DEPS = "1", PYTHONSAFEPATH = "1" }
+test-requires = ["numpy"]
+test-command = "python {project}/.github/scripts/check_native_wheel.py"
+
+audit-requires = ["twine"]
+audit-command = "twine check {wheel}"

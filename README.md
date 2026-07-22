@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/brand/curator-wordmark.png" alt="CURATOR" width="680">
+  <img src="https://raw.githubusercontent.com/Yangxinsix/curator/main/assets/brand/curator-wordmark.png" alt="CURATOR" width="680">
 </p>
 
 <p align="center">
@@ -62,6 +62,8 @@ python -m pip install --upgrade pip
 python -m pip install curator-torch
 ```
 
+Official wheels include CURATOR's native C++ neighbor list, which is the default backend for data loading. Installing from source instead requires a C++17 compiler and Python development headers.
+
 ### Latest development version
 
 ```bash
@@ -76,7 +78,7 @@ For the current development branch, Python 3.10 or newer is recommended.
 
 | Extra | Install command | Adds |
 |---|---|---|
-| Optimized neighbors | `python -m pip install "curator-torch[opt]"` | `torch-scatter`, ASAP3, and matscipy |
+| Performance extras | `python -m pip install "curator-torch[opt]"` | `torch-scatter` plus the alternative ASAP3 and matscipy neighbor backends |
 | cuEquivariance | `python -m pip install "curator-torch[cueq]"` | NVIDIA cuEquivariance acceleration |
 | TorchSim | `python -m pip install "curator-torch[torchsim]"` | TorchSim simulation backend |
 

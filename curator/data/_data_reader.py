@@ -9,7 +9,7 @@ from ase.io.trajectory import (
     SlicedTrajectory,
 )
 from . import properties
-from ._neighborlist import NeighborListTransform, TorchNeighborList
+from ._neighborlist import NeighborListTransform, NativeNeighborList
 from ._transform import Transform
 import warnings
 import sys
@@ -120,7 +120,7 @@ class AseDataReader(DataReader):
         if self.compute_neighbor_list:
             assert isinstance(self.cutoff, float), "Cutoff radius must be given when compute the neighbor list"
             if not any([isinstance(t, NeighborListTransform) for t in self.transforms]):
-                self.transforms.append(TorchNeighborList(cutoff=self.cutoff, return_cell_displacements=return_cell_displacements))
+                self.transforms.append(NativeNeighborList(cutoff=self.cutoff, return_cell_displacements=return_cell_displacements))
         
     def __call__(self, atoms: Atoms) -> Dict[str, torch.tensor]:
         # basic properties

@@ -1,6 +1,6 @@
 import torch
 from ._data_reader import AseDataReader, Trajectory
-from ._neighborlist import NeighborListTransform, Asap3NeighborList
+from ._neighborlist import NeighborListTransform, NativeNeighborList
 from typing import List, Union, Dict, Optional
 from ase.io.trajectory import TrajectoryReader
 from ase.io import read
@@ -151,7 +151,7 @@ class NumpyDataset(torch.utils.data.Dataset):
         if self.compute_neighbor_list:
             assert isinstance(self.cutoff, float), "Cutoff radius must be given when compute the neighbor list"
             if not any([isinstance(t, NeighborListTransform) for t in self.transforms]):
-                self.transforms.append(Asap3NeighborList(cutoff=self.cutoff))
+                self.transforms.append(NativeNeighborList(cutoff=self.cutoff))
         
     def __len__(self) -> int:
         return len(self.npdata['E'])

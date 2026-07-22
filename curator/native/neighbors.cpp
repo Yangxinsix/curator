@@ -131,18 +131,45 @@ bool pair_record_less(const PairRecord& left, const PairRecord& right) {
     return left.distance < right.distance;
 }
 
-int resolve_thread_count(int requested, std::size_t work_items) {
-    if (work_items < 4096) {
+int resolve_thread_count(int requested, std::size_t work_items, std::size_t chunk_size) {
+    if (requested < 0) {
+        throw std::runtime_error("num_threads must be non-negative");
+    }
+    if (work_items == 0) {
         return 1;
     }
+
+    const std::size_t chunk_count = (work_items + chunk_size - 1) / chunk_size;
+    if (requested > 0) {
+        return static_cast<int>(std::min<std::size_t>(
+            static_cast<std::size_t>(requested),
+            chunk_count
+        ));
+    }
+
+    // Spawning threads for small neighbor searches costs more than it saves.
+    // Keep auto mode conservative and bounded so that multiple data-loader
+    // workers cannot each fan out across every logical CPU.
+    constexpr std::size_t min_parallel_work_items = 20000;
+    constexpr std::size_t target_work_items_per_thread = 8192;
+    constexpr std::size_t max_auto_threads = 8;
+    if (work_items < min_parallel_work_items) {
+        return 1;
+    }
+
     unsigned int hardware = std::thread::hardware_concurrency();
     if (hardware == 0) {
         hardware = 1;
     }
-    int threads = requested > 0 ? requested : static_cast<int>(hardware);
-    threads = std::max(1, threads);
-    threads = std::min<int>(threads, static_cast<int>(work_items));
-    return threads;
+    const std::size_t useful_threads =
+        (work_items + target_work_items_per_thread - 1) / target_work_items_per_thread;
+    const std::size_t threads = std::min({
+        static_cast<std::size_t>(hardware),
+        max_auto_threads,
+        useful_threads,
+        chunk_count,
+    });
+    return static_cast<int>(std::max<std::size_t>(1, threads));
 }
 
 double dot(const Vec3& a, const Vec3& b) {
@@ -504,7 +531,15 @@ PyObject* py_neighbor_pairs(PyObject*, PyObject* args, PyObject* kwargs) {
         const Vec3 cvec = row(cell, 2);
 
         const std::size_t total_work = offsets.size() * static_cast<std::size_t>(count);
-        const int thread_count = resolve_thread_count(num_threads_requested, total_work);
+        const std::size_t chunk_size = std::max<std::size_t>(
+            1024,
+            static_cast<std::size_t>(count) / 4
+        );
+        const int thread_count = resolve_thread_count(
+            num_threads_requested,
+            total_work,
+            chunk_size
+        );
         std::vector<std::vector<PairRecord>> local_records(static_cast<std::size_t>(thread_count));
 
         auto scan_range = [&](std::size_t begin, std::size_t end, int thread_index) {
@@ -547,8 +582,6 @@ PyObject* py_neighbor_pairs(PyObject*, PyObject* args, PyObject* kwargs) {
                                     if (i_index >= j_index) {
                                         continue;
                                     }
-                                } else if (i_index == j_index) {
-                                    continue;
                                 }
 
                                 double local_cutoff = cutoff;
@@ -591,10 +624,6 @@ PyObject* py_neighbor_pairs(PyObject*, PyObject* args, PyObject* kwargs) {
                 scan_range(0, total_work, 0);
             } else {
                 std::atomic<std::size_t> next_work{0};
-                const std::size_t chunk_size = std::max<std::size_t>(
-                    1024,
-                    static_cast<std::size_t>(count) / 4
-                );
                 std::vector<std::thread> threads;
                 threads.reserve(static_cast<std::size_t>(thread_count));
                 for (int thread_index = 0; thread_index < thread_count; ++thread_index) {

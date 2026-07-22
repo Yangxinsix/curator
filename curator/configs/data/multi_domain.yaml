@@ -5,7 +5,7 @@ train_path: null                                      # unused for multi-domain 
 val_path: null                                        # unused for multi-domain mode; keep null
 test_path: null                                       # unused for multi-domain mode; keep null
 batch_size: 8                                         # default per-domain train batch size
-compute_neighbor_list: True                           # precompute neighbor lists during loading
+compute_neighbor_list: True                           # precompute neighbor lists with the native backend during loading
 cutoff: 5.0                                           # cutoff radius used for neighbor finding
 num_train: 0.9                                        # fraction/count of train samples per domain
 num_val: 0.1                                          # fraction/count of val samples per domain

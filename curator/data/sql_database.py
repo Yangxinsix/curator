@@ -6,7 +6,7 @@ import multiprocessing
 import torch
 import json
 from typing import Dict, Any, List, Optional
-from curator.data import properties, NeighborListTransform, TorchNeighborList
+from curator.data import properties, NeighborListTransform, NativeNeighborList
 from ase.data import chemical_symbols, atomic_numbers
 from ase import units
 
@@ -429,7 +429,7 @@ class Sqlite3Dataset(QMDatabase, torch.utils.data.Dataset):
         if self.compute_neighbor_list:
             assert isinstance(self.cutoff, float), "Cutoff radius must be given when compute the neighbor list"
             if not any([isinstance(t, NeighborListTransform) for t in self.transforms]):
-                self.transforms.append(TorchNeighborList(cutoff=self.cutoff, return_cell_displacements=return_cell_displacements))
+                self.transforms.append(NativeNeighborList(cutoff=self.cutoff, return_cell_displacements=return_cell_displacements))
         
     def __getitem__(self, idx):
         cursor = self._get_connection(flags=apsw.SQLITE_OPEN_READONLY).cursor()

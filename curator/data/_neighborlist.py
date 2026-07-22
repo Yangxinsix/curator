@@ -227,7 +227,11 @@ class TorchNeighborList(NeighborListTransform):
         return outputs
 
 class NativeNeighborList(NeighborListTransform):
-    """Neighbor list backed by CURATOR's native C++ cell-list kernel."""
+    """Neighbor list backed by CURATOR's native C++ cell-list kernel.
+
+    ``num_threads=0`` uses a bounded automatic policy. Positive values set an
+    upper bound on worker threads, which may be reduced for small workloads.
+    """
     def __init__(
         self,
         *args,
@@ -242,6 +246,8 @@ class NativeNeighborList(NeighborListTransform):
         self.wrap_atoms = wrap_atoms
         self.return_cell_displacements = return_cell_displacements
         self.num_threads = int(num_threads)
+        if self.num_threads < 0:
+            raise ValueError("num_threads must be non-negative")
 
     def _simple_neighbor_list(
         self,
@@ -316,6 +322,9 @@ class NativeNeighborList(NeighborListTransform):
         forward_diff = pos[pair_j] + shifts - pos[pair_i]
         reverse_diff = pos[pair_i] - shifts - pos[pair_j]
         edge_diff = torch.cat((forward_diff, reverse_diff), dim=0)
+        edge_order = torch.argsort(edge_idx[:, 0], stable=True)
+        edge_idx = edge_idx[edge_order]
+        edge_diff = edge_diff[edge_order]
         outputs = {
             properties.edge_idx: edge_idx,
             properties.edge_diff: edge_diff,
@@ -323,10 +332,10 @@ class NativeNeighborList(NeighborListTransform):
 
         if self.return_distance:
             distance = torch.as_tensor(result.distance, dtype=dtype, device=device)
-            outputs[properties.edge_dist] = torch.cat((distance, distance), dim=0)
+            outputs[properties.edge_dist] = torch.cat((distance, distance), dim=0)[edge_order]
 
         if self.return_cell_displacements:
-            outputs[properties.cell_displacements] = torch.cat((shifts, -shifts), dim=0)
+            outputs[properties.cell_displacements] = torch.cat((shifts, -shifts), dim=0)[edge_order]
 
         return outputs
 
@@ -442,7 +451,7 @@ class BatchNeighborList(nn.Module):
         cutoff: float, 
         requires_grad: bool=False, 
         return_distance: bool=False,
-        neighbor_list: Union[NeighborListTransform, Literal["MatScipy", "Torch", "Asap3", "Native"]] = 'Torch',
+        neighbor_list: Union[NeighborListTransform, Literal["MatScipy", "Torch", "Asap3", "Native"]] = 'Native',
     ) -> None:
         """Batch neighbor list
         

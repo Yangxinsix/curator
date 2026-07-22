@@ -38,6 +38,11 @@ def neighbor_pairs(
     pair_cutoffs: Any | None = None,
     num_threads: int = 0,
 ) -> NeighborPairs:
+    """Build undirected neighbor pairs with optional periodic offsets.
+
+    ``num_threads=0`` selects CURATOR's bounded automatic policy. A positive
+    value is treated as an upper bound; negative values are invalid.
+    """
     result = _neighbor_pairs(
         np.ascontiguousarray(positions, dtype=np.float64),
         float(cutoff),
