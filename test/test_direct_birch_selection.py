@@ -2,7 +2,15 @@ import pytest
 import torch
 
 from curator.select.kernel import FeatureKernelMatrix
-from curator.select.select import _call_selection, direct_birch, max_diag
+from curator.select.select import _call_selection, direct_birch, lcmd_greedy, max_diag
+
+
+def test_lcmd_does_not_select_duplicate_indices():
+    features = torch.tensor([[[1.0, 2.0], [1.0, 2.0], [3.0, 4.0]]])
+
+    selected = lcmd_greedy(FeatureKernelMatrix(features), batch_size=3, n_train=0)
+
+    assert selected.tolist() == [2, 0, 1]
 
 
 def test_direct_birch_selects_unique_pool_indices():

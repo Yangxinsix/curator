@@ -135,7 +135,6 @@ def max_det_greedy_local(matrix: KernelMatrix, batch_size: int, num_atoms: torch
 
 def lcmd_greedy(matrix: KernelMatrix, batch_size: int, n_train: int) -> torch.Tensor:
     """
-    Only accept matrix with double dtype!!!
     Selects batch elements by greedily picking those with the maximum distance in the largest cluster,
     including training points. Assumes that the last ``n_train`` columns of ``matrix`` correspond to training points.
 
@@ -146,10 +145,18 @@ def lcmd_greedy(matrix: KernelMatrix, batch_size: int, n_train: int) -> torch.Te
     """
     # assumes that the matrix contains pool samples, optionally followed by train samples
     n_pool = matrix.get_number_of_columns() - n_train
+    batch_size = min(batch_size, n_pool)
+    if batch_size <= 0:
+        return torch.empty(0, dtype=torch.long)
+
     sq_dists = matrix.get_diag()
     batch_idxs = [n_pool if n_train > 0 else torch.argmax(sq_dists)]
+    selected_mask = torch.zeros(n_pool, dtype=torch.bool, device=sq_dists.device)
+    if n_train == 0:
+        selected_mask[batch_idxs[0]] = True
     closest_idxs = torch.zeros((n_pool,), dtype=int, device=sq_dists.device)
     min_sq_dists = matrix.get_sq_dists(batch_idxs[-1])[:n_pool]
+    min_sq_dists[selected_mask] = 0
 
     for i in range(1, batch_size + n_train):
         if i < n_train:
@@ -157,15 +164,18 @@ def lcmd_greedy(matrix: KernelMatrix, batch_size: int, n_train: int) -> torch.Te
         else:
             bincount = torch.bincount(closest_idxs, weights=min_sq_dists, minlength=i)
             max_bincount = torch.max(bincount)
-            new_idx = torch.argmax(torch.where(
+            scores = torch.where(
                 torch.gather(bincount, 0, closest_idxs) == max_bincount, 
                 min_sq_dists, 
-                torch.zeros_like(min_sq_dists)-float("Inf")))
+                torch.zeros_like(min_sq_dists)-float("Inf"))
+            new_idx = torch.argmax(scores.masked_fill(selected_mask, float("-Inf")))
             batch_idxs.append(new_idx)
+            selected_mask[new_idx] = True
         sq_dists = matrix.get_sq_dists(batch_idxs[-1])[:n_pool]
         new_min = sq_dists < min_sq_dists
         closest_idxs = torch.where(new_min, i, closest_idxs)
         min_sq_dists = torch.where(new_min, sq_dists, min_sq_dists)
+        min_sq_dists[selected_mask] = 0
 
     return torch.hstack(batch_idxs[n_train:])
 
