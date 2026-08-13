@@ -249,25 +249,178 @@ class PerSpeciesScale(nn.Module):
 # High-level modules
 # --------------------------------------------------------------------------- #
 class GlobalRescaleShift(nn.Module):
+    """Compose physical corrections and transform normalized model outputs.
+
+    ``physical_contributions`` declares physical source tensors that contribute
+    additively to normalized model outputs. During training each source is
+    divided by the scale selected by ``scale_like`` before accumulation. During
+    evaluation the base prediction is first restored to physical units and the
+    physical source is then added directly.
+
+    ``normalized_copies`` keeps a physical source unchanged and writes a
+    separate normalized tensor, for example a physical chemical-potential
+    residual and its normalized loss value.
+
+    ``scale`` and ``unscale`` remain pure unit conversions; composition happens
+    only in ``forward``. Domain-specific handling is provided by
+    ``MultiDomainRescaleShift``.
     """
-    Rescale/shift outputs with per-property HeadConfig. Domain-specific handling is provided
-    by MultiDomainRescaleShift.
-    """
+
+    _force_scale_dependents: List[str]
+    _sync_head_keys: List[str]
+    _sync_atomwise_keys: List[str]
+    _sync_reductions: List[str]
+    _scale_keys: List[str]
+    _physical_contribution_sources: List[str]
+    _physical_contribution_destinations: List[str]
+    _physical_contribution_scale_keys: List[str]
+    _normalized_copy_sources: List[str]
+    _normalized_copy_destinations: List[str]
+    _normalized_copy_scale_keys: List[str]
 
     def __init__(
         self,
         heads: Optional[List[HeadConfig]] = None,
         scale_trainable: bool = False,
         shift_trainable: bool = False,
+        physical_contributions: Optional[List[Dict[str, str]]] = None,
+        normalized_copies: Optional[List[Dict[str, str]]] = None,
     ):
         super().__init__()
         if heads is not None and hasattr(heads, "get") and "heads" in heads:
             heads = heads.get("heads")
         if heads is None:
             heads = [HEAD_PRESETS["energy"]]
+        self._force_scale_dependents = torch.jit.annotate(
+            List[str],
+            [
+                properties.energy_hessian,
+                properties.energy_hessian_sampled,
+                properties.energy_hessian_projected,
+            ],
+        )
+        (
+            self._physical_contribution_sources,
+            self._physical_contribution_destinations,
+            self._physical_contribution_scale_keys,
+        ) = self._parse_output_relations(
+            physical_contributions,
+            relation_name="physical contribution",
+        )
+        (
+            self._normalized_copy_sources,
+            self._normalized_copy_destinations,
+            self._normalized_copy_scale_keys,
+        ) = self._parse_output_relations(
+            normalized_copies,
+            relation_name="normalized copy",
+        )
+        self.model_outputs = list(
+            dict.fromkeys(
+                self._physical_contribution_destinations
+                + self._normalized_copy_destinations
+            )
+        )
         # ensure heads are HeadConfig instances (keep explicit HeadConfig overrides)
         self.heads = resolve_heads(heads)
         self._initialize_transforms(scale_trainable=scale_trainable, shift_trainable=shift_trainable)
+
+    @staticmethod
+    def _parse_output_relations(
+        relations: Optional[List[Dict[str, str]]],
+        *,
+        relation_name: str,
+    ):
+        sources: List[str] = []
+        destinations: List[str] = []
+        scale_keys: List[str] = []
+        for relation in relations or []:
+            source = relation.get("source")
+            destination = relation.get("destination")
+            scale_like = relation.get("scale_like")
+            if not source or not destination or not scale_like:
+                raise ValueError(
+                    f"Each {relation_name} requires non-empty 'source', "
+                    "'destination', and 'scale_like' fields."
+                )
+            sources.append(str(source))
+            destinations.append(str(destination))
+            scale_keys.append(str(scale_like))
+        return sources, destinations, scale_keys
+
+    def get_scale(self, key: str) -> torch.Tensor:
+        """Return the configured normalization scale for an output key."""
+        for index, transform in enumerate(self.scales):
+            if self._scale_keys[index] == key:
+                return transform.scale
+        raise KeyError("No normalization scale is configured for " + key + ".")
+
+    def _compose_physical_contributions(
+        self,
+        data: properties.Type,
+        *,
+        normalize: bool,
+    ) -> properties.Type:
+        for index in range(len(self._physical_contribution_sources)):
+            source = self._physical_contribution_sources[index]
+            destination = self._physical_contribution_destinations[index]
+            if source not in data:
+                raise KeyError(
+                    "Physical contribution source " + source + " is missing."
+                )
+            if destination not in data:
+                raise KeyError(
+                    "Physical contribution destination "
+                    + destination
+                    + " is missing."
+                )
+            contribution = data[source]
+            if normalize:
+                contribution = contribution / self.get_scale(
+                    self._physical_contribution_scale_keys[index]
+                )
+            data[destination] = data[destination] + contribution
+        return data
+
+    def _write_normalized_copies(
+        self,
+        data: properties.Type,
+    ) -> properties.Type:
+        for index in range(len(self._normalized_copy_sources)):
+            source = self._normalized_copy_sources[index]
+            if source not in data:
+                raise KeyError(
+                    "Normalized-copy source " + source + " is missing."
+                )
+            destination = self._normalized_copy_destinations[index]
+            scale = self.get_scale(self._normalized_copy_scale_keys[index])
+            data[destination] = data[source] / scale
+        return data
+
+    def _apply_force_derivative_scale(
+        self,
+        data: properties.Type,
+        scale: torch.Tensor,
+        inverse: bool,
+    ) -> properties.Type:
+        """Apply the force scale to force derivatives that are present.
+
+        Hessian-like outputs inherit only the multiplicative force scale.  They
+        deliberately do not have independent transforms or receive a shift.
+        """
+        for key in self._force_scale_dependents:
+            if key in data:
+                value = data[key]
+                if not torch.jit.is_scripting() and isinstance(value, list):
+                    if inverse:
+                        data[key] = [item / scale for item in value]
+                    else:
+                        data[key] = [item * scale for item in value]
+                elif inverse:
+                    data[key] = value / scale
+                else:
+                    data[key] = value * scale
+        return data
 
     def _initialize_transforms(
         self,
@@ -354,6 +507,10 @@ class GlobalRescaleShift(nn.Module):
         self.shifts = nn.ModuleList(shifts)
         self.atomic_scales = nn.ModuleList(per_species_scales)
         self.atomic_shifts = nn.ModuleList(per_species_shifts)
+        self._scale_keys = torch.jit.annotate(
+            List[str],
+            [head.key for head in self.heads],
+        )
         self._configure_sync_reduced_outputs()
         self._initialized = not any(
             normalize_head_flag(h.scale_by) in ("default", "rms")
@@ -425,7 +582,18 @@ class GlobalRescaleShift(nn.Module):
         return data
 
     def forward(self, data: properties.Type) -> properties.Type:
-        return self.scale(data, force_process=False)
+        data = self._write_normalized_copies(data.copy())
+        if self.training:
+            data = self._sync_reduced_outputs(data)
+            return self._compose_physical_contributions(
+                data,
+                normalize=True,
+            )
+        data = self.scale(data, force_process=True)
+        return self._compose_physical_contributions(
+            data,
+            normalize=False,
+        )
 
     def scale(
         self,
@@ -438,6 +606,8 @@ class GlobalRescaleShift(nn.Module):
         # scale then shifts
         for sc in self.scales:
             data = sc(data)
+            if sc.key == properties.forces:
+                data = self._apply_force_derivative_scale(data, sc.scale, inverse=False)
         for sc in self.atomic_scales:
             data = sc(data)
         for sh in self.atomic_shifts:
@@ -488,7 +658,8 @@ class GlobalRescaleShift(nn.Module):
             target_key = sc.data_key if getattr(sc, "data_key", sc.key) in data else sc.key
             if target_key in data:
                 data[target_key] = data[target_key] / sc.scale
-
+            if sc.key == properties.forces:
+                data = self._apply_force_derivative_scale(data, sc.scale, inverse=True)
         return self._sync_reduced_outputs(data)
 
     def setup_from_context(self, ctx: DataContext):
@@ -622,11 +793,28 @@ class MultiDomainRescaleShift(nn.Module):
     Domain-aware wrapper holding one GlobalRescaleShift per domain. Selects by properties.domain at forward.
     """
 
-    def __init__(self, heads: List[HeadConfig]):
+    def __init__(
+        self,
+        heads: List[HeadConfig],
+        physical_contributions: Optional[List[Dict[str, str]]] = None,
+        normalized_copies: Optional[List[Dict[str, str]]] = None,
+    ):
         super().__init__()
         if hasattr(heads, "get") and "heads" in heads:
             heads = heads.get("heads")
         self.heads = resolve_heads(heads)
+        self.physical_contributions = list(physical_contributions or [])
+        self.normalized_copies = list(normalized_copies or [])
+        self.model_outputs = list(
+            dict.fromkeys(
+                [
+                    str(relation["destination"])
+                    for relation in (
+                        self.physical_contributions + self.normalized_copies
+                    )
+                ]
+            )
+        )
         self.domain_modules = nn.ModuleDict()
 
     def setup_from_datamodule(self, dm):
@@ -635,7 +823,11 @@ class MultiDomainRescaleShift(nn.Module):
             for domain_name, domain_dm in dm.domain_modules.items():
                 dom_id = str(getattr(dm, "domain_to_id", {}).get(domain_name, domain_name))
                 heads = _effective_rescale_heads(domain_dm)
-                grs = GlobalRescaleShift(heads=heads)
+                grs = GlobalRescaleShift(
+                    heads=heads,
+                    physical_contributions=self.physical_contributions,
+                    normalized_copies=self.normalized_copies,
+                )
                 grs.setup_from_datamodule(domain_dm)
                 self.domain_modules[str(dom_id)] = grs
                 for head in heads:
@@ -643,7 +835,11 @@ class MultiDomainRescaleShift(nn.Module):
             self.heads = list(merged_heads.values()) or [HEAD_PRESETS["energy"]]
         else:
             heads = _effective_rescale_heads(dm)
-            grs = GlobalRescaleShift(heads=heads)
+            grs = GlobalRescaleShift(
+                heads=heads,
+                physical_contributions=self.physical_contributions,
+                normalized_copies=self.normalized_copies,
+            )
             grs.setup_from_datamodule(dm)
             self.domain_modules["0"] = grs
             self.heads = heads
@@ -671,7 +867,8 @@ class MultiDomainRescaleShift(nn.Module):
         return next(iter(self.domain_modules.keys()))
 
     def forward(self, data: properties.Type) -> properties.Type:
-        return self.scale(data, force_process=False)
+        dom = self._get_domain(data)
+        return self.domain_modules[dom](data)
 
     def scale(self, data: properties.Type, force_process: bool = False) -> properties.Type:
         if self.training and not force_process:

@@ -28,7 +28,7 @@ data:
   batch_size: 16
   val_batch_size: 8
   compute_neighbor_list: false
-  cutoff: 12.0
+  cutoff: 13.2
   # num_train: 0.9
   # num_val: 0.1
   # num_test: 0
@@ -41,4 +41,5 @@ data:
       return_cell_displacements: true
 
 task:
-  residual_forces_weight: 1.0
+  loss_weights:
+    chemical_potential_residual: 1.0

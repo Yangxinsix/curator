@@ -2,8 +2,51 @@ import torch
 from typing import Tuple, Optional, List, Callable, Union
 from curator.data import properties
 from ase.stress import full_3x3_to_voigt_6_stress
+from ._force_output import ForceOutput
+
+
+class EnergyGradientOutput(torch.nn.Module):
+    """Expose the conservative force implied by the model energy.
+
+    This is an auxiliary output, not the model's primary force producer.  It can
+    therefore supervise an energy head while a separate direct-force head owns
+    ``properties.forces``.
+    """
+
+    def __init__(
+        self,
+        energy_key: str = properties.energy,
+        output_key: str = properties.energy_gradient_forces,
+    ) -> None:
+        super().__init__()
+        self.energy_key = energy_key
+        self.output_key = output_key
+        self.model_outputs = [output_key]
+
+    def forward(self, data: properties.Type) -> properties.Type:
+        if not self.training:
+            data[self.output_key] = torch.zeros_like(data[properties.positions])
+            return data
+        if self.energy_key not in data:
+            raise KeyError(f"EnergyGradientOutput requires '{self.energy_key}'.")
+        if properties.positions not in data:
+            raise KeyError("EnergyGradientOutput requires positions.")
+        positions = data[properties.positions]
+        if not positions.requires_grad:
+            raise RuntimeError(
+                "EnergyGradientOutput requires differentiable positions. "
+                "Enable PairwiseDistance.compute_forces."
+            )
+        gradient = torch.autograd.grad(
+            data[self.energy_key].sum(),
+            positions,
+            create_graph=self.training,
+            retain_graph=True,
+        )[0]
+        data[self.output_key] = -gradient
+        return data
         
-class GradientOutput(torch.nn.Module):
+class GradientOutput(ForceOutput):
     def __init__(
         self,
         grad_on_edge_diff: bool = True,
@@ -23,6 +66,10 @@ class GradientOutput(torch.nn.Module):
         self.model_outputs = model_outputs if model_outputs is not None else ["forces"]
         if self.compute_edge_forces and properties.edge_forces not in self.model_outputs:
             self.model_outputs.append(properties.edge_forces)
+        self.produces_forces = (
+            properties.forces in self.model_outputs
+            and not self.compute_edge_forces_only
+        )
 
     @torch.jit.ignore
     def update_model_outputs(self, outputs: Union[List[str], str]):
@@ -30,6 +77,10 @@ class GradientOutput(torch.nn.Module):
             self.model_outputs.append(outputs)
         else:
             self.model_outputs.extend(outputs)
+        self.produces_forces = (
+            properties.forces in self.model_outputs
+            and not self.compute_edge_forces_only
+        )
         # update parent model
         if self.update_callback:
             self.update_callback()

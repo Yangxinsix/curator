@@ -1,0 +1,6 @@
+defaults:
+  - _self_
+  - /task/outputs/components@energy: energy
+  - /task/outputs/components@forces: forces
+  - /task/outputs/components@atomic_charge: atomic_charge
+  - /task/outputs/components@chemical_potential_residual: chemical_potential_residual

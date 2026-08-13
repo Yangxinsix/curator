@@ -33,12 +33,14 @@ class NeighborListTransform(Transform):
         requires_grad: bool = False,
         return_distance: bool = False,
         max_neighbors: Optional[int] = None,
+        symmetrize_edges: bool = False,
     ) -> None:
         super().__init__()
         self.cutoff = cutoff
         self.requires_grad = requires_grad
         self.return_distance = return_distance
         self.max_neighbors = None if max_neighbors is None else int(max_neighbors)
+        self.symmetrize_edges = bool(symmetrize_edges)
         if self.max_neighbors is not None and self.max_neighbors <= 0:
             raise ValueError("max_neighbors must be positive when provided.")
 
@@ -48,6 +50,8 @@ class NeighborListTransform(Transform):
         edge_idx = edge_info[properties.edge_idx]
         num_edges = edge_idx.shape[0]
         if num_edges == 0:
+            return edge_info
+        if torch.bincount(edge_idx[:, 0]).max() <= self.max_neighbors:
             return edge_info
 
         distance = edge_info.get(properties.edge_dist)
@@ -70,6 +74,50 @@ class NeighborListTransform(Transform):
             key: value[keep] if torch.is_tensor(value) and value.shape[:1] == (num_edges,) else value
             for key, value in edge_info.items()
         }
+
+    @staticmethod
+    def _symmetrize_edges(
+        edge_info: properties.Type,
+        cell: Optional[torch.Tensor] = None,
+    ) -> properties.Type:
+        """Keep one orientation of each edge and append its exact reverse."""
+        edge_idx = edge_info[properties.edge_idx]
+        num_edges = edge_idx.shape[0]
+        if num_edges == 0:
+            return edge_info
+
+        keep = edge_idx[:, 1] < edge_idx[:, 0]
+        same_atom = edge_idx[:, 0] == edge_idx[:, 1]
+        if torch.any(same_atom):
+            offsets = edge_info.get(properties.cell_displacements)
+            if offsets is None:
+                offsets = edge_info[properties.edge_diff]
+            elif cell is not None:
+                offsets = torch.round(offsets @ torch.linalg.inv(cell))
+            earlier = (offsets[:, 0] < 0) | (
+                (offsets[:, 0] == 0)
+                & (
+                    (offsets[:, 1] < 0)
+                    | ((offsets[:, 1] == 0) & (offsets[:, 2] < 0))
+                )
+            )
+            keep |= same_atom & earlier
+
+        keep = torch.nonzero(keep, as_tuple=False).flatten()
+        output = {}
+        for key, value in edge_info.items():
+            if not torch.is_tensor(value) or value.shape[:1] != (num_edges,):
+                output[key] = value
+                continue
+            value = value[keep]
+            if key == properties.edge_idx:
+                reverse = value.flip(1)
+            elif key in {properties.edge_diff, properties.cell_displacements}:
+                reverse = -value
+            else:
+                reverse = value
+            output[key] = torch.cat((value, reverse), dim=0)
+        return output
     
     def forward(self, data: properties.Type) -> properties.Type:
         if properties.cell in data:
@@ -77,6 +125,8 @@ class NeighborListTransform(Transform):
         else:
             edge_info = self._simple_neighbor_list(data[properties.positions])
         edge_info = self._limit_neighbors(edge_info)
+        if self.symmetrize_edges:
+            edge_info = self._symmetrize_edges(edge_info, data.get(properties.cell))
         data.update(edge_info)
         data[properties.n_pairs] = torch.tensor([data[properties.edge_idx].shape[0]])
         
@@ -443,6 +493,8 @@ class BatchNeighborList(nn.Module):
         requires_grad: bool=False, 
         return_distance: bool=False,
         neighbor_list: Union[NeighborListTransform, Literal["MatScipy", "Torch", "Asap3", "Native"]] = 'Torch',
+        max_neighbors: Optional[int]=None,
+        symmetrize_edges: bool=False,
     ) -> None:
         """Batch neighbor list
         
@@ -456,14 +508,24 @@ class BatchNeighborList(nn.Module):
         self.return_distance = return_distance
         self.neighbor_list = neighbor_list
         if isinstance(neighbor_list, str):
+            kwargs = {
+                "requires_grad": requires_grad,
+                "return_distance": return_distance,
+                "max_neighbors": max_neighbors,
+                "symmetrize_edges": symmetrize_edges,
+            }
             if neighbor_list == 'MatScipy':
-                self.neighbor_list = MatScipyNeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance)
+                self.neighbor_list = MatScipyNeighborList(cutoff, **kwargs)
             elif neighbor_list == 'Torch':
-                self.neighbor_list = TorchNeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance, wrap_atoms=True)
+                self.neighbor_list = TorchNeighborList(
+                    cutoff,
+                    wrap_atoms=True,
+                    **kwargs,
+                )
             elif neighbor_list == 'Asap3':
-                self.neighbor_list = Asap3NeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance)
+                self.neighbor_list = Asap3NeighborList(cutoff, **kwargs)
             elif neighbor_list == 'Native':
-                self.neighbor_list = NativeNeighborList(cutoff, requires_grad=requires_grad, return_distance=return_distance)
+                self.neighbor_list = NativeNeighborList(cutoff, **kwargs)
             else:
                 raise ValueError(f"Unknown neighbor list method: {neighbor_list}")
         else:

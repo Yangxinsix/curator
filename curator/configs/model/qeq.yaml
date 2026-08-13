@@ -17,11 +17,23 @@ input_modules:
   - _target_: curator.layer.PairwiseDistance        # build pairwise distance graph
     compute_neighbor_list: True                     # build neighbor list when dataset does not provide one
     compute_distance_from_R: True                   # compute distances from positions
-    cutoff: ${data.cutoff}                          # use the data cutoff for neighbor finding
+    cutoff: 13.2                                    # cover the default Ewald real-space cutoff (13.141 Ang)
 output_modules:
   - _target_: curator.layer.GradientOutput          # derive forces/stresses from energy
     grad_on_positions: True                         # backprop on atomic positions
     grad_on_edge_diff: False                        # skip edge-difference gradients
   - _target_: curator.layer.ChargeEquilibration     # run charge equilibration layer
     num_features: ${...representation.num_features} # feature size for charge update
+    cutoff: 13.2                                    # match the long-range neighbor-list cutoff
   - _target_: curator.layer.GlobalRescaleShift      # rescale and shift outputs
+    physical_contributions:
+      - source: qeq_energy                          # physical QEq energy (eV)
+        destination: energy                         # add to the total energy
+        scale_like: energy                          # normalize with the energy scale in training
+      - source: ewald_forces                        # physical fixed-charge Ewald force (eV/Ang)
+        destination: forces                         # add to the total force
+        scale_like: forces                          # normalize with the force scale in training
+    normalized_copies:
+      - source: chemical_potential_residual         # physical QEq stationarity residual
+        destination: chemical_potential_residual_normalized
+        scale_like: energy                          # chemical potential is energy per unit charge

@@ -18,7 +18,7 @@ from .atoms_data import AtomsData
 from .collate_atoms_data import collate_atoms_data
 from .datamodule import AtomsDataModule
 from ._type_mapper import TypeMapper
-from ._transform import Transform, UnitTransform
+from ._transform import EnsureBidirectionalEdges, Transform, UnitTransform
 from .utils import read_trajectory
 from ._uncertainty import UncertaintyModule, collect_uncertainty_outputs
 from .properties import (
@@ -54,6 +54,7 @@ __all__ = [
     TypeMapper,
     Transform,
     UnitTransform,
+    EnsureBidirectionalEdges,
     AtomsDataModule,
     UncertaintyModule,
     collect_uncertainty_outputs,

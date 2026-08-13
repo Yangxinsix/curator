@@ -27,6 +27,7 @@ from curator.data import properties
 from typing import Any, List, Optional, Dict, Union, Callable, Type, Literal
 from ase.data import atomic_numbers
 from curator.model.base import ParameterGroup, Representation, collect_unique_parameters
+from curator.model.features import IrrepsFeatureSpec
 
 activation_fn = {
     "silu": torch.nn.SiLU(),
@@ -118,6 +119,12 @@ class MACE(Representation):
                 [irrep for irrep in self.hidden_irreps if str(irrep.ir) not in forbidden_ir]
             )
         self.num_features = self.hidden_irreps.count(o3.Irrep(0, 1))
+        final_scalar_irreps = o3.Irreps(str(self.hidden_irreps[0]))
+        self.output_feature_irreps = sum(
+            [self.hidden_irreps] * max(0, num_interactions - 1)
+            + [final_scalar_irreps],
+            o3.Irreps([]),
+        )
 
         if radial_MLP is None:
             radial_MLP = [64, 64, 64]
@@ -350,6 +357,7 @@ class MACE(Representation):
             )
             node_feat_list.append(node_feat)
         
+        data[properties.node_final_feature] = node_feat_list[-1]
         node_feat_list = torch.cat(node_feat_list, dim=-1)
         data[properties.node_feat] = node_feat_list
 
@@ -359,6 +367,21 @@ class MACE(Representation):
         # restore neighbor list
         self._restore_cutoff_mask(data, edge_cache)
         return data
+
+    @torch.jit.unused
+    def direct_force_feature_spec(self) -> IrrepsFeatureSpec:
+        output_feature_irreps = getattr(self, "output_feature_irreps", None)
+        if output_feature_irreps is None:
+            final_scalar_irreps = o3.Irreps(str(self.hidden_irreps[0]))
+            output_feature_irreps = sum(
+                [self.hidden_irreps] * max(0, len(self.interactions) - 1)
+                + [final_scalar_irreps],
+                o3.Irreps([]),
+            )
+        return IrrepsFeatureSpec(
+            key=properties.node_feat,
+            irreps=output_feature_irreps,
+        )
 
     def module_groups(self):
         groups = OrderedDict(

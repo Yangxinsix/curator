@@ -31,6 +31,7 @@ class LoadedModel:
     resume_from: Optional[Path] = None
     wrapper_from_checkpoint: Any = None
     wrapper_transform_applied: bool = False
+    initialize_from_datamodule: bool = True
 
 
 def _copy_curator_model_metadata(source: Any, target: Any) -> Any:
@@ -89,9 +90,34 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
         raise ValueError(f"Checkpoint is missing a state_dict for {context}.")
 
     def apply_transforms(model: Any) -> Any:
-        if not transforms:
+        from ..model.checkpoint_upgrade import _upgrade_legacy_checkpoint_model
+
+        model = _upgrade_legacy_checkpoint_model(model)
+        transformed = apply_model_transforms(model, transforms, target_dtype=build_dtype)
+        return apply_configured_derivative_outputs(transformed)
+
+    def apply_configured_derivative_outputs(model: Any) -> Any:
+        """Add the task's Hessian output to a loaded checkpoint, if requested."""
+        from ..train.distill import add_hessian_output
+
+        output_cfgs = config.model.get("output_modules", [])
+        if isinstance(output_cfgs, (DictConfig, dict)):
+            output_cfgs = output_cfgs.values()
+        hessian_cfg = next(
+            (
+                cfg
+                for cfg in output_cfgs
+                if hasattr(cfg, "get")
+                if str(cfg.get("_target_", "")).endswith(".EnergyHessianOutput")
+            ),
+            None,
+        )
+        if hessian_cfg is None:
             return model
-        return apply_model_transforms(model, transforms, target_dtype=build_dtype)
+        return add_hessian_output(
+            model,
+            instantiate(hessian_cfg, _convert_="all"),
+        )
 
     def mark_external_checkpoint_metadata(model: Any, raw_spec: str) -> Any:
         parsed = parse_external_model_spec(raw_spec)
@@ -186,6 +212,7 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
             model=transformed_model,
             wrapper_from_checkpoint=None,
             wrapper_transform_applied=wrapper_transform_applied,
+            initialize_from_datamodule=False,
         )
         loaded.wrapper_from_checkpoint = get_model_wrapper_config(loaded.model)
         if source_mode == "model" or transforms:
@@ -273,6 +300,7 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
                 outputs=None if transforms else outputs,
                 wrapper_from_checkpoint=get_model_wrapper_config(model),
                 wrapper_transform_applied=wrapper_transform_applied,
+                initialize_from_datamodule=False,
             )
         model_config = checkpoint_data.get("model_params") or checkpoint_data.get("model_cfg")
         if model_config is None:
@@ -304,6 +332,7 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
         outputs=None if transforms else outputs,
         wrapper_from_checkpoint=get_model_wrapper_config(model),
         wrapper_transform_applied=wrapper_transform_applied,
+        initialize_from_datamodule=False,
     )
 
 
@@ -343,8 +372,12 @@ def _prepare_model(
         model = convert_model_wrapper(model, wrapper_to_apply, target_dtype=data_dtype)
         model = _copy_curator_model_metadata(source_model, model)
 
-    model.initialize_modules(datamodule)
-    log.debug("Initialized model modules from datamodule before task setup.")
+    if loaded.initialize_from_datamodule:
+        model.initialize_modules(datamodule)
+        log.debug("Initialized model modules from datamodule before task setup.")
+    else:
+        model._initialized = True
+        log.debug("Preserved model-checkpoint module initialization and rescale state.")
 
     if data_dtype is not None:
         model = model.to(dtype=data_dtype)

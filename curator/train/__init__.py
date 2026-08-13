@@ -1,4 +1,4 @@
-from .callbacks import ExponentialMovingAverage, FreezeSchedule
+from .callbacks import DistillLossWeightSchedule, ExponentialMovingAverage, FreezeSchedule
 from .losses import (
     HuberLoss,
     SpeciesBalancedLoss,
@@ -15,8 +15,14 @@ from .metrics import (
     PerAtomRMSE
 )
 from .train import train
+from .variance_scaling import (
+    ensure_variance_scales_fitted,
+    find_variance_scales,
+    fit_variance_scales,
+)
 __all__ = [
     ExponentialMovingAverage,
+    DistillLossWeightSchedule,
     FreezeSchedule,
     HuberLoss,
     SpeciesBalancedLoss,
@@ -29,5 +35,8 @@ __all__ = [
     PerSpeciesRMSE, 
     PerAtomMAE, 
     PerAtomRMSE,
+    ensure_variance_scales_fitted,
+    find_variance_scales,
+    fit_variance_scales,
     train,
 ]

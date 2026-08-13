@@ -1,3 +1,4 @@
+import copy
 import inspect
 from collections import OrderedDict
 from dataclasses import dataclass
@@ -160,6 +161,13 @@ class Representation(nn.Module):
             f"{self.__class__.__name__} must implement export_init_kwargs() for wrapper rebuilds."
         )
 
+    @torch.jit.unused
+    def direct_force_feature_spec(self):
+        raise NotImplementedError(
+            f"{self.__class__.__name__} does not expose equivariant features "
+            "for direct-force prediction."
+        )
+
 
 class NeuralNetworkPotential(nn.Module):
     """Base class for neural network potentials."""
@@ -177,11 +185,40 @@ class NeuralNetworkPotential(nn.Module):
         self.representation = representation
         self.model_outputs = model_outputs or []
         self.input_modules = CallbackModuleList(input_modules, on_register_callback=None)
-        self.output_modules = CallbackModuleList(output_modules, on_register_callback=self.register_callbacks)
+        self.output_modules = CallbackModuleList(
+            output_modules,
+            on_register_callback=self.register_callbacks,
+        )
         self.heads = heads
         self._initialized: bool = False
+        self.configure_force_outputs()
         self.collect_outputs()
         self.register_callbacks()
+
+    @torch.jit.unused
+    def configure_force_outputs(self) -> None:
+        """Bind and validate the single atomic-force output strategy."""
+        from curator.layer._force_output import DirectForceOutput, ForceOutput
+
+        force_outputs = [
+            module
+            for module in self.output_modules
+            if isinstance(module, ForceOutput)
+            and getattr(module, "produces_forces", True)
+        ]
+        if len(force_outputs) > 1:
+            names = ", ".join(type(module).__name__ for module in force_outputs)
+            raise ValueError(
+                "A NeuralNetworkPotential may contain only one force-producing "
+                f"output, but received: {names}."
+            )
+
+        if not force_outputs:
+            return
+
+        force_output = force_outputs[0]
+        if isinstance(force_output, DirectForceOutput) and not force_output.is_bound:
+            force_output.bind(self.representation.direct_force_feature_spec())
 
     def forward(self, data: properties.Type) -> properties.Type:
         data = data.copy()
@@ -263,13 +300,35 @@ class NeuralNetworkPotential(nn.Module):
             register_module(target_module)
 
     def clone_with_representation(self, representation: nn.Module) -> "NeuralNetworkPotential":
-        return self.__class__(
+        output_modules = copy.deepcopy(list(self.output_modules))
+        from curator.layer._force_output import DirectForceOutput
+
+        direct_head_states = []
+        for module in output_modules:
+            if isinstance(module, DirectForceOutput):
+                direct_head_states.append(copy.deepcopy(module.head.state_dict()))
+                module.reset_binding()
+        cloned = self.__class__(
             representation=representation,
-            input_modules=list(self.input_modules),
-            output_modules=list(self.output_modules),
+            input_modules=copy.deepcopy(list(self.input_modules)),
+            output_modules=output_modules,
             model_outputs=list(self.model_outputs),
             heads=getattr(self, "heads", None),
         )
+        rebound_outputs = [
+            module
+            for module in cloned.output_modules
+            if isinstance(module, DirectForceOutput)
+        ]
+        for module, state in zip(rebound_outputs, direct_head_states):
+            current = module.head.state_dict()
+            compatible = {
+                key: value
+                for key, value in state.items()
+                if key in current and current[key].shape == value.shape
+            }
+            module.head.load_state_dict(compatible, strict=False)
+        return cloned
 
     def module_groups(self) -> "OrderedDict[str, List[nn.Module]]":
         groups: "OrderedDict[str, List[nn.Module]]" = OrderedDict()

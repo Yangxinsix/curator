@@ -31,6 +31,7 @@ cell_displacements: Final[str] = "_cell_displacements"     # cell displacements 
 # chemical properties
 energy: Final[str] = "energy"
 forces: Final[str] = "forces"
+energy_gradient_forces: Final[str] = "energy_gradient_forces"
 energy_hessian: Final[str] = "energy_hessian"
 energy_hessian_sampled: Final[str] = "energy_hessian_sampled"
 energy_hessian_sample_indices: Final[str] = "energy_hessian_sample_indices"
@@ -48,8 +49,17 @@ atomic_energy: Final[str] = "atomic_energy"
 atomic_energy_sd: Final[str] = "atomic_energy_sd"
 fermi_level: Final[str] = "fermi_level"
 ewald_energy: Final[str] = "ewald_energy"
+onsite_energy: Final[str] = "onsite_energy"
+qeq_energy: Final[str] = "qeq_energy"
 ewald_forces: Final[str] = "ewald_forces"
-residual_forces: Final[str] = "residual_forces"     # residual forces from chi and hardness, this is meaningless
+ewald_stress: Final[str] = "ewald_stress"
+ewald_virial: Final[str] = "ewald_virial"
+chemical_potential: Final[str] = "chemical_potential"
+chemical_potential_residual: Final[str] = "chemical_potential_residual"
+chemical_potential_residual_normalized: Final[str] = (
+    "chemical_potential_residual_normalized"
+)
+residual_forces: Final[str] = "residual_forces"     # optional J_q^T chemical-potential residual
 
 # uncertainties
 e_var: Final[str] = "energy_var"      # energy variance
@@ -80,6 +90,9 @@ edge_dist_embedding: Final[str] = "_edge_dist_embedding"        # this will not 
 node_embedding: Final[str] = "_node_embedding"                  # this is typically generated from node embedding block in the model, and will not change once generated
 node_attr: Final[str] = "_node_attribute"                       # this will not change during forward once generated
 node_feat: Final[str] = "_node_feature"
+node_final_feature: Final[str] = "_node_final_feature"
+node_feature_distill: Final[str] = "node_feature_distill"
+teacher_node_features: Final[str] = "teacher_node_features"
 node_vect: Final[str] = "_node_vector"
 sc: Final[str] = "_skip_connection"
 
@@ -98,13 +111,21 @@ _DEFAULT_INDEX_FIELDS: Set[str] = {
 _DEFAULT_NODE_FIELDS: Set[str] = {
     positions,
     node_feat,
+    node_final_feature,
+    node_feature_distill,
+    teacher_node_features,
     node_attr,
     symbols,
     atomic_numbers,
     atomic_types,
     atomic_energy,
     atomic_energy_sd,
+    atomic_charge,
+    chemical_potential,
+    chemical_potential_residual,
+    chemical_potential_residual_normalized,
     forces,
+    energy_gradient_forces,
     force_sd_per_atom,
     maha_dist_per_atom,
     image_idx,
@@ -123,6 +144,8 @@ _DEFAULT_GRAPH_FIELDS: Set[str] = {
     stress,
     strain,
     virial,
+    ewald_stress,
+    ewald_virial,
     pbc,
     cell,
     n_atoms,

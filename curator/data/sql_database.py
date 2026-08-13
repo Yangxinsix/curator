@@ -43,6 +43,7 @@ OPTIONAL_COLUMN_SPECS = {
     properties.energy_hessian: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["n_atoms", 3, "n_atoms", 3]},
     properties.energy_hessian_projected: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["num_probes", "n_atoms", 3]},
     properties.energy_hessian_probe_vectors: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["num_probes", "n_atoms", 3]},
+    properties.node_final_feature: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": ["n_atoms", "feature_dim"]},
     properties.virial: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": [1, 6]},
     properties.stress: {"sql_type": "BLOB", "storage": "blob", "dtype": "float32", "shape": [1, 6]},
     properties.total_charge: {"sql_type": "FLOAT", "storage": "scalar", "dtype": "float32"},
@@ -256,7 +257,7 @@ class QMDatabase:
         for idx, dim in enumerate(shape_spec):
             if dim == "n_atoms":
                 value = int(n_atoms)
-            elif dim in {"num_probes", "n_probes"}:
+            elif isinstance(dim, str):
                 if unknown_idx is not None:
                     raise ValueError(f"Only one inferred dimension is supported in SQLite shape specs: {shape_spec}")
                 unknown_idx = idx
@@ -432,9 +433,15 @@ class Sqlite3Dataset(QMDatabase, torch.utils.data.Dataset):
                 self.transforms.append(TorchNeighborList(cutoff=self.cutoff, return_cell_displacements=return_cell_displacements))
         
     def __getitem__(self, idx):
+        idx = int(idx)
+        length = len(self)
+        if idx < 0:
+            idx += length
+        if idx < 0 or idx >= length:
+            raise IndexError(idx)
         cursor = self._get_connection(flags=apsw.SQLITE_OPEN_READONLY).cursor()
         columns = ", ".join(self._read_columns)
-        data = cursor.execute(f'''SELECT {columns} FROM data WHERE id=''' + str(int(idx))).fetchone()
+        data = cursor.execute(f'''SELECT {columns} FROM data WHERE id=''' + str(idx)).fetchone()
         atoms_data = self._unpack_data_tuple(data, self._read_columns)
         atoms_data = self.dict_to_torch_tensors(atoms_data, default_dtype=self.default_dtype)
         # transform

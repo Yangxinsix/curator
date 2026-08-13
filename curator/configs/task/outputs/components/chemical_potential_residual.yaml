@@ -1,0 +1,5 @@
+_target_: curator.train.ModelOutput
+name: chemical_potential_residual_normalized
+loss_fn: null
+loss_weight: ${oc.select:task.loss_weights.chemical_potential_residual,1.0}
+is_penalty: true

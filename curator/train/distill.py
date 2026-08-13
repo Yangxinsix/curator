@@ -45,12 +45,58 @@ def is_offline_distill_output(cfg: DictConfig) -> bool:
     return teacher_output_property != student_property
 
 
+def add_hessian_output(model, module):
+    """Insert one Hessian output directly after the atomic-force producer."""
+    from curator.layer import EnergyHessianOutput, ForceOutput, PairwiseDistance
+
+    if not isinstance(module, EnergyHessianOutput):
+        raise TypeError(f"Expected EnergyHessianOutput, got {type(module)}.")
+
+    if any(isinstance(output, EnergyHessianOutput) for output in model.output_modules):
+        raise ValueError("Model already has an EnergyHessianOutput.")
+
+    pairwise = next(
+        (
+            input_module
+            for input_module in model.input_modules
+            if isinstance(input_module, PairwiseDistance)
+        ),
+        None,
+    )
+    if pairwise is None:
+        raise ValueError("EnergyHessianOutput requires a PairwiseDistance input module.")
+    pairwise.compute_distance_from_R = True
+    pairwise.compute_forces = True
+
+    force_index = next(
+        (
+            index
+            for index, output in enumerate(model.output_modules)
+            if isinstance(output, ForceOutput)
+            and getattr(output, "produces_forces", True)
+        ),
+        None,
+    )
+    if force_index is None:
+        raise ValueError("EnergyHessianOutput requires an atomic force-producing output.")
+    model.output_modules.insert(force_index + 1, module)
+    return model
+
+
 def prepare_teacher_model_for_offline_distillation(
     model,
     output_columns: Dict[str, str],
     *,
     projected_hessian: Optional[DictConfig] = None,
 ) -> None:
+    for output in output_columns:
+        if output not in {
+            properties.energy_hessian,
+            properties.energy_hessian_projected,
+            properties.energy_hessian_probe_vectors,
+        } and output not in model.model_outputs:
+            model.model_outputs.append(output)
+
     def projected_option(name: str, default):
         if projected_hessian is None:
             return default
@@ -68,59 +114,11 @@ def prepare_teacher_model_for_offline_distillation(
     ]
     if not requested_hessian_outputs:
         return
-    if any(
-        not hasattr(model, attr) for attr in ("output_modules", "model_outputs", "register_callbacks")
-    ):
+    if any(not hasattr(model, attr) for attr in ("input_modules", "output_modules")):
         raise TypeError(
             "Offline Hessian distillation requires teacher models with mutable output modules."
         )
-    from curator.layer import EnergyHessianOutput, GradientOutput, PairwiseDistance
-
-    # Hessian distill needs forces differentiable w.r.t. positions.
-    # Direct-force teachers need both switches on; energy teachers also work with these defaults.
-    pairwise_module = None
-    for module in getattr(model, "input_modules", []):
-        if isinstance(module, PairwiseDistance):
-            pairwise_module = module
-            break
-    if pairwise_module is None:
-        log.warning("Hessian distill requested, but teacher model has no PairwiseDistance input module.")
-    else:
-        pairwise_module.compute_distance_from_R = True
-        pairwise_module.compute_forces = True
-        log.info(
-            "Prepared Hessian distill teacher: enabled PairwiseDistance("
-            "compute_distance_from_R=True, compute_forces=True)."
-        )
-
-    gradient_module = None
-    gradient_index = None
-    for i, module in enumerate(model.output_modules):
-        if isinstance(module, GradientOutput) and not getattr(module, "compute_edge_forces_only", False):
-            gradient_module = module
-            gradient_index = i
-            break
-    teacher_has_forces = properties.forces in getattr(model, "model_outputs", [])
-    if gradient_module is None and not teacher_has_forces:
-        insert_at = len(model.output_modules)
-        model.output_modules.insert(
-            insert_at,
-            GradientOutput(
-                grad_on_edge_diff=False,
-                grad_on_positions=True,
-                model_outputs=[properties.forces],
-            )
-        )
-        gradient_index = insert_at
-        log.info("Prepared Hessian distill teacher: inserted GradientOutput for force derivatives.")
-    elif gradient_module is None:
-        log.info("Prepared Hessian distill teacher: using teacher-provided forces without GradientOutput.")
-    elif gradient_module is not None:
-        gradient_module.grad_on_edge_diff = False
-        gradient_module.grad_on_positions = True
-        if properties.forces not in gradient_module.model_outputs:
-            gradient_module.update_model_outputs(properties.forces)
-        log.info("Prepared Hessian distill teacher: configured existing GradientOutput for position forces.")
+    from curator.layer import EnergyHessianOutput
 
     hessian_module = None
     for module in model.output_modules:
@@ -128,12 +126,9 @@ def prepare_teacher_model_for_offline_distillation(
             hessian_module = module
             break
     if hessian_module is None:
-        insert_at = len(model.output_modules) if gradient_index is None else gradient_index + 1
-        model.output_modules.insert(
-            insert_at,
-            EnergyHessianOutput(model_outputs=requested_hessian_outputs),
+        hessian_module = EnergyHessianOutput(
+            model_outputs=requested_hessian_outputs,
         )
-        hessian_module = model.output_modules[insert_at]
     else:
         missing_hessian_outputs = [
             key for key in requested_hessian_outputs
@@ -141,6 +136,8 @@ def prepare_teacher_model_for_offline_distillation(
         ]
         if missing_hessian_outputs:
             hessian_module.update_model_outputs(missing_hessian_outputs)
+    if hessian_module not in model.output_modules:
+        add_hessian_output(model, hessian_module)
     hessian_module.vectorize = False
     if properties.energy_hessian_projected in requested_hessian_outputs:
         hessian_module.num_probes = projected_option("num_probes", None)

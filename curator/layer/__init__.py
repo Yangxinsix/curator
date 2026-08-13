@@ -2,14 +2,27 @@ from .._torch_compat import ensure_torch_safe_globals
 
 ensure_torch_safe_globals()
 
-from ._atomic_linear import AtomwiseLinear, AtomwiseNonLinear
+from ._atomic_linear import (
+    AtomwiseLinear,
+    AtomwiseNonLinear,
+    FeatureProjection,
+    ProjectedElementEmbedding,
+)
 from ._atomwise_reduce import AtomwiseReduce
 from ._atomwise_nn import AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from ._convnet import ConvNetLayer
 from ._charge_equilibration import ChargeEquilibration
 from ._energy_hessian import EnergyHessianOutput
 from ._ewald import EwaldSummation
-from ._grad_output import GradientOutput
+from ._grad_output import EnergyGradientOutput, GradientOutput
+from ._force_output import (
+    DirectForceOutput,
+    ForceOutput,
+    IrrepsForceHead,
+    ScalarVectorForceHead,
+)
+from .gated_equivariant import GatedEquivariantBlock
+from .initialization import reset_linear
 from ._nequip_interaction import InteractionLayer
 from ._mace_interaction import (
     EquivariantProductBasisBlock,
@@ -47,7 +60,11 @@ from ._feature import (
 )
 from ._atomwise_nn import Dense, AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from .cutoff import CosineCutoff, PolynomialCutoff
+from .activation import ScaledSiLU
 from .nonlinearities import ShiftedSoftPlus
+from .norm import safe_norm
+from .residual import ResidualAdd
+from .variance_scale import VarianceScale
 from .wrappers import merge_model_wrappers
 from .radial_basis import (
     BesselBasis,
@@ -69,6 +86,8 @@ from .utils import (
 __all__ = [
     AtomwiseLinear,
     AtomwiseNonLinear,
+    FeatureProjection,
+    ProjectedElementEmbedding,
     AtomwiseReduce,
     AtomwiseNN,
     MACEAtomwiseNN,
@@ -92,7 +111,11 @@ __all__ = [
     PainnUpdate,
     CosineCutoff,
     PolynomialCutoff,
+    ScaledSiLU,
     ShiftedSoftPlus,
+    safe_norm,
+    ResidualAdd,
+    VarianceScale,
     BesselBasis,
     SineBasis,
     GaussianBasis,
@@ -110,6 +133,13 @@ __all__ = [
     ZBLBasis,
     PairRepulsionEnergy,
     GradientOutput,           # output modules (output forces and stress)
+    EnergyGradientOutput,
+    ForceOutput,
+    DirectForceOutput,
+    GatedEquivariantBlock,
+    reset_linear,
+    ScalarVectorForceHead,
+    IrrepsForceHead,
     EnergyHessianOutput,
     GlobalRescaleShift,            # output modules (postprocess energy)
     PerSpeciesRescaleShift,

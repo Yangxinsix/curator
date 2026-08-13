@@ -69,6 +69,7 @@ class AtomwiseNN(nn.Module):
         activation: Union[Callable, nn.Module, str, List[Callable], List[nn.Module], List[str]] = 'silu',
         heads: Optional[List[Union[HeadConfig, Dict, str]]] = None,
         separate_heads: bool = False,
+        linear_initializer: Optional[Callable[[nn.Module], None]] = None,
         *args,
         **kwargs,
     ):
@@ -124,6 +125,11 @@ class AtomwiseNN(nn.Module):
             self.head_modules = nn.ModuleDict()
             self.shared_out_features = self.in_features
             self.readout_mlp = self._make_readout()
+
+        if linear_initializer is not None:
+            for module in self.modules():
+                if isinstance(module, Dense):
+                    linear_initializer(module.linear)
 
         self._n_out = sum(int(h.dim) for h in self.heads)
 

@@ -175,6 +175,19 @@ def _upgrade_legacy_checkpoint_model(model: torch.nn.Module) -> torch.nn.Module:
                 module.cutoff_fn = None
             if not hasattr(module, "radial_basis"):
                 module.radial_basis = None
+        if module.__class__.__name__ == "PainnUpdate":
+            # Legacy PaiNN checkpoints used affine maps on Cartesian vector
+            # channels.  Their learned fixed-vector biases break rotations and
+            # must not feed an architecture-independent direct-force head.
+            for name in ("update_U", "update_V"):
+                linear = getattr(module, name, None)
+                if linear is not None and getattr(linear, "bias", None) is not None:
+                    linear.register_parameter("bias", None)
+        if module.__class__.__name__ == "GradientOutput":
+            module.produces_forces = (
+                properties.forces in getattr(module, "model_outputs", [])
+                and not getattr(module, "compute_edge_forces_only", False)
+            )
         if isinstance(module, AtomwiseNN):
             _upgrade_legacy_atomwise_module(module)
         if isinstance(module, GlobalRescaleShift):

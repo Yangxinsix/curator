@@ -10,7 +10,7 @@ from e3nn.util.jit import script
 from omegaconf import open_dict, OmegaConf, DictConfig, ListConfig
 from hydra import compose, initialize, initialize_config_dir
 import hydra
-from hydra.utils import instantiate, get_class
+from hydra.utils import get_object, instantiate
 import inspect
 from collections import abc
 import logging
@@ -568,6 +568,19 @@ def _dictify_sequence_nodes(config: Optional[DictConfig]) -> set:
     if "model" in config:
         _dictify_field(config.model, "input_modules", "input_module", "model.input_modules", converted)
         _dictify_field(config.model, "output_modules", "output_module", "model.output_modules", converted)
+        outputs = config.model.get("output_modules")
+        if (
+            "model.output_modules" not in converted
+            and isinstance(outputs, DictConfig)
+            and "gradient_output" in outputs
+        ):
+            if "force_output" in outputs:
+                raise ValueError(
+                    "model.output_modules cannot define both legacy 'gradient_output' "
+                    "and the new stable 'force_output' slot."
+                )
+            with open_dict(outputs):
+                outputs["force_output"] = outputs.pop("gradient_output")
 
     if "task" in config:
         _dictify_field(config.task, "outputs", "output", "task.outputs", converted)
@@ -615,7 +628,7 @@ def prune_config_targets(config: Optional[DictConfig], logger: Optional[logging.
         target = node.get("_target_")
         if target:
             try:
-                obj = get_class(str(target))
+                obj = get_object(str(target))
             except Exception:
                 obj = None
 

@@ -15,11 +15,15 @@ import torch.serialization as torch_serialization
 from ase.data import chemical_symbols
 
 from curator.data import properties
-from curator.data.properties import HeadConfig
+from curator.data.properties import HeadConfig, resolve_heads
 from curator.layer import (
     AgnesiTransform,
     AtomwiseNN,
+    ChargeEquilibration,
+    Dense,
     AtomwiseReduce,
+    DirectForceOutput,
+    EnergyHessianOutput,
     GlobalRescaleShift,
     GradientOutput,
     MACEAtomwiseNN,
@@ -1451,28 +1455,10 @@ def _transform_model_to_direct_force_impl(
     if not isinstance(model, NeuralNetworkPotential):
         raise TypeError(f"Expected NeuralNetworkPotential, got {type(model)}")
 
-    representation = getattr(model, "representation", None)
-    if representation is None:
+    if getattr(model, "representation", None) is None:
         raise TypeError("Expected model to expose a representation.")
 
-    export_fn = getattr(representation, "export_init_kwargs", None)
-    if not callable(export_fn):
-        raise TypeError(
-            f"{representation.__class__.__name__} does not implement export_init_kwargs()."
-        )
-
     direct_heads = heads or [properties.energy, properties.forces]
-    readout_cls = MACEAtomwiseNN if isinstance(getattr(representation, "readout", None), MACEAtomwiseNN) else AtomwiseNN
-
-    rep_kwargs = dict(export_fn())
-    rep_kwargs["heads"] = direct_heads
-    rep_kwargs["readout"] = partial(
-        readout_cls,
-        heads=direct_heads,
-        separate_heads=True,
-    )
-    direct_representation = representation.__class__(**rep_kwargs)
-
     input_modules: List[torch.nn.Module] = []
     for module in getattr(model, "input_modules", []):
         copied = copy.deepcopy(module)
@@ -1482,44 +1468,206 @@ def _transform_model_to_direct_force_impl(
 
     output_modules: List[torch.nn.Module] = []
     removed_output_modules: List[str] = []
+    force_output_added = False
     for module in getattr(model, "output_modules", []):
+        if isinstance(module, DirectForceOutput):
+            output_modules.append(copy.deepcopy(module))
+            force_output_added = True
+            continue
         if isinstance(module, GradientOutput):
+            if not getattr(module, "produces_forces", True):
+                output_modules.append(copy.deepcopy(module))
+                continue
+            unsupported = set(getattr(module, "model_outputs", [])) & {
+                properties.stress,
+                properties.virial,
+            }
+            if unsupported:
+                raise ValueError(
+                    "The direct_force transform cannot preserve GradientOutput "
+                    f"derivatives {sorted(unsupported)}. Configure a dedicated "
+                    "stress/virial output before using direct forces."
+                )
             removed_output_modules.append(type(module).__name__)
-            continue
-        if isinstance(module, AtomwiseReduce):
-            removed_output_modules.append(type(module).__name__)
-            continue
-        if isinstance(module, GlobalRescaleShift):
-            copied = GlobalRescaleShift(heads=direct_heads)
-            _load_state_dict_by_shape(copied, module.state_dict())
-            output_modules.append(copied)
+            if not force_output_added:
+                output_modules.append(DirectForceOutput())
+                force_output_added = True
             continue
         output_modules.append(copy.deepcopy(module))
 
+    if not force_output_added:
+        output_modules.append(DirectForceOutput())
+
+    if any(isinstance(module, EnergyHessianOutput) for module in output_modules):
+        for module in input_modules:
+            if isinstance(module, PairwiseDistance):
+                module.compute_distance_from_R = True
+                module.compute_forces = True
+
     direct_model = NeuralNetworkPotential(
-        representation=direct_representation,
+        representation=copy.deepcopy(model.representation),
         input_modules=input_modules,
         output_modules=output_modules,
-        model_outputs=[properties.energy, properties.forces],
+        model_outputs=list(
+            dict.fromkeys([*getattr(model, "model_outputs", []), properties.forces])
+        ),
         heads=direct_heads,
     )
-    loaded_tensors = load_pretrained_weights_from_model(direct_model, model)
     direct_model._initialized = getattr(model, "_initialized", False)
     direct_model.train(model.training)
     logger.info(
-        "Applied model transform 'direct_force': readout=%s heads=%s removed_outputs=%s "
-        "pairwise_compute_forces=%s loaded_tensors=%d",
-        type(direct_representation.readout).__name__,
-        [head.key for head in direct_representation.readout.heads],
+        "Applied model transform 'direct_force': representation=%s heads=%s removed_outputs=%s "
+        "pairwise_compute_forces=%s",
+        type(direct_model.representation).__name__,
+        [head.key if isinstance(head, HeadConfig) else str(head) for head in direct_heads],
         removed_output_modules or ["none"],
         [
             module.compute_forces
             for module in input_modules
             if isinstance(module, PairwiseDistance)
         ],
-        loaded_tensors,
     )
     return direct_model
+
+
+def _transform_mace_to_qeq_impl(
+    model: torch.nn.Module,
+    *,
+    cutoff: float = 13.2,
+    target_dtype: torch.dtype | None = None,
+) -> NeuralNetworkPotential:
+    """Grow a pretrained local MACE into a charge/QEq model without changing its PES."""
+    if not isinstance(model, NeuralNetworkPotential) or not isinstance(
+        getattr(model, "representation", None), MACE
+    ):
+        raise TypeError("The qeq_task_growth transform currently requires a Curator MACE model.")
+
+    source_rescales = [
+        module
+        for module in model.output_modules
+        if isinstance(module, GlobalRescaleShift)
+    ]
+    if len(source_rescales) != 1:
+        raise ValueError(
+            "The qeq_task_growth transform requires exactly one GlobalRescaleShift."
+        )
+    source_rescale = source_rescales[0]
+    source_energy_heads = [
+        head for head in source_rescale.heads if head.key == properties.energy
+    ]
+    representation_energy_heads = [
+        head
+        for head in model.representation.heads
+        if head.key == properties.energy
+    ]
+    if len(source_energy_heads) != 1 or len(representation_energy_heads) != 1:
+        raise ValueError("The source MACE must expose exactly one energy head.")
+
+    energy_head = copy.deepcopy(representation_energy_heads[0])
+    charge_head = resolve_heads([properties.atomic_charge])[0]
+    heads = [energy_head, charge_head]
+    rep_kwargs = model.representation.export_init_kwargs()
+    rep_kwargs["heads"] = heads
+    rep_kwargs["readout"] = partial(
+        MACEAtomwiseNN,
+        heads=heads,
+        separate_heads=True,
+    )
+
+    source_parameter = next(model.parameters())
+    build_dtype = target_dtype or source_parameter.dtype
+    from curator.layer.wrappers.utils import temporary_default_dtype
+
+    with temporary_default_dtype(build_dtype):
+        representation = MACE(**rep_kwargs)
+
+    energy_scale = float(source_rescale.get_scale(properties.energy).item())
+    force_head = resolve_heads([properties.forces])[0]
+    force_head.scale_by = energy_scale
+    output_modules = [
+        copy.deepcopy(module)
+        for module in model.output_modules
+        if not isinstance(module, (GlobalRescaleShift, GradientOutput))
+    ]
+    output_modules.extend(
+        [
+            GradientOutput(
+                model_outputs=[properties.energy, properties.forces],
+                grad_on_edge_diff=False,
+                grad_on_positions=True,
+            ),
+            ChargeEquilibration(
+                num_features=representation.node_irreps.dim,
+                cutoff=cutoff,
+            ),
+            GlobalRescaleShift(
+                heads=[copy.deepcopy(source_energy_heads[0]), force_head],
+                physical_contributions=[
+                    {
+                        "source": properties.qeq_energy,
+                        "destination": properties.energy,
+                        "scale_like": properties.energy,
+                    },
+                    {
+                        "source": properties.ewald_forces,
+                        "destination": properties.forces,
+                        "scale_like": properties.forces,
+                    },
+                ],
+                normalized_copies=[
+                    {
+                        "source": properties.chemical_potential_residual,
+                        "destination": properties.chemical_potential_residual_normalized,
+                        "scale_like": properties.energy,
+                    }
+                ],
+            ),
+        ]
+    )
+    grown = NeuralNetworkPotential(
+        representation=representation,
+        input_modules=[
+            PairwiseDistance(
+                compute_neighbor_list=False,
+                compute_distance_from_R=True,
+                compute_forces=True,
+                cutoff=cutoff,
+            )
+        ],
+        output_modules=output_modules,
+        model_outputs=list(
+            dict.fromkeys(
+                [
+                    *model.model_outputs,
+                    properties.atomic_charge,
+                    properties.chemical_potential_residual,
+                    properties.chemical_potential_residual_normalized,
+                ]
+            )
+        ),
+        heads=heads,
+    )
+    load_pretrained_weights_from_model(grown, model)
+
+    charge_readout = grown.representation.readout
+    with torch.no_grad():
+        for branch in charge_readout.readouts_by_head[properties.atomic_charge]:
+            for parameter in branch.parameters():
+                parameter.zero_()
+        final_dense = [
+            module
+            for module in charge_readout.final_readouts[
+                properties.atomic_charge
+            ].modules()
+            if isinstance(module, Dense)
+        ][-1]
+        for parameter in final_dense.parameters():
+            parameter.zero_()
+
+    grown.to(device=source_parameter.device, dtype=build_dtype)
+    grown.train(model.training)
+    grown._initialized = True
+    return grown
 
 
 # Public transform and conversion entry points
@@ -1626,6 +1774,19 @@ def transform_model_to_direct_force(
     return _transform_model_to_direct_force_impl(model, heads=heads)
 
 
+def transform_mace_to_qeq(
+    model: torch.nn.Module,
+    *,
+    cutoff: float = 13.2,
+    target_dtype: torch.dtype | None = None,
+) -> NeuralNetworkPotential:
+    return _transform_mace_to_qeq_impl(
+        model,
+        cutoff=cutoff,
+        target_dtype=target_dtype,
+    )
+
+
 # Wrapper/backend transforms
 def convert_model_wrapper(
     model: torch.nn.Module,
@@ -1653,6 +1814,7 @@ MODEL_TRANSFORM_REGISTRY = {
     "multi_to_single_domain": convert_multi_to_single_domain,
     "multi_to_selected_domains": convert_multi_to_selected_domains,
     "direct_force": transform_model_to_direct_force,
+    "qeq_task_growth": transform_mace_to_qeq,
     "model_wrapper": convert_model_wrapper,
     "wrapper": convert_model_wrapper,
     "e3nn_to_cueq": convert_e3nn_to_cueq,
@@ -1762,4 +1924,5 @@ __all__ = [
     'load_official_nequip_as_curator',
     'load_pretrained_weights_from_model',
     'transform_model_to_direct_force',
+    'transform_mace_to_qeq',
 ]

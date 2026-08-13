@@ -18,7 +18,10 @@ def test_project_hessian_matches_matrix_product():
 
 def test_dynamic_teacher_projection_uses_student_probe_and_scale():
     rescale = GlobalRescaleShift(
-        heads=[HeadConfig(key=properties.energy, scale_by=2.0)]
+        heads=[
+            HeadConfig(key=properties.energy, scale_by=2.0),
+            HeadConfig(key=properties.forces, scale_by=2.0),
+        ]
     )
     output = DistillOutput(
         "dynamic_phl",

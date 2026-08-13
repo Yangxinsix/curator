@@ -83,9 +83,9 @@ task:
         _target_: torchmetrics.regression.MeanSquaredError
         squared: false
   - _target_: curator.train.ModelOutput
-    name: residual_forces
+    name: chemical_potential_residual_normalized
     loss_fn: null
-    loss_weight: ${task.residual_forces_weight}
+    loss_weight: ${task.chemical_potential_residual_weight}
     is_penalty: true
   _target_: curator.model.LitNNP
   scheduler_monitor: val_total_loss
@@ -96,7 +96,7 @@ task:
   energy_weight: 1
   forces_weight: 100
   patience: 200
-  residual_forces_weight: 1.0
+  chemical_potential_residual_weight: 1.0
 model:
   representation:
     _target_: curator.model.Painn
@@ -134,7 +134,19 @@ model:
     grad_on_edge_diff: false
   - _target_: curator.layer.ChargeEquilibration
     num_features: ${...representation.num_features}
+    cutoff: 13.2
   - _target_: curator.layer.GlobalRescaleShift
+    physical_contributions:
+    - source: qeq_energy
+      destination: energy
+      scale_like: energy
+    - source: ewald_forces
+      destination: forces
+      scale_like: forces
+    normalized_copies:
+    - source: chemical_potential_residual
+      destination: chemical_potential_residual_normalized
+      scale_like: energy
 data:
   _target_: curator.data.AtomsDataModule
   _convert_: partial
@@ -144,7 +156,7 @@ data:
   test_path: null
   batch_size: 16
   compute_neighbor_list: false
-  cutoff: 12.0
+  cutoff: 13.2
   num_train: 0.9
   num_val: 0.1
   num_test: null
@@ -161,7 +173,7 @@ data:
   - forces
   transforms:
   - _target_: curator.data.MatScipyNeighborList
-    cutoff: 12.0
+    cutoff: 13.2
     requires_grad: false
     return_distance: false
     return_cell_displacements: true

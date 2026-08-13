@@ -1,0 +1,4 @@
+_target_: curator.layer.ProjectedElementEmbedding
+embeddings: ???
+out_features: ${model.representation.num_features}
+index_offset: 0

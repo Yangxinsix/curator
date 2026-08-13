@@ -1,0 +1,6 @@
+_target_: curator.train.DistillLossWeightSchedule
+output_name: energy_hessian_distill
+monitor: val_forces_mae
+reference_value: ???
+relative_tolerance: 0.05
+factor: 0.5

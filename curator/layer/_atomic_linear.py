@@ -2,9 +2,52 @@ from ._ops import Linear
 from e3nn import o3
 from e3nn.nn import Activation
 from e3nn.util.jit import compile_mode
+from os import PathLike
 from typing import Optional, Callable
+import numpy as np
 import torch
 from curator.data import properties
+
+
+class FeatureProjection(torch.nn.Module):
+    def __init__(
+        self,
+        in_features: int,
+        out_features: int,
+        input_key: str = properties.node_final_feature,
+        output_key: str = properties.node_feature_distill,
+    ):
+        super().__init__()
+        self.linear = torch.nn.Linear(in_features, out_features)
+        self.input_key = input_key
+        self.output_key = output_key
+        self.model_outputs = [output_key]
+
+    def forward(self, data: properties.Type) -> properties.Type:
+        data[self.output_key] = self.linear(data[self.input_key])
+        return data
+
+
+class ProjectedElementEmbedding(torch.nn.Module):
+    def __init__(
+        self,
+        embeddings,
+        out_features: int,
+        index_offset: int = 0,
+    ):
+        super().__init__()
+        if isinstance(embeddings, (str, PathLike)):
+            embeddings = np.load(embeddings)
+        embeddings = torch.as_tensor(embeddings).detach().to(torch.get_default_dtype())
+        if embeddings.ndim != 2:
+            raise ValueError("embeddings must have shape [num_elements, num_features].")
+        self.register_buffer("embeddings", embeddings)
+        self.projection = torch.nn.Linear(embeddings.shape[1], out_features)
+        self.index_offset = int(index_offset)
+
+    def forward(self, indices: torch.Tensor) -> torch.Tensor:
+        return self.projection(self.embeddings[indices + self.index_offset])
+
 
 class AtomwiseLinear(torch.nn.Module):
     def __init__(

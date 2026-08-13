@@ -1,0 +1,5 @@
+_target_: curator.layer.GradientOutput
+grad_on_edge_diff: true
+grad_on_positions: false
+model_outputs:
+  - forces

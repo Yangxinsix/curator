@@ -10,8 +10,12 @@ except ImportError:
 from scipy import constants
 
 class EwaldSummation(nn.Module):
-    """
-    Calculate Ewald summation given atomic charges.
+    """Calculate a 3D-periodic Ewald energy in physical eV units.
+
+    The omitted ``k=0`` mode corresponds to conducting (tin-foil) boundary
+    conditions.  By default, non-neutral cells are made well-defined with a
+    uniform neutralizing background; set ``neutralizing_background=False``
+    only when intentionally reproducing the uncorrected legacy expression.
     """
     CONV_FACT = 1e10 * constants.e / (4 * math.pi * constants.epsilon_0)        # convert units to eV
     def __init__(
@@ -20,6 +24,7 @@ class EwaldSummation(nn.Module):
         k_cutoff=None,
         alpha=0.4,
         acc_factor=12.0,
+        neutralizing_background=True,
         *args,
         **kwargs,
     ):
@@ -29,8 +34,13 @@ class EwaldSummation(nn.Module):
         self.alpha = alpha
         self.cutoff = cutoff or self.accf / self.alpha
         self.k_cutoff = k_cutoff or 2 * self.alpha * self.accf
+        self.neutralizing_background = neutralizing_background
 
-    def forward(self, data: properties.Type, ewald_kernel: Optional[torch.Tensor] = None) -> properties.Type:
+    def forward(
+        self,
+        data: properties.Type,
+        ewald_kernel: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         # screen neighbor list
         mask = data[properties.edge_dist] < self.cutoff
         edge_dist = data[properties.edge_dist][mask]
@@ -51,7 +61,17 @@ class EwaldSummation(nn.Module):
 
         E_self = self.self_energy(data[properties.atomic_charge])
 
-        return scatter_add(E_real + E_self, data[properties.image_idx], dim=0) + E_recip
+        E_background = self.background_energy(
+            data[properties.cell],
+            data[properties.image_idx],
+            data[properties.atomic_charge],
+        )
+
+        return (
+            scatter_add(E_real + E_self, data[properties.image_idx], dim=0)
+            + E_recip
+            + E_background
+        )
         
     def real_space_energy(
         self,
@@ -138,6 +158,30 @@ class EwaldSummation(nn.Module):
 
         return E_self * EwaldSummation.CONV_FACT
 
+    def background_energy(self, cell, image_idx, atomic_charges) -> torch.Tensor:
+        """Return the uniform neutralizing-background correction.
+
+        Omitting the reciprocal-space ``k=0`` mode defines a charged periodic
+        cell only together with a uniform background charge.  In the present
+        Ewald convention its contribution is
+
+            E_bg = -pi Q^2 / (2 alpha^2 V).
+
+        It vanishes exactly for neutral structures.
+        """
+        cell = cell.reshape(-1, 3, 3)
+        if not self.neutralizing_background:
+            return cell.new_zeros(cell.shape[0])
+
+        volumes = torch.abs(torch.linalg.det(cell))
+        total_charge = scatter_add(atomic_charges, image_idx, dim=0)
+        return (
+            -math.pi
+            * total_charge.square()
+            / (2.0 * self.alpha**2 * volumes)
+            * EwaldSummation.CONV_FACT
+        )
+
     def get_ewald_kernel(
         self,
         cell,
@@ -156,11 +200,14 @@ class EwaldSummation(nn.Module):
         prefactor = 2.0 * math.pi / volumes
 
         # real part
+        real_mask = edge_dist < self.cutoff
+        edge_dist = edge_dist[real_mask]
+        edge_idx = edge_idx[real_mask]
         dist = torch.erfc(self.alpha * edge_dist) / edge_dist
 
         offset = 0
         kernel_list = []
-        for c, n, p in zip(cell, num_atoms, prefactor):
+        for c, n, p, volume in zip(cell, num_atoms, prefactor, volumes):
             # get positions and volumes
             n = n.item()
             pos = positions[offset:offset+n]      # (N,3)
@@ -199,6 +246,13 @@ class EwaldSummation(nn.Module):
                 dtype=dist.dtype,
                 device=dist.device,
             ) * (-2.0 * self.alpha / math.sqrt(math.pi))
+            if self.neutralizing_background:
+                # 0.5 q^T K_bg q = -pi (sum_i q_i)^2 / (2 alpha^2 V).
+                kernel_matrix = kernel_matrix - torch.ones(
+                    (n, n),
+                    dtype=dist.dtype,
+                    device=dist.device,
+                ) * (math.pi / (self.alpha**2 * volume))
             kernel_list.append(kernel_matrix * EwaldSummation.CONV_FACT)
 
         return kernel_list
@@ -206,7 +260,7 @@ class EwaldSummation(nn.Module):
     @classmethod
     def get_reciprocal_k_vectors(cls, cell, k_cut):
         """
-        Generate all reciprocal vectors k = B @ n such that |k| <= k_cut.
+        Generate all reciprocal vectors ``k = n @ B`` such that ``|k| <= k_cut``.
         
         Parameters
         ----------
@@ -223,12 +277,16 @@ class EwaldSummation(nn.Module):
             Squared magnitudes of the returned k_vectors.
         """
 
-        recip_cell = 2.0 * math.pi * torch.inverse(cell).T
-        
-        # 1. Estimate max integer index n_max to capture all k up to k_cut
-        #    We'll use the minimum norm of B's columns as a guide.
-        b_col_norms = torch.norm(recip_cell, dim=0)  # length of each reciprocal-lattice vector
-        n_range_list = torch.ceil(k_cut / b_col_norms).long()
+        # Curator/ASE store direct lattice vectors as rows.  The reciprocal
+        # lattice vectors are therefore also rows of B = 2 pi A^{-T}, and a
+        # reciprocal vector is k = n @ B.
+        recip_cell = 2.0 * math.pi * torch.linalg.inv(cell).T
+
+        # This is a rigorous component-wise bound, including skew cells:
+        # n_i = a_i dot k / (2 pi), hence |n_i| <= |a_i| k_cut / (2 pi).
+        n_range_list = torch.ceil(
+            k_cut * torch.linalg.vector_norm(cell, dim=1) / (2.0 * math.pi)
+        ).long()
         n_range = [torch.arange(-n, n + 1, device=cell.device, dtype=cell.dtype) for n in n_range_list]
 
         # 2. Build integer grid: n_x, n_y, n_z in [-n_max, ..., n_max]
@@ -237,9 +295,9 @@ class EwaldSummation(nn.Module):
         ny_flat = ny.flatten()
         nz_flat = nz.flatten()
 
-        # 3. Convert (n_x, n_y, n_z) -> k = B @ n
-        n_xyz = torch.stack([nx_flat, ny_flat, nz_flat], dim=0)  # (3, N^3)
-        k_matrix = (recip_cell @ n_xyz).T  # (N^3, 3)
+        # 3. Convert (n_x, n_y, n_z) -> k = n @ B
+        n_xyz = torch.stack([nx_flat, ny_flat, nz_flat], dim=1)  # (N^3, 3)
+        k_matrix = n_xyz @ recip_cell  # (N^3, 3)
 
         # 4. Compute squared magnitude and filter by k_cut and exclude k=0
         k_sq_full = (k_matrix**2).sum(dim=1)

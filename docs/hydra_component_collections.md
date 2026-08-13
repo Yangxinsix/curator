@@ -12,7 +12,8 @@ sequences that Lightning expects.
 | --- | --- | --- |
 | Trainer callbacks | `curator/configs/trainer/callbacks/` | `model_checkpoint.yaml` |
 | Model input modules | `curator/configs/model/input_modules/` | `pairwise_distance.yaml` |
-| Model output modules | `curator/configs/model/output_modules/` | `gradient_output.yaml` |
+| Force-output strategies | `curator/configs/model/force_output/` | `direct.yaml` |
+| Model output modules | `curator/configs/model/output_modules/` | `global_rescale_shift.yaml` |
 | Task outputs | `curator/configs/task/outputs/components/` | `energy.yaml` |
 
 The default presets include these components via their `defaults` lists, so existing
@@ -69,6 +70,23 @@ python -m curator.cli train \
 
 Because each component is keyed by name, you can still override a single parameter via the
 command line, e.g. `trainer.callbacks.ema.decay=0.999` or `task.outputs.energy.loss_weight=2.0`.
+
+The default force strategy derives forces from energy gradients. Select architecture-independent
+direct-force prediction with:
+
+```bash
+python -m curator.cli train \
+  model/force_output@model.output_modules.force_output=direct
+```
+
+Representations opt into this strategy by exposing a typed equivariant feature specification;
+the force-output module selects the matching scalar/vector or e3nn-irrep readout. Curvature
+outputs consume the resulting `forces`, so the same Hessian and projected-Hessian task presets
+work with either force strategy. Curator fixes the runtime order to `raw outputs -> forces ->
+Hessians -> rescale`: exported predictions and offline teacher labels are in physical units,
+while `DistillOutput` converts teacher values exactly once into the student's normalized loss
+space. Gradient forces inherit the energy scale; direct forces and their Hessians inherit the
+force scale.
 
 ## Daily workflow tips
 

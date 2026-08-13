@@ -26,6 +26,7 @@ class ModelOutput(nn.Module):
         sample_fn: Optional[Callable] = None,
         is_penalty: bool = False,
         per_atom_loss: bool = False,
+        only_train: bool = False,
         # per_species_loss: bool=False,
         # per_species_metrics: bool=False,
     ) -> None:
@@ -46,6 +47,7 @@ class ModelOutput(nn.Module):
         self.target_property = target_property or name
         self.is_penalty = is_penalty
         self.per_atom_loss = per_atom_loss
+        self.only_train = bool(only_train)
         self.loss_fn = loss_fn
         self.loss_weight = loss_weight
         self.sampler = OutputSampler(
@@ -116,14 +118,45 @@ class ModelOutput(nn.Module):
         return pred_value, target_value
 
     def calculate_loss(self, pred: Dict, target: Optional[Dict] = None, return_num_obs=True) -> torch.Tensor:
+        if self.only_train and not self.training:
+            reference = pred.get(self.prediction_property)
+            if reference is None and target is not None:
+                reference = target.get(self.target_property)
+            zero = (
+                reference.new_zeros(())
+                if torch.is_tensor(reference)
+                else torch.zeros(())
+            )
+            if return_num_obs:
+                return zero, 1
+            return zero
         if self.loss_weight == 0:
-            return 0.0
+            reference = pred.get(self.prediction_property)
+            if reference is None and target is not None:
+                reference = target.get(self.target_property)
+            zero = (
+                reference.new_zeros(())
+                if torch.is_tensor(reference)
+                else torch.zeros(())
+            )
+            if return_num_obs:
+                return zero, 1
+            return zero
 
-        pred_value, target_value = self._resolve_value_pair(pred, target, apply_sampling=True)
         if self.is_penalty:
+            pred_value, _ = self._resolve_value_pair(
+                pred,
+                target=None,
+                apply_sampling=True,
+            )
             loss = self.loss_weight * pred_value.square().mean()
             num_obs = 1
         elif self.loss_fn is not None:
+            pred_value, target_value = self._resolve_value_pair(
+                pred,
+                target,
+                apply_sampling=True,
+            )
             if self.per_atom_loss and target is not None and properties.n_atoms in target:
                 n_atoms = self._flatten_value(target[properties.n_atoms])
                 if torch.is_tensor(n_atoms) and pred_value.shape[:1] == n_atoms.shape[:1]:
@@ -291,32 +324,21 @@ class DistillOutput(ModelOutput):
     def bind_rescale_layers(self, layers) -> None:
         self._student_rescale_layers = list(layers)
 
+    def _normalize_teacher_value(self, value: Any, target: Dict) -> Any:
+        """Convert a physical-unit teacher value to the student's loss space."""
+        normalized = target.copy()
+        normalized[self.student_property] = value
+        for layer in self._student_rescale_layers:
+            normalized = layer.unscale(normalized, force_process=True)
+        return normalized[self.student_property]
+
     def _teacher_target_from_batch(self, target: Dict) -> torch.Tensor:
         if self.teacher_property not in target:
             raise KeyError(
                 f"Offline distillation batch is missing '{self.teacher_property}'. "
                 f"Available keys: {sorted(target.keys())}"
             )
-        value = target[self.teacher_property]
-        if self.student_property in {
-            properties.energy_hessian,
-            properties.energy_hessian_sampled,
-            properties.energy_hessian_projected,
-        }:
-            for layer in self._student_rescale_layers:
-                rescale = layer
-                if hasattr(layer, "domain_modules"):
-                    rescale = layer.domain_modules[layer._get_domain(target)]
-                for scale in getattr(rescale, "scales", []):
-                    if scale.key == properties.energy:
-                        value = value / scale.scale
-            return value
-
-        normalized = target.copy()
-        normalized[self.student_property] = value
-        for layer in self._student_rescale_layers:
-            normalized = layer.unscale(normalized, force_process=True)
-        return normalized[self.student_property]
+        return self._normalize_teacher_value(target[self.teacher_property], target)
 
     def _resolve_teacher_model(self, reference: torch.Tensor):
         teacher = self._teacher_state.get("model")
@@ -345,9 +367,6 @@ class DistillOutput(ModelOutput):
             for parameter in teacher.parameters():
                 parameter.requires_grad_(False)
             self._teacher_state["model"] = teacher
-            self._teacher_state["rescale_layers"] = [
-                layer for layer in getattr(teacher, "output_modules", []) if hasattr(layer, "unscale")
-            ]
 
         teacher.to(device=reference.device)
         if reference.is_floating_point():
@@ -368,9 +387,6 @@ class DistillOutput(ModelOutput):
             if not (isinstance(key, str) and key.startswith("__distill_teacher_cache__"))
         }
         teacher_pred = teacher(teacher_input)
-        for layer in self._teacher_state.get("rescale_layers", []):
-            teacher_pred = layer.unscale(teacher_pred, force_process=True)
-
         cache[self.cache_key] = teacher_pred
         return teacher_pred
 
@@ -389,7 +405,10 @@ class DistillOutput(ModelOutput):
                     f"Teacher prediction is missing '{self.teacher_output_property}'. "
                     f"Available keys: {sorted(teacher_pred.keys())}"
                 )
-            teacher_value = teacher_pred[self.teacher_output_property]
+            teacher_value = self._normalize_teacher_value(
+                teacher_pred[self.teacher_output_property],
+                target,
+            )
         else:
             teacher_value = self._teacher_target_from_batch(target)
 
@@ -417,14 +436,17 @@ class DistillOutput(ModelOutput):
         )
 
     def calculate_loss(self, pred: Dict, target: Optional[Dict] = None, return_num_obs=True) -> torch.Tensor:
+        if self.loss_weight == 0 or (self.only_train and not self.training):
+            reference = pred.get(self.student_property)
+            if reference is None and target is not None:
+                reference = target.get(self.teacher_property)
+            zero = reference.new_zeros(()) if torch.is_tensor(reference) else torch.zeros(())
+            if return_num_obs:
+                return zero, 1
+            return zero
+
         student_value, target_value = self._resolve_value_pair(pred, target, apply_sampling=True)
         num_obs = student_value.view(-1).shape[0]
-        zero = student_value.new_zeros(())
-
-        if self.loss_weight == 0 or (self.only_train and not self.training):
-            if return_num_obs:
-                return zero, num_obs
-            return zero
 
         if getattr(self.loss_fn, "requires_batch", False):
             loss = self.loss_weight * self.loss_fn(student_value, target_value, target)

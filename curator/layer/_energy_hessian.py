@@ -312,6 +312,7 @@ class EnergyHessianOutput(torch.nn.Module):
         probe_key: str = properties.energy_hessian_probe_vectors,
         normalize_probes: bool = False,
         probe_distribution: str = "gaussian",
+        only_train: bool = False,
         model_outputs: Optional[List[str]] = None,
         update_callback: Optional[Callable] = None,
     ) -> None:
@@ -323,6 +324,7 @@ class EnergyHessianOutput(torch.nn.Module):
         self.probe_key = probe_key
         self.normalize_probes = bool(normalize_probes)
         self.probe_distribution = str(probe_distribution)
+        self.only_train = bool(only_train)
         self.update_callback = update_callback
         self.model_outputs = model_outputs if model_outputs is not None else [properties.energy_hessian]
 
@@ -340,6 +342,11 @@ class EnergyHessianOutput(torch.nn.Module):
         data: properties.Type,
         training: Optional[bool] = None,
     ) -> properties.Type:
+        if self.only_train and not self.training:
+            zero = data[properties.positions].new_zeros(())
+            for key in self.model_outputs:
+                data[key] = zero
+            return data
         if (
             properties.energy_hessian not in self.model_outputs
             and properties.energy_hessian_sampled not in self.model_outputs
@@ -349,7 +356,10 @@ class EnergyHessianOutput(torch.nn.Module):
         ):
             return data
         if properties.forces not in data:
-            raise KeyError("EnergyHessianOutput requires `forces` in the batch. Add GradientOutput before EnergyHessianOutput.")
+            raise KeyError(
+                "EnergyHessianOutput requires `forces` in the batch. Add a "
+                "force-producing output before EnergyHessianOutput."
+            )
         if properties.positions not in data:
             raise KeyError("EnergyHessianOutput requires `positions` in the batch.")
         forces = data[properties.forces]

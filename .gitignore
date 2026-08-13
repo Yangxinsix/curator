@@ -10,6 +10,11 @@ test/*
 !test/test_native_neighborlist.py
 !test/test_direct_birch_selection.py
 !test/test_training_loss_consistency.py
+!test/test_charge_equilibration.py
+!test/test_ewald_nacl.py
+!test/test_ewald_theory.py
+!test/test_feature_distillation.py
+!test/test_qeq_task_growth.py
 scripts/
 
 # model files

@@ -5,13 +5,6 @@ model:
       compute_distance_from_R: true
       compute_forces: true
   output_modules:
-    gradient_output:
-      _target_: curator.layer.GradientOutput
-      grad_on_edge_diff: false
-      grad_on_positions: true
-      model_outputs:
-        - energy
-        - forces
     energy_hessian_output:
       _target_: curator.layer.EnergyHessianOutput
       vectorize: false

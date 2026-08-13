@@ -3,6 +3,7 @@ from curator.data._uncertainty import UncertaintyModule, collect_uncertainty_out
 
 ensure_torch_safe_globals()
 
+from .features import IrrepsFeatureSpec, ScalarVectorFeatureSpec
 from .painn import Painn
 from .nequip import Nequip
 from .mace import MACE
@@ -14,6 +15,7 @@ from .conversion import (
     convert_multi_to_single_domain,
     convert_single_to_multi_domain,
     create_model_from_mace,
+    transform_mace_to_qeq,
 )
 from .multi_domain import (
     align_model_domains,

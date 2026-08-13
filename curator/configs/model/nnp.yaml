@@ -2,7 +2,7 @@ defaults:
   - _self_
   - representation: painn                                    # representation network used by the potential
   - /model/input_modules@input_modules.pairwise_distance: pairwise_distance  # preprocessing modules
-  - /model/output_modules@output_modules.gradient_output: gradient_output    # force/stress gradient head
+  - /model/force_output@output_modules.force_output: gradient                # force-producing strategy
   - /model/output_modules@output_modules.global_rescale_shift: global_rescale_shift  # rescale/shift outputs
 _convert_: all                                               # fully instantiate nested configs
 _target_: curator.model.NeuralNetworkPotential               # base potential wrapper
