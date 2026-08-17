@@ -12,6 +12,7 @@ from .properties import resolve_heads, normalize_head_flag
 from ase.data import chemical_symbols, atomic_numbers
 import json
 import logging
+import numbers
 from torch.utils.data import ConcatDataset, Dataset
 from pytorch_lightning.utilities.combined_loader import CombinedLoader
 
@@ -322,13 +323,33 @@ class AtomsDataModule(pl.LightningDataModule):
         else:
             with open(self.split_file, "r") as fp:
                 splits = json.load(fp)
-            for k, v in splits.items():
-                if k == "train":
-                    self.train_idx = v
-                elif k == "validation":
-                    self.val_idx = v
-                elif k == "test":
-                    self.test_idx = v
+            if not isinstance(splits, dict):
+                raise ValueError("split_file must contain a JSON object")
+            unknown = set(splits) - {"train", "validation", "test"}
+            missing = {"train", "validation"} - set(splits)
+            if unknown:
+                raise ValueError("split_file contains unknown keys: %s" % sorted(unknown))
+            if missing:
+                raise ValueError("split_file is missing keys: %s" % sorted(missing))
+            validated = {}
+            used = set()
+            for name in ("train", "validation", "test"):
+                values = splits.get(name, [])
+                if not isinstance(values, list) or any(
+                    isinstance(index, bool) or not isinstance(index, numbers.Integral)
+                    for index in values
+                ):
+                    raise ValueError("split_file %s indices must be integer lists" % name)
+                values = [int(index) for index in values]
+                if any(index < 0 or index >= self.datalen for index in values):
+                    raise ValueError("split_file %s contains out-of-range indices" % name)
+                if len(values) != len(set(values)) or used.intersection(values):
+                    raise ValueError("split_file indices must be unique and disjoint")
+                used.update(values)
+                validated[name] = values
+            self.train_idx = validated["train"]
+            self.val_idx = validated["validation"]
+            self.test_idx = validated["test"]
             self.num_train = len(self.train_idx) if self.train_idx is not None else self.num_train
             self.num_val = len(self.val_idx) if self.val_idx is not None else self.num_val
             self.num_test = len(self.test_idx) if self.test_idx is not None else self.num_test

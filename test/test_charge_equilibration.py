@@ -1,3 +1,4 @@
+import pytest
 import torch
 from torch import nn
 
@@ -237,3 +238,12 @@ def test_rescale_composes_generic_physical_contributions_in_the_right_units():
         roundtrip[properties.forces],
         normalized[properties.forces],
     )
+
+
+def test_legacy_constant_potential_boolean_is_rejected():
+    with pytest.raises(ValueError, match="cannot be specified by a boolean"):
+        ChargeEquilibration(
+            num_features=4,
+            compute_forces=False,
+            constant_potential=True,
+        )

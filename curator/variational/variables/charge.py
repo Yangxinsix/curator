@@ -7,6 +7,7 @@ import torch
 
 from ..compiler import CompiledBoundary
 from ..functional import QuadraticProblem
+from ..operators import VariationalOperator
 from ..spec import BoundarySpec, ConstraintSpec, GroupSpec, VariableSpec
 
 
@@ -59,16 +60,32 @@ class ChargeFunctional:
     interaction_kernel: Optional[torch.Tensor] = None
 
     def __post_init__(self) -> None:
-        if self.electronegativity.ndim != 1:
-            raise ValueError("electronegativity must be rank 1")
+        if self.electronegativity.ndim != 1 or not self.electronegativity.is_floating_point():
+            raise ValueError("electronegativity must be a floating-point rank-1 tensor")
         if self.hardness.shape != self.electronegativity.shape:
             raise ValueError("hardness must match electronegativity")
+        if (
+            self.hardness.dtype != self.electronegativity.dtype
+            or self.hardness.device != self.electronegativity.device
+        ):
+            raise ValueError("hardness must match electronegativity dtype and device")
+        if not bool(torch.isfinite(self.electronegativity).all().item()) or not bool(
+            torch.isfinite(self.hardness).all().item()
+        ):
+            raise ValueError("charge parameters must be finite")
         if bool((self.hardness <= 0.0).any().item()):
             raise ValueError("hardness must be positive")
         if self.interaction_kernel is not None:
             n_state = self.electronegativity.numel()
             if self.interaction_kernel.shape != (n_state, n_state):
                 raise ValueError("interaction kernel has the wrong shape")
+            if (
+                self.interaction_kernel.dtype != self.electronegativity.dtype
+                or self.interaction_kernel.device != self.electronegativity.device
+            ):
+                raise ValueError("interaction kernel must match parameter dtype and device")
+            if not bool(torch.isfinite(self.interaction_kernel).all().item()):
+                raise ValueError("interaction kernel must be finite")
             if not torch.allclose(
                 self.interaction_kernel,
                 self.interaction_kernel.transpose(0, 1),
@@ -96,6 +113,50 @@ class ChargeFunctional:
             hessian=self.hessian,
             linear=self.electronegativity,
         )
+
+
+@dataclass(frozen=True)
+class ChargeQuadraticOperator:
+    """Matrix-free Hessian part ``diag(hardness) + interaction`` for charge."""
+
+    hardness: torch.Tensor
+    interaction: Optional[VariationalOperator] = None
+
+    def __post_init__(self) -> None:
+        if self.hardness.ndim != 1 or not self.hardness.is_floating_point():
+            raise ValueError("hardness must be a floating-point vector")
+        if not bool(torch.isfinite(self.hardness).all().item()):
+            raise ValueError("hardness must be finite")
+        if bool((self.hardness <= 0.0).any().item()):
+            raise ValueError("hardness must be positive")
+
+    def matvec(self, charge: torch.Tensor) -> torch.Tensor:
+        if charge.shape != self.hardness.shape:
+            raise ValueError("charge must match hardness")
+        value = self.hardness * charge
+        if self.interaction is not None:
+            interaction = self.interaction.matvec(charge)
+            if interaction.shape != charge.shape:
+                raise ValueError("interaction matvec must preserve charge shape")
+            if interaction.dtype != charge.dtype or interaction.device != charge.device:
+                raise ValueError("interaction matvec must preserve charge dtype and device")
+            if not bool(torch.isfinite(interaction).all().item()):
+                raise ValueError("interaction matvec returned non-finite values")
+            value = value + interaction
+        return value
+
+    def energy(self, charge: torch.Tensor) -> torch.Tensor:
+        value = 0.5 * self.hardness @ charge.square()
+        if self.interaction is not None:
+            interaction = self.interaction.energy(charge)
+            if not isinstance(interaction, torch.Tensor) or interaction.numel() != 1:
+                raise ValueError("interaction energy must return a scalar tensor")
+            if interaction.dtype != charge.dtype or interaction.device != charge.device:
+                raise ValueError("interaction energy must preserve charge dtype and device")
+            if not bool(torch.isfinite(interaction).item()):
+                raise ValueError("interaction energy returned a non-finite value")
+            value = value + interaction
+        return value
 
 
 def project_fixed_total_charge(

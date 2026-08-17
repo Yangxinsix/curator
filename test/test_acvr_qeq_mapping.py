@@ -8,10 +8,13 @@ from curator.variational import (
     compile_boundary,
     evaluate_kkt,
     solve_dense,
+    solve_projected_cg,
 )
 from curator.variational.variables import (
     ChargeFunctional,
+    ChargeQuadraticOperator,
     charge_variable_spec,
+    fixed_electrode_potentials_recipe,
     fixed_total_charge_boundary,
     project_fixed_total_charge,
 )
@@ -120,3 +123,79 @@ def test_real_ewald_qeq_problem_matches_direct_energy_and_is_feasible():
     torch.testing.assert_close(result.energy, direct, atol=3.0e-11, rtol=0.0)
     torch.testing.assert_close(result.state.sum(), torch.tensor(0.3, dtype=DTYPE))
     assert result.residuals.maximum_norm < 1.0e-10
+
+
+def test_matrix_free_charge_operator_matches_dense_ewald_fixed_q_solution():
+    ewald = EwaldSummation(alpha=0.4, acc_factor=12.0)
+    data = _periodic_data(
+        TRICLINIC_CELL,
+        FRACTIONAL_POSITIONS,
+        [0.1, 0.2],
+        ewald,
+        neighbor_cutoff=15.0,
+    )
+    ewald_operator = EwaldChargeOperator(ewald)
+    interaction = ewald_operator.bind(data)
+    chi = torch.tensor([0.4, 0.1], dtype=DTYPE)
+    hardness = torch.tensor([8.0, 7.0], dtype=DTYPE)
+    variable = charge_variable_spec()
+    compiled = compile_boundary(
+        fixed_total_charge_boundary(0.3, variable),
+        VariableLayout(variable=variable, n_entities=2),
+    )
+    dense = solve_dense(
+        ChargeFunctional(chi, hardness, interaction.kernel()).problem(compiled)
+    )
+
+    iterative = solve_projected_cg(
+        ChargeQuadraticOperator(hardness, interaction),
+        chi,
+        compiled.constraint_matrix,
+        compiled.constraint_target,
+        rtol=1.0e-12,
+        atol=1.0e-12,
+        reduced_stability_certified=True,
+    )
+
+    assert iterative.reliable
+    torch.testing.assert_close(iterative.state, dense.state, atol=3.0e-11, rtol=0.0)
+    torch.testing.assert_close(iterative.energy, dense.energy, atol=3.0e-11, rtol=0.0)
+    torch.testing.assert_close(
+        iterative.multipliers, dense.multipliers, atol=3.0e-11, rtol=0.0
+    )
+
+
+def test_real_ewald_fixed_potential_recipe_sets_charge_chemical_potentials():
+    ewald = EwaldSummation(alpha=0.4, acc_factor=12.0)
+    data = _periodic_data(
+        TRICLINIC_CELL,
+        FRACTIONAL_POSITIONS,
+        [0.0, 0.0],
+        ewald,
+        neighbor_cutoff=15.0,
+    )
+    interaction = EwaldChargeOperator(ewald).bind(data).kernel()
+    variable = charge_variable_spec()
+    boundary = fixed_electrode_potentials_recipe(
+        {"left": [0], "right": [1]},
+        {"left": -0.2, "right": 0.3},
+        variable=variable,
+    )
+    compiled = compile_boundary(
+        boundary,
+        VariableLayout(variable=variable, n_entities=2),
+    )
+    functional = ChargeFunctional(
+        torch.tensor([0.4, 0.1], dtype=DTYPE),
+        torch.tensor([20.0, 19.0], dtype=DTYPE),
+        interaction,
+    )
+
+    result = solve_dense(functional.problem(compiled))
+
+    torch.testing.assert_close(
+        functional.chemical_potential(result.state),
+        torch.tensor([-0.2, 0.3], dtype=DTYPE),
+        atol=3.0e-11,
+        rtol=0.0,
+    )

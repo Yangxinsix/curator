@@ -378,3 +378,31 @@ def test_thermodynamic_control_gauge_requires_an_explicit_policy():
     shifted_result = solve_dense(shifted.to_problem(hessian, linear))
     torch.testing.assert_close(base_result.state, shifted_result.state)
     assert not torch.allclose(base_result.multipliers, shifted_result.multipliers)
+
+
+def test_reference_gauge_must_act_on_the_gauge_direction():
+    variable = _charge_variable()
+    layout = VariableLayout(variable=variable, n_entities=2)
+    boundary = BoundarySpec(
+        variable=variable,
+        groups=(
+            GroupSpec.from_indices("free", [0]),
+            GroupSpec.from_indices("fixed", [1]),
+        ),
+        equalities=(ConstraintSpec.group_sum("fixed_Q", "fixed", 0.0),),
+        controls=(
+            ControlSpec.group_potential("free_V", "free", 0.0),
+            ControlSpec.group_potential("fixed_V", "fixed", 0.0),
+        ),
+        gauge=GaugeSpec(mode="reference", reference_index=0),
+    )
+
+    with pytest.raises(ValueError, match="does not constrain"):
+        compile_boundary(boundary, layout)
+
+
+def test_group_indices_and_gauge_tolerance_are_strictly_validated():
+    with pytest.raises(ValueError, match="integer indices"):
+        GroupSpec.from_indices("bad", [0.9])
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        GaugeSpec(mode="allow", tolerance=float("nan"))

@@ -23,8 +23,9 @@ properties.  For the first ACVR charge experiments, use:
 
 The built-in `SpiceDataset` reads the official HDF5 schema lazily.  It converts
 bohr/hartree data to Curator's angstrom/eV convention, converts energy gradients
-to forces, exposes MBIS charges as auxiliary labels, and infers the integer
-total charge only after checking the MBIS sum.
+to forces, obtains total charge from mapped-SMILES formal charges, and exposes
+MBIS charges as optional auxiliary labels.  When MBIS data exist, their rounded
+sum is checked against the formal molecular charge.
 
 ```yaml
 data:
@@ -50,6 +51,58 @@ The reader rejects explicit incompatible unit metadata instead of silently
 converting it.  Historical files with no unit attributes remain accepted
 because the official schema defines atomic units.
 
+### Small official Ion Pairs artifact
+
+The complete SPICE 2.0.1 release is a single 37.5 GB file.  For a first real
+reader/training smoke test, use the pinned upstream QCArchive downloader with
+[`example/acvr/spice_qcarchive_ion_pairs.yaml`](../../example/acvr/spice_qcarchive_ion_pairs.yaml)
+as its `config.yaml`.  This downloads only
+`SPICE Ion Pairs Single Points Dataset v1.2`.
+
+The 2026-08-17 reference retrieval produced 28 molecular groups and 1428
+two-atom conformations in a 215 KB file.  Its SHA-256 was
+`631137e6ee16f6974721a5d6653b9f730fb57bd3dbea7e129e8c8a9f95e51ebd`.
+The source artifact contains energies, gradients and SCF dipoles but no MBIS
+charges, which is why total charge must not depend on a partition-charge field.
+
+The optional real-artifact smoke test is enabled with:
+
+```bash
+CURATOR_SPICE_ION_PAIRS=/path/to/SPICE.hdf5 \
+  python -m pytest -q test/test_spice_dataset.py
+```
+
+### Distance extrapolation split
+
+Do not use a random conformation split to claim long-range generalization on
+Ion Pairs.  Neighboring configurations on the same separation curve are too
+similar.  Build a deterministic split in the flattened dataset index space:
+
+```python
+import json
+
+from curator.data import SpiceDataset, ion_pair_distance_split
+
+dataset = SpiceDataset(
+    "/path/to/SPICE.hdf5",
+    compute_neighbor_list=False,
+    subsets=["ion_pairs"],
+)
+split = ion_pair_distance_split(dataset, 5.5, 6.5)
+with open("distance_split_5.5_6.5.json", "w") as handle:
+    json.dump(split, handle)
+```
+
+The intervals are train `r <= 5.5 angstrom`, validation
+`5.5 < r <= 6.5 angstrom`, and test `r > 6.5 angstrom`.  The reference
+1428-conformation artifact gives 868/280/280 samples.  Pass the resulting JSON
+to the existing `AtomsDataModule.split_file`; no new trainer path is required.
+See
+[`example/acvr/spice_ion_pairs_distance.yaml`](../../example/acvr/spice_ion_pairs_distance.yaml).
+
+The combined Ion Pairs/Dipeptides configuration remains useful as a reader and
+training smoke test, but its random split is not long-range evidence.
+
 ## What SPICE can and cannot establish
 
 SPICE is appropriate for:
@@ -57,8 +110,8 @@ SPICE is appropriate for:
 - energy/force regression on isolated molecules;
 - conditioning on a known molecular total charge;
 - ion-pair distance and orientation extrapolation;
-- checking whether MBIS charge or dipole supervision improves observable
-  transfer.
+- checking whether dipole supervision, and MBIS supervision where available,
+  improves observable transfer.
 
 SPICE alone cannot validate:
 

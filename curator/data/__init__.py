@@ -17,7 +17,7 @@ from .dataset import AseDataset, NumpyDataset, cat_tensors, collate_atomsdata
 from .atoms_data import AtomsData
 from .collate_atoms_data import collate_atoms_data
 from .datamodule import AtomsDataModule
-from .spice import SpiceDataset
+from .spice import SpiceDataset, ion_pair_distance_split
 from .capabilities import DatasetCapabilityManifest, MissingDatasetCapabilityError
 from ._type_mapper import TypeMapper
 from ._transform import EnsureBidirectionalEdges, Transform, UnitTransform
@@ -59,6 +59,7 @@ __all__ = [
     EnsureBidirectionalEdges,
     AtomsDataModule,
     SpiceDataset,
+    ion_pair_distance_split,
     DatasetCapabilityManifest,
     MissingDatasetCapabilityError,
     UncertaintyModule,

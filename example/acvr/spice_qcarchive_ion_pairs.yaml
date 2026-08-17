@@ -1,0 +1,11 @@
+# Use as config.yaml with the official openmm/spice-dataset 2.0.1 downloader.
+subsets:
+  - SPICE Ion Pairs Single Points Dataset v1.2
+
+values:
+  - dft total energy
+  - dft total gradient
+  - mbis charges
+  - scf dipole
+
+max_force: 1.0

@@ -1,6 +1,7 @@
 """Lazy reader for official SPICE 2.x HDF5 downloads."""
 
 import bisect
+import re
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -62,6 +63,76 @@ def _validate_unit(dataset, expected: Tuple[str, ...], group_name: str) -> None:
         )
 
 
+def _formal_charge_from_smiles(smiles: str) -> int:
+    """Return the integer formal charge encoded in bracketed SMILES atoms."""
+
+    charge = 0
+    for atom in re.findall(r"\[([^]]+)\]", smiles):
+        atom = atom.rsplit(":", 1)[0]
+        matches = re.findall(r"([+-]+)(\d*)", atom)
+        if not matches:
+            continue
+        signs, magnitude = matches[-1]
+        if "+" in signs and "-" in signs:
+            raise ValueError("invalid mixed-sign formal charge in SMILES")
+        value = int(magnitude) if magnitude else len(signs)
+        charge += value if signs[0] == "+" else -value
+    return charge
+
+
+def ion_pair_distance_split(
+    dataset: "SpiceDataset",
+    train_max_distance: float = 5.5,
+    validation_max_distance: float = 6.5,
+) -> Dict[str, List[int]]:
+    """Split two-atom SPICE ion pairs by separation in angstrom.
+
+    The returned indices address the flattened :class:`SpiceDataset`, so the
+    result can be serialized directly as an ``AtomsDataModule.split_file``.
+    Training contains distances ``<= train_max_distance``, validation contains
+    the open/closed interval up to ``validation_max_distance``, and test holds
+    the longer-range extrapolation configurations.
+    """
+
+    if not isinstance(dataset, SpiceDataset):
+        raise TypeError("dataset must be a SpiceDataset")
+    train_max_distance = float(train_max_distance)
+    validation_max_distance = float(validation_max_distance)
+    if not (
+        np.isfinite(train_max_distance)
+        and np.isfinite(validation_max_distance)
+        and 0.0 < train_max_distance < validation_max_distance
+    ):
+        raise ValueError(
+            "distance thresholds must be finite and satisfy "
+            "0 < train_max_distance < validation_max_distance"
+        )
+    if np.any(dataset._atom_counts != 2):
+        raise ValueError("ion-pair distance splitting requires exactly two atoms per group")
+
+    split = {"train": [], "validation": [], "test": []}
+    handle = dataset._handle()
+    offset = 0
+    for group_name, count in zip(dataset._group_names, dataset._counts):
+        count = int(count)
+        conformations = np.arange(count, dtype=np.int64) * dataset._stride
+        positions = np.asarray(handle[group_name]["conformations"][conformations])
+        distances = np.linalg.norm(positions[:, 1] - positions[:, 0], axis=1) * units.Bohr
+        for local_index, distance in enumerate(distances):
+            index = offset + local_index
+            if distance <= train_max_distance:
+                split["train"].append(index)
+            elif distance <= validation_max_distance:
+                split["validation"].append(index)
+            else:
+                split["test"].append(index)
+        offset += count
+
+    if any(not indices for indices in split.values()):
+        raise ValueError("distance thresholds produced an empty train/validation/test split")
+    return split
+
+
 class SpiceDataset(torch.utils.data.Dataset):
     """Read selected SPICE molecules and conformations without loading all data.
 
@@ -69,9 +140,10 @@ class SpiceDataset(torch.utils.data.Dataset):
     gradients in hartree/bohr.  Samples returned here use Curator units:
     angstrom, eV, and eV/angstrom, with forces equal to minus the gradient.
 
-    Total molecular charge is inferred from the sum of MBIS charges.  This
-    avoids adding RDKit as a runtime dependency while retaining an explicit
-    validation that the inferred value is near an integer.
+    Total molecular charge is read from formal charges in the mapped SMILES,
+    without adding RDKit as a runtime dependency.  When MBIS charges exist,
+    their rounded sum is cross-checked against that formal charge; the atomic
+    MBIS values remain optional, partition-dependent auxiliary labels.
     """
 
     def __init__(
@@ -163,8 +235,6 @@ class SpiceDataset(torch.utils.data.Dataset):
         required = {"subset", "smiles", "atomic_numbers", "conformations", self.energy_key}
         if self.require_forces:
             required.add("dft_total_gradient")
-        if self.require_total_charge:
-            required.add("mbis_charges")
         missing = sorted(required - set(group.keys()))
         if missing:
             raise ValueError(
@@ -212,31 +282,39 @@ class SpiceDataset(torch.utils.data.Dataset):
         labels = ["energy", "atomic_numbers", "positions"]
         if "dft_total_gradient" in fields:
             labels.append("forces")
-        if "mbis_charges" in fields:
-            labels.extend(("total_charge", "atomic_charge_mbis"))
-        if "scf_dipole" in fields:
+        if self.require_total_charge:
+            labels.append("total_charge")
+        if "mbis_charges" in fields and self.include_atomic_charges:
+            labels.append("atomic_charge_mbis")
+        if "scf_dipole" in fields and self.include_dipole:
             labels.append("dipole")
+        can_validate = ["isolated_molecule_energy_force", "ion_pair_distance_asymptote"]
+        if "total_charge" in labels:
+            can_validate.append("fixed_total_charge_conditioning")
+        if "atomic_charge_mbis" in labels:
+            can_validate.append("partition_charge_auxiliary")
         return DatasetCapabilityManifest(
             name="SPICE selected subset",
             version="2.x HDF5 schema",
             source="https://github.com/openmm/spice-dataset",
             license="CC0",
             labels=tuple(labels),
-            can_validate=(
-                "isolated_molecule_energy_force",
-                "fixed_total_charge_conditioning",
-                "ion_pair_distance_asymptote",
-                "partition_charge_auxiliary",
-            ),
+            can_validate=tuple(can_validate),
             cannot_validate=(
                 "constant_electrode_potential",
                 "electrode_capacitance",
                 "same_geometry_cross_voltage_response",
                 "periodic_electrochemical_interface",
             ),
-            notes=(
-                "MBIS atomic charges are partition-dependent auxiliary labels.",
-                "Charged-molecule dipoles are origin dependent.",
+            notes=tuple(
+                [
+                    "Charged-molecule dipoles are origin dependent.",
+                ]
+                + (
+                    ["MBIS atomic charges are partition-dependent auxiliary labels."]
+                    if "atomic_charge_mbis" in labels
+                    else ["This selection does not expose atomic partition charges."]
+                )
             ),
         )
 
@@ -306,6 +384,10 @@ class SpiceDataset(torch.utils.data.Dataset):
                 -gradient * units.Hartree / units.Bohr,
                 dtype=self.default_dtype,
             )
+        formal_charge = torch.tensor(
+            [float(_formal_charge_from_smiles(_decode(group["smiles"][0])))],
+            dtype=self.default_dtype,
+        )
         if "mbis_charges" in group:
             charge = torch.as_tensor(
                 np.asarray(group["mbis_charges"][conformation]).reshape(n_atoms),
@@ -318,11 +400,14 @@ class SpiceDataset(torch.utils.data.Dataset):
                     "MBIS charges for %s conformation %d do not sum near an integer"
                     % (group_name, conformation)
                 )
-            sample[properties.total_charge] = rounded.reshape(1)
+            if abs(float((rounded - formal_charge).detach().cpu())) > 0.5:
+                raise ValueError(
+                    "MBIS and SMILES total charges disagree for %s" % group_name
+                )
             if self.include_atomic_charges:
                 sample[properties.atomic_charge] = charge
-        elif self.require_total_charge:
-            raise ValueError("total charge cannot be inferred without MBIS charges")
+        if self.require_total_charge:
+            sample[properties.total_charge] = formal_charge
         if self.include_dipole and "scf_dipole" in group:
             sample[properties.dipole] = torch.as_tensor(
                 np.asarray(group["scf_dipole"][conformation]).reshape(1, 3)

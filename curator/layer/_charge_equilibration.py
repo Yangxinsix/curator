@@ -47,6 +47,12 @@ class ChargeEquilibration(nn.Module):
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
+        if constant_potential:
+            raise ValueError(
+                "constant potential cannot be specified by a boolean; use an "
+                "ACVR BoundarySpec with electrode groups, potential values, "
+                "charge constraints, and an explicit gauge"
+            )
         self.electronegativity_mlp = self._build_readout(
             electronegativity_mlp, num_features
         )
@@ -62,6 +68,8 @@ class ChargeEquilibration(nn.Module):
             )
         )
         self.compute_forces = compute_forces
+        # Retained in the serialized constructor contract only.  True is
+        # rejected above because this legacy module implements fixed-Q only.
         self.constant_potential = constant_potential
         self.min_hardness = min_hardness
         self.model_outputs = (

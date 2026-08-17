@@ -1,0 +1,28 @@
+# Long-range extrapolation benchmark for the official SPICE Ion Pairs subset.
+# Generate split_file with curator.data.ion_pair_distance_split as documented in
+# docs/acvr/datasets.md.
+data:
+  _target_: curator.data.AtomsDataModule
+  _convert_: partial
+  data_type: Spice
+  datapath: /absolute/path/to/SPICE.hdf5
+  split_file: /absolute/path/to/distance_split_5.5_6.5.json
+  cutoff: 6.0
+  compute_neighbor_list: true
+  batch_size: 16
+  num_train: 0
+  num_val: 0
+  num_test: 0
+  shuffle: true
+  num_workers: 4
+  pin_memory: true
+  dataset_kwargs:
+    subsets:
+      - ion_pairs
+    energy_key: formation_energy
+    include_atomic_charges: false
+    include_dipole: true
+    require_forces: true
+    require_total_charge: true
+    max_conformations_per_molecule: null
+    stride: 1

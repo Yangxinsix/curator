@@ -6,6 +6,11 @@ from typing import Dict, List, Sequence, Tuple, Union
 import torch
 
 from .functional import QuadraticProblem
+from .operators import (
+    BoundaryQuadraticOperator,
+    OperatorQuadraticProblem,
+    VariationalOperator,
+)
 from .spec import (
     BoundarySpec,
     EnvironmentSpec,
@@ -88,6 +93,51 @@ class CompiledBoundary:
             )
         return QuadraticProblem(
             hessian=effective_hessian,
+            linear=effective_linear,
+            constraint_matrix=self.constraint_matrix,
+            constraint_target=self.constraint_target,
+            constant=effective_constant,
+        )
+
+    def to_operator_problem(
+        self,
+        operator: VariationalOperator,
+        linear: torch.Tensor,
+        constant: Union[torch.Tensor, float] = 0.0,
+    ) -> OperatorQuadraticProblem:
+        """Apply every compiled boundary term without materializing a Hessian."""
+
+        if linear.shape != (self.n_state,):
+            raise ValueError("base linear term does not match the compiled layout")
+        if not isinstance(constant, torch.Tensor):
+            constant = linear.new_tensor(constant)
+        effective_operator = operator
+        effective_linear = linear
+        effective_constant = constant.reshape(())
+        if self.control_matrix.shape[0]:
+            effective_linear = (
+                effective_linear
+                - self.control_matrix.transpose(0, 1) @ self.control_value
+            )
+        if self.environment_matrix.shape[0]:
+            effective_operator = BoundaryQuadraticOperator(
+                operator,
+                self.environment_matrix,
+                self.environment_stiffness,
+            )
+            effective_linear = effective_linear - self.environment_matrix.transpose(
+                0, 1
+            ) @ (
+                self.environment_stiffness @ self.environment_target
+                + self.environment_field
+            )
+            effective_constant = effective_constant + 0.5 * (
+                self.environment_target
+                @ self.environment_stiffness
+                @ self.environment_target
+            )
+        return OperatorQuadraticProblem(
+            operator=effective_operator,
             linear=effective_linear,
             constraint_matrix=self.constraint_matrix,
             constraint_target=self.constraint_target,
@@ -179,6 +229,8 @@ def _component_indices(components: Tuple[int, ...], n_components: int) -> Tuple[
 
 def _values(value: NumericValue, count: int, tensor: torch.Tensor) -> torch.Tensor:
     result = torch.as_tensor(value, dtype=tensor.dtype, device=tensor.device).reshape(-1)
+    if not bool(torch.isfinite(result).all().item()):
+        raise ValueError("boundary values must be finite")
     if result.numel() == 1:
         return result.expand(count)
     if result.numel() != count:
@@ -266,6 +318,8 @@ def _stiffness_matrix(
         stiffness = torch.diag(stiffness)
     elif stiffness.shape != (count, count):
         raise ValueError("environment stiffness matrix has the wrong shape")
+    if not bool(torch.isfinite(stiffness).all().item()):
+        raise ValueError("environment stiffness must be finite")
     if not torch.allclose(stiffness, stiffness.transpose(0, 1)):
         raise ValueError("environment stiffness must be symmetric")
     if bool((torch.linalg.eigvalsh(stiffness) < -1.0e-12).any().item()):
@@ -283,6 +337,25 @@ def compile_boundary(
         raise ValueError("boundary variable does not match the supplied layout")
     group_specs = boundary.groups or (GroupSpec.all(),)
     groups = {group.name: _resolve_group(layout, group) for group in group_specs}
+    if boundary.partition_groups:
+        coverage = torch.zeros(
+            layout.n_entities, dtype=torch.int64, device=layout.torch_device
+        )
+        for name in boundary.partition_groups:
+            indices = groups[name]
+            coverage.index_add_(0, indices, torch.ones_like(indices))
+        if bool((coverage == 0).any().item()):
+            missing = torch.nonzero(coverage == 0, as_tuple=False).reshape(-1)
+            raise ValueError(
+                "boundary groups do not cover entity indices %s"
+                % missing.detach().cpu().tolist()
+            )
+        if bool((coverage > 1).any().item()):
+            overlapping = torch.nonzero(coverage > 1, as_tuple=False).reshape(-1)
+            raise ValueError(
+                "boundary groups overlap at entity indices %s"
+                % overlapping.detach().cpu().tolist()
+            )
     reference = torch.empty((), dtype=layout.dtype, device=layout.torch_device)
     constraint_blocks = []
     constraint_targets = []
@@ -415,6 +488,10 @@ def compile_boundary(
             index = gauge.reference_index
             if index is None or index < 0 or index >= controls_value.numel():
                 raise ThermodynamicGaugeError("reference_index is out of range")
+            if bool((gauge_basis[index].abs() <= gauge.tolerance).all().item()):
+                raise ThermodynamicGaugeError(
+                    "reference_index does not constrain the thermodynamic gauge"
+                )
             if abs(float(controls_value[index].detach().cpu())) > gauge.tolerance:
                 raise ThermodynamicGaugeError(
                     "the referenced control value must be zero"

@@ -1,6 +1,8 @@
 """Serializable specifications for internal variables and their boundaries."""
 
 from dataclasses import dataclass, field
+import math
+import numbers
 from typing import Any, Mapping, Optional, Sequence, Tuple, Union
 
 import torch
@@ -98,6 +100,11 @@ class GroupSpec:
             raise ValueError("unsupported group selection: %s" % self.selection)
         if self.selection == "indices" and not self.indices:
             raise ValueError("indices selection requires explicit indices")
+        if self.selection == "indices" and any(
+            isinstance(index, bool) or not isinstance(index, numbers.Integral)
+            for index in self.indices
+        ):
+            raise ValueError("indices selection requires integer indices")
         if self.selection in ("mask", "element", "molecule", "region") and not self.field:
             raise ValueError("%s selection requires a field" % self.selection)
         if self.selection in ("element", "molecule") and not self.values:
@@ -341,6 +348,8 @@ class GaugeSpec:
             raise ValueError("unsupported thermodynamic gauge mode")
         if self.mode == "reference" and self.reference_index is None:
             raise ValueError("reference gauge requires reference_index")
+        if not math.isfinite(self.tolerance) or self.tolerance < 0.0:
+            raise ValueError("gauge tolerance must be finite and non-negative")
 
 
 @dataclass(frozen=True)
@@ -353,11 +362,20 @@ class BoundarySpec:
     controls: Tuple[ControlSpec, ...] = ()
     environment: Tuple[EnvironmentSpec, ...] = ()
     gauge: Optional[GaugeSpec] = None
+    partition_groups: Tuple[str, ...] = ()
     schema_version: int = 1
 
     def __post_init__(self) -> None:
         names = [group.name for group in self.groups]
         if len(set(names)) != len(names):
             raise ValueError("group names must be unique")
+        if len(set(self.partition_groups)) != len(self.partition_groups):
+            raise ValueError("partition_groups cannot contain duplicates")
+        unknown_partition = set(self.partition_groups) - set(names)
+        if unknown_partition:
+            raise ValueError(
+                "partition_groups reference unknown groups: %s"
+                % sorted(unknown_partition)
+            )
         if self.schema_version != 1:
             raise ValueError("unsupported boundary schema version")

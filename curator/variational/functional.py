@@ -61,6 +61,10 @@ class QuadraticProblem:
             raise ValueError("all problem tensors must use the same dtype")
         if not self.hessian.is_floating_point():
             raise ValueError("quadratic problems require a floating-point dtype")
+        if not bool(torch.isfinite(self.hessian).all().item()) or any(
+            not bool(torch.isfinite(tensor).all().item()) for tensor in tensors
+        ):
+            raise ValueError("quadratic problem tensors must be finite")
 
     @classmethod
     def unconstrained(

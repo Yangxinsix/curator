@@ -5,12 +5,16 @@ linear observables satisfy ``y = B @ x``.
 """
 
 from .analytic import AnalyticQuadraticCase, make_consistent_quadratic_case
+from .amortized import AmortizedResult, solve_amortized
 from .backends import (
     ElectrodeThermoRecord,
     EwaldChargeOperator,
+    ProjectedCGResult,
     parse_electrode_thermo,
     read_electrode_thermo,
     solve_dense,
+    solve_projected_cg,
+    solve_projected_cg_problem,
     solve_schur,
 )
 from .compiler import (
@@ -23,7 +27,13 @@ from .compiler import (
 from .functional import QuadraticProblem
 from .kkt import assemble_kkt, evaluate_kkt
 from .projection import project_to_equalities
-from .operators import DenseQuadraticOperator, QuadraticOperator, VariationalOperator
+from .operators import (
+    BoundaryQuadraticOperator,
+    DenseQuadraticOperator,
+    OperatorQuadraticProblem,
+    QuadraticOperator,
+    VariationalOperator,
+)
 from .response import solve_linear_response
 from .result import KKTResiduals, LinearResponse, ProjectionResult, VariationalResult
 from .validation import (
@@ -52,7 +62,9 @@ from .spec import (
 
 __all__ = [
     "AnalyticQuadraticCase",
+    "AmortizedResult",
     "BoundaryRow",
+    "BoundaryQuadraticOperator",
     "BoundarySpec",
     "CompiledBoundary",
     "ConstraintSpec",
@@ -67,7 +79,9 @@ __all__ = [
     "LinearResponse",
     "LinearTermSpec",
     "DenseQuadraticOperator",
+    "OperatorQuadraticProblem",
     "ProjectionResult",
+    "ProjectedCGResult",
     "QuadraticOperator",
     "QuadraticProblem",
     "RankDeficientConstraintsError",
@@ -90,6 +104,9 @@ __all__ = [
     "parse_electrode_thermo",
     "read_electrode_thermo",
     "solve_dense",
+    "solve_amortized",
+    "solve_projected_cg",
+    "solve_projected_cg_problem",
     "solve_schur",
     "solve_linear_response",
     "thermodynamic_gauge_basis",
