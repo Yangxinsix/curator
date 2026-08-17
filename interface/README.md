@@ -5,6 +5,8 @@ This directory contains the CURATOR-owned files that are patched into LAMMPS:
 - `pair_curator.cpp/.h`: `pair_style curator`
 - `compute_uncertainty.cpp/.h`: `compute uncertainty <key>`
 - `compute_uncertainty_atom.cpp/.h`: `compute uncertainty/atom <key>`
+- `compute_acvr_kspace.cpp/.h`: point-charge Ewald/PPPM site-potential and
+  matrix-vector backend for ACVR
 - `ML-IAP/mliap_data.h/.cpp`: ML-IAP data plumbing needed by the CURATOR `mliap` bridge
 - `ML-IAP/mliap_unified_couple.pyx`: Python bridge for `pair_style mliap unified`
 
@@ -13,6 +15,9 @@ The intended design is:
 - keep CURATOR-specific LAMMPS code here
 - prefer patching these files instead of editing official LAMMPS source files
 - keep the `mliap` uncertainty path as a CURATOR-side interface change, not a `pair_mliap_kokkos.cpp` fork
+
+The ACVR KSpace operator contract, supported boundary terms, and parity test
+are documented in `docs/acvr/lammps_kspace_operator.md`.
 
 ## Deploy Uncertainty Maintenance Rule
 
@@ -159,7 +164,17 @@ bash "${CURATOR_ROOT}/interface/spack/rebuild_curator_pytorch_patch.sh" \
   --python-exe "${PYTHON_EXE}"
 ```
 
-Then run your usual root-only Spack rebuild.
+Refresh the concrete root after the patch checksum changes, while reusing the
+existing dependencies, and rebuild only LAMMPS:
+
+```bash
+spack -e "${ENV_DIR}" concretize -f --fresh-roots
+spack -e "${ENV_DIR}" install --only package --no-cache
+```
+
+Plain `concretize -f` may reuse the old installed root and therefore leave the
+previous patch in the active binary.  Confirm that `spack spec` reports the new
+patch checksum prefix before treating a rebuild as complete.
 
 ## What Actually Gets Patched Into LAMMPS
 
@@ -171,9 +186,14 @@ The generated patch injects these files:
 - `src/compute_uncertainty.h`
 - `src/compute_uncertainty_atom.cpp`
 - `src/compute_uncertainty_atom.h`
+- `src/compute_acvr_kspace.cpp`
+- `src/compute_acvr_kspace.h`
 - `src/ML-IAP/mliap_data.cpp`
 - `src/ML-IAP/mliap_data.h`
 - `src/ML-IAP/mliap_unified_couple.pyx`
+- `src/ML-IAP/pair_mliap.cpp`
+- `src/ML-IAP/pair_mliap.h`
+- `src/KOKKOS/mliap_unified_couple_kokkos.pyx`
 
 The canonical CURATOR source for the ML-IAP bridge is:
 
@@ -225,10 +245,16 @@ cp "${CURATOR_ROOT}/interface/compute_uncertainty.cpp" "${LAMMPS_SRC}/src/"
 cp "${CURATOR_ROOT}/interface/compute_uncertainty.h" "${LAMMPS_SRC}/src/"
 cp "${CURATOR_ROOT}/interface/compute_uncertainty_atom.cpp" "${LAMMPS_SRC}/src/"
 cp "${CURATOR_ROOT}/interface/compute_uncertainty_atom.h" "${LAMMPS_SRC}/src/"
+cp "${CURATOR_ROOT}/interface/compute_acvr_kspace.cpp" "${LAMMPS_SRC}/src/"
+cp "${CURATOR_ROOT}/interface/compute_acvr_kspace.h" "${LAMMPS_SRC}/src/"
 mkdir -p "${LAMMPS_SRC}/src/ML-IAP"
 cp "${CURATOR_ROOT}/interface/ML-IAP/mliap_data.cpp" "${LAMMPS_SRC}/src/ML-IAP/"
 cp "${CURATOR_ROOT}/interface/ML-IAP/mliap_data.h" "${LAMMPS_SRC}/src/ML-IAP/"
 cp "${CURATOR_ROOT}/interface/ML-IAP/mliap_unified_couple.pyx" "${LAMMPS_SRC}/src/ML-IAP/"
+cp "${CURATOR_ROOT}/interface/ML-IAP/pair_mliap.cpp" "${LAMMPS_SRC}/src/ML-IAP/"
+cp "${CURATOR_ROOT}/interface/ML-IAP/pair_mliap.h" "${LAMMPS_SRC}/src/ML-IAP/"
+mkdir -p "${LAMMPS_SRC}/src/KOKKOS"
+cp "${CURATOR_ROOT}/interface/ML-IAP/mliap_unified_couple_kokkos.pyx" "${LAMMPS_SRC}/src/KOKKOS/"
 ```
 
 If you choose this route, you must also carry over the CMake changes that:
@@ -250,6 +276,8 @@ cmake -S "${LAMMPS_SRC}/cmake" -B build \
   -D BUILD_OMP=on \
   -D PKG_PYTHON=on \
   -D PKG_ML-IAP=on \
+  -D PKG_ELECTRODE=on \
+  -D PKG_KSPACE=on \
   -D PKG_KOKKOS=on \
   -D PKG_PLUMED=on \
   -D PKG_CURATOR=on \

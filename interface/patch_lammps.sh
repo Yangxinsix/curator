@@ -66,9 +66,14 @@ required_files=(
   "${INTERFACE_DIR}/compute_uncertainty.h"
   "${INTERFACE_DIR}/compute_uncertainty_atom.cpp"
   "${INTERFACE_DIR}/compute_uncertainty_atom.h"
+  "${INTERFACE_DIR}/compute_acvr_kspace.cpp"
+  "${INTERFACE_DIR}/compute_acvr_kspace.h"
   "${MLIAP_INTERFACE_DIR}/mliap_data.cpp"
   "${MLIAP_INTERFACE_DIR}/mliap_data.h"
   "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx"
+  "${MLIAP_INTERFACE_DIR}/mliap_unified_couple_kokkos.pyx"
+  "${MLIAP_INTERFACE_DIR}/pair_mliap.cpp"
+  "${MLIAP_INTERFACE_DIR}/pair_mliap.h"
   "${LAMMPS_DIR}/cmake/CMakeLists.txt"
 )
 
@@ -100,6 +105,7 @@ set(CURATOR_SOURCES
   ${LAMMPS_SOURCE_DIR}/pair_curator.cpp
   ${LAMMPS_SOURCE_DIR}/compute_uncertainty.cpp
   ${LAMMPS_SOURCE_DIR}/compute_uncertainty_atom.cpp
+  ${LAMMPS_SOURCE_DIR}/compute_acvr_kspace.cpp
 )
 if(NOT PKG_CURATOR)
   list(REMOVE_ITEM ALL_SOURCES ${CURATOR_SOURCES})
@@ -143,9 +149,14 @@ install_one "${INTERFACE_DIR}/compute_uncertainty.cpp" "${LAMMPS_DIR}/src/comput
 install_one "${INTERFACE_DIR}/compute_uncertainty.h" "${LAMMPS_DIR}/src/compute_uncertainty.h"
 install_one "${INTERFACE_DIR}/compute_uncertainty_atom.cpp" "${LAMMPS_DIR}/src/compute_uncertainty_atom.cpp"
 install_one "${INTERFACE_DIR}/compute_uncertainty_atom.h" "${LAMMPS_DIR}/src/compute_uncertainty_atom.h"
+install_one "${INTERFACE_DIR}/compute_acvr_kspace.cpp" "${LAMMPS_DIR}/src/compute_acvr_kspace.cpp"
+install_one "${INTERFACE_DIR}/compute_acvr_kspace.h" "${LAMMPS_DIR}/src/compute_acvr_kspace.h"
 install_one "${MLIAP_INTERFACE_DIR}/mliap_data.cpp" "${LAMMPS_DIR}/src/ML-IAP/mliap_data.cpp"
 install_one "${MLIAP_INTERFACE_DIR}/mliap_data.h" "${LAMMPS_DIR}/src/ML-IAP/mliap_data.h"
 install_one "${MLIAP_INTERFACE_DIR}/mliap_unified_couple.pyx" "${LAMMPS_DIR}/src/ML-IAP/mliap_unified_couple.pyx"
+install_one "${MLIAP_INTERFACE_DIR}/mliap_unified_couple_kokkos.pyx" "${LAMMPS_DIR}/src/KOKKOS/mliap_unified_couple_kokkos.pyx"
+install_one "${MLIAP_INTERFACE_DIR}/pair_mliap.cpp" "${LAMMPS_DIR}/src/ML-IAP/pair_mliap.cpp"
+install_one "${MLIAP_INTERFACE_DIR}/pair_mliap.h" "${LAMMPS_DIR}/src/ML-IAP/pair_mliap.h"
 
 if [[ "${use_symlink}" == true ]]; then
   echo "Installed via symlinks."
@@ -161,6 +172,8 @@ Next steps for a manual build:
   2. enable any other packages you need, for example:
      -D PKG_PYTHON=on
      -D PKG_ML-IAP=on
+     -D PKG_ELECTRODE=on
+     -D PKG_KSPACE=on
      -D PKG_KOKKOS=on
      -D PKG_PLUMED=on
   3. point CMake to your Torch installation, for example with:
