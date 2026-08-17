@@ -68,14 +68,17 @@ from .spec import (
     VariableLayout,
     VariableSpec,
 )
+from .variables.charge_runtime import ACVRChargeRuntime, ChargeRuntimeResult
 
 __all__ = [
     "AnalyticQuadraticCase",
+    "ACVRChargeRuntime",
     "AmortizedResult",
     "BoundaryRow",
     "BoundaryQuadraticOperator",
     "BoundarySpec",
     "CompiledBoundary",
+    "ChargeRuntimeResult",
     "ConstraintSpec",
     "ControlSpec",
     "EnvironmentSpec",

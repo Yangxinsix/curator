@@ -5,7 +5,7 @@ import torch
 from torch import nn
 
 from curator.data import properties
-from curator.variational.variables import project_fixed_total_charge
+from curator.variational.variables.charge import project_fixed_total_charge
 
 from ._atomwise_nn import AtomwiseNN
 from ._ewald import EwaldSummation
