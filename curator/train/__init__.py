@@ -7,6 +7,10 @@ from .losses import (
     VectorL2MAELoss,
 )
 from .variational_losses import VariationalJointLoss, VariationalModelOutput
+from .amortized_variational import (
+    AmortizedTrainingModelOutput,
+    AmortizedVariationalLoss,
+)
 from .model_output import ModelOutput
 from .metrics import (
     AtomsMetric,
@@ -32,6 +36,8 @@ __all__ = [
     VectorL2MAELoss,
     VariationalJointLoss,
     VariationalModelOutput,
+    AmortizedTrainingModelOutput,
+    AmortizedVariationalLoss,
     ModelOutput,
     AtomsMetric,
     PerSpeciesMAE, 

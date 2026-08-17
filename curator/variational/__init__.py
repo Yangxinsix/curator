@@ -6,6 +6,13 @@ linear observables satisfy ``y = B @ x``.
 
 from .analytic import AnalyticQuadraticCase, make_consistent_quadratic_case
 from .amortized import AmortizedResult, solve_amortized
+from .amortized_training import (
+    AmortizedTeacherBatch,
+    AmortizedTrainingBatch,
+    build_amortized_teacher_batch,
+    estimate_kkt_multipliers,
+    prepare_amortized_training_batch,
+)
 from .backends import (
     ElectrodeThermoRecord,
     EwaldChargeOperator,
@@ -74,6 +81,8 @@ __all__ = [
     "AnalyticQuadraticCase",
     "ACVRChargeRuntime",
     "AmortizedResult",
+    "AmortizedTeacherBatch",
+    "AmortizedTrainingBatch",
     "BoundaryRow",
     "BoundaryQuadraticOperator",
     "BoundarySpec",
@@ -112,7 +121,9 @@ __all__ = [
     "VariableLayout",
     "VariableSpec",
     "assemble_kkt",
+    "build_amortized_teacher_batch",
     "evaluate_kkt",
+    "estimate_kkt_multipliers",
     "compile_boundary",
     "compile_boundary_batch",
     "differentiate_variational_energy",
@@ -121,6 +132,7 @@ __all__ = [
     "minimum_reduced_curvature",
     "nonlinear_from_quadratic",
     "project_to_equalities",
+    "prepare_amortized_training_batch",
     "parse_electrode_thermo",
     "read_electrode_thermo",
     "solve_dense",

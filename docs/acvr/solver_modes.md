@@ -45,6 +45,13 @@ The amortized quadratic state machine is:
 proposal -> hard projection -> KKT certificate -> correction -> exact fallback
 ```
 
+The proposal is trained by the separate backend-independent contract in
+[`amortized_training.md`](amortized_training.md).  In particular, the training
+loss is evaluated on the projected proposal before correction; a residual from
+the final exact/corrected state cannot teach the proposal.  Physical plugins
+own the proposal architecture and Hessian/operator.  Ewald is only one charge
+backend and is not part of the shared amortization layer.
+
 It always reports the projected residual, correction count, fallback trigger
 and final KKT residual. This implementation is a dense quadratic reference;
 operator-based nonlinear correction and scalable preconditioning remain
