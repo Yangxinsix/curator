@@ -6,6 +6,7 @@ from .losses import (
     VectorHuberLoss,
     VectorL2MAELoss,
 )
+from .variational_losses import VariationalJointLoss, VariationalModelOutput
 from .model_output import ModelOutput
 from .metrics import (
     AtomsMetric,
@@ -29,6 +30,8 @@ __all__ = [
     StructureBalancedLoss,
     VectorHuberLoss,
     VectorL2MAELoss,
+    VariationalJointLoss,
+    VariationalModelOutput,
     ModelOutput,
     AtomsMetric,
     PerSpeciesMAE, 

@@ -248,6 +248,15 @@ class ElectronicStatesDataset(torch.utils.data.Dataset):
                         properties.condition_energy: "eV",
                         properties.condition_forces: "eV/angstrom",
                     },
+                    label_metadata={
+                        properties.condition_energy: {
+                            "energy_kind": "fixed-electron-number periodic DFT total energy",
+                            "reference": "PySCF periodic Ewald/exxdiv convention",
+                        },
+                        properties.condition_forces: {
+                            "definition": "negative analytic nuclear gradient at fixed electron count"
+                        },
+                    },
                     provenance=attrs,
                 )
             )

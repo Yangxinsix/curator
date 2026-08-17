@@ -234,9 +234,19 @@ class TreciDataset(torch.utils.data.Dataset):
                 properties.condition_stress: "eV/angstrom^3",
             }
             metadata = {
+                properties.condition_energy: {
+                    "energy_kind": "TRECI source energy",
+                    "reference": "Double Reference dataset",
+                    "semantic_status": "requires thermodynamic audit",
+                },
                 properties.condition_free_energy: {
-                    "semantic_status": "unverified; do not assume ACVR grand potential"
-                }
+                    "energy_kind": "TRECI source free_energy",
+                    "reference": "Double Reference dataset",
+                    "semantic_status": "unverified; do not assume ACVR grand potential",
+                },
+                properties.condition_forces: {
+                    "semantic_status": "source DFT force label"
+                },
             }
             if "U_vs_SHE" in frame.info:
                 condition_labels[properties.electrode_potential] = torch.tensor(

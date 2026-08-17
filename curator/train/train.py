@@ -4,6 +4,20 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def tree_to_device(value, device):
+    """Move tensors in nested training batches while preserving metadata."""
+    if isinstance(value, torch.Tensor):
+        return value.to(device)
+    if isinstance(value, dict):
+        return {key: tree_to_device(item, device) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(tree_to_device(item, device) for item in value)
+    if isinstance(value, list):
+        return [tree_to_device(item, device) for item in value]
+    return value
+
+
 def loss_fn(outputs, pred, batch, subset):
     """
     Computes the loss for the given predictions and batch data.
@@ -36,7 +50,7 @@ def run_step(model, batch, outputs, rescale_layers, device, optimizer=None, stag
     Performs a single training step: forward pass, loss calculation, backpropagation.
     """
     # Move batch to device
-    batch = {key: val.to(device) for key, val in batch.items()}
+    batch = tree_to_device(batch, device)
 
     # Zero gradients
     if stage == 'train':
