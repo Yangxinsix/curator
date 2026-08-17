@@ -26,6 +26,16 @@ def _make_result(
     primal_ok = residuals.primal_norm <= residual_tolerance * (
         1.0 + residuals.primal_scale
     )
+    curvature_scale = max(
+        1.0,
+        float(problem.hessian.detach().abs().max().item()),
+    )
+    stable = curvature > (
+        100.0
+        * torch.finfo(problem.hessian.dtype).eps
+        * max(problem.hessian.shape)
+        * curvature_scale
+    )
     condition_number = torch.linalg.cond(assemble_kkt(problem).detach())
     return VariationalResult(
         state=state,
@@ -34,7 +44,7 @@ def _make_result(
         residuals=residuals,
         condition_number=condition_number,
         minimum_reduced_curvature=curvature,
-        reliable=bool((stationarity_ok & primal_ok).item()),
+        reliable=bool((stationarity_ok & primal_ok & stable).item()),
     )
 
 

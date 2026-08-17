@@ -25,7 +25,16 @@ from .compiler import (
     compile_boundary_batch,
 )
 from .functional import QuadraticProblem
+from .forces import ForceMode, VariationalDerivative, differentiate_variational_energy
+from .implicit import implicit_kkt_state, solve_implicit
 from .kkt import assemble_kkt, evaluate_kkt
+from .nonlinear import (
+    NewtonKKTOptions,
+    NewtonKKTResult,
+    NonlinearEqualityProblem,
+    nonlinear_from_quadratic,
+    solve_newton_kkt,
+)
 from .projection import project_to_equalities
 from .operators import (
     BoundaryQuadraticOperator,
@@ -73,11 +82,15 @@ __all__ = [
     "ElectrodeThermoRecord",
     "EwaldChargeOperator",
     "GaugeSpec",
+    "ForceMode",
     "GroupSpec",
     "InconsistentConstraintsError",
     "KKTResiduals",
     "LinearResponse",
     "LinearTermSpec",
+    "NewtonKKTOptions",
+    "NewtonKKTResult",
+    "NonlinearEqualityProblem",
     "DenseQuadraticOperator",
     "OperatorQuadraticProblem",
     "ProjectionResult",
@@ -91,6 +104,7 @@ __all__ = [
     "UnstableVariationalProblemError",
     "VariationalResult",
     "VariationalOperator",
+    "VariationalDerivative",
     "VariationalValidationError",
     "VariableLayout",
     "VariableSpec",
@@ -98,17 +112,22 @@ __all__ = [
     "evaluate_kkt",
     "compile_boundary",
     "compile_boundary_batch",
+    "differentiate_variational_energy",
     "make_consistent_quadratic_case",
+    "implicit_kkt_state",
     "minimum_reduced_curvature",
+    "nonlinear_from_quadratic",
     "project_to_equalities",
     "parse_electrode_thermo",
     "read_electrode_thermo",
     "solve_dense",
+    "solve_implicit",
     "solve_amortized",
     "solve_projected_cg",
     "solve_projected_cg_problem",
     "solve_schur",
     "solve_linear_response",
+    "solve_newton_kkt",
     "thermodynamic_gauge_basis",
     "validate_equalities",
     "validate_problem",
