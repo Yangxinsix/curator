@@ -1,5 +1,6 @@
 _target_: curator.data.AtomsDataModule   # data module driving loaders and splits
 _convert_: partial                       # allow partial instantiation for hydra
+data_type: Ase                           # Ase, Numpy, Bamboo, Sqlite3, or Spice
 datapath: null                           # single dataset path containing all splits
 train_path: null                         # explicit training data path (overrides datapath)
 val_path: null                           # explicit validation data path
@@ -23,5 +24,6 @@ scale_forces: True                       # use forces RMS as the energy scaling 
 heads: [energy]                          # main readout heads
 rescale_shift_heads: []                  # extra properties handled by the rescale/shift module in addition to energy
 transforms: []                           # optional transforms applied to each structure
+dataset_kwargs: {}                       # reader-specific options, e.g. SPICE subset filters
   # - _target_: curator.data.TypeMapper
   #   species: ${data.species}

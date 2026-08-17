@@ -17,6 +17,8 @@ from .dataset import AseDataset, NumpyDataset, cat_tensors, collate_atomsdata
 from .atoms_data import AtomsData
 from .collate_atoms_data import collate_atoms_data
 from .datamodule import AtomsDataModule
+from .spice import SpiceDataset
+from .capabilities import DatasetCapabilityManifest, MissingDatasetCapabilityError
 from ._type_mapper import TypeMapper
 from ._transform import EnsureBidirectionalEdges, Transform, UnitTransform
 from .utils import read_trajectory
@@ -56,6 +58,9 @@ __all__ = [
     UnitTransform,
     EnsureBidirectionalEdges,
     AtomsDataModule,
+    SpiceDataset,
+    DatasetCapabilityManifest,
+    MissingDatasetCapabilityError,
     UncertaintyModule,
     collect_uncertainty_outputs,
     _DEFAULT_EDGE_FIELDS,

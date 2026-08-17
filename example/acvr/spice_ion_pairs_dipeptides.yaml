@@ -1,0 +1,27 @@
+# Data fragment for the first ACVR molecular charge experiments.
+data:
+  _target_: curator.data.AtomsDataModule
+  _convert_: partial
+  data_type: Spice
+  datapath: /absolute/path/to/SPICE-2.0.1.hdf5
+  cutoff: 6.0
+  compute_neighbor_list: true
+  batch_size: 16
+  num_train: 0.8
+  num_val: 0.1
+  num_test: 0.1
+  train_val_split: random
+  shuffle: true
+  num_workers: 4
+  pin_memory: true
+  dataset_kwargs:
+    subsets:
+      - ion_pairs
+      - dipeptides
+    energy_key: formation_energy
+    include_atomic_charges: true
+    include_dipole: true
+    require_forces: true
+    require_total_charge: true
+    max_conformations_per_molecule: null
+    stride: 1

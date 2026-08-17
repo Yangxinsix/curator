@@ -5,6 +5,7 @@ import torch
 from torch import nn
 
 from curator.data import properties
+from curator.variational.variables import project_fixed_total_charge
 
 from ._atomwise_nn import AtomwiseNN
 from ._ewald import EwaldSummation
@@ -94,13 +95,13 @@ class ChargeEquilibration(nn.Module):
         image_idx: torch.Tensor,
         total_charge: torch.Tensor,
     ) -> torch.Tensor:
-        """Project charges with inverse-hardness (charge-susceptibility) weights."""
-        predicted_total = scatter_add(raw_charge, image_idx, dim=0)
-        charge_error = total_charge.reshape(-1) - predicted_total
-        inverse_hardness = hardness.reciprocal()
-        normalization = scatter_add(inverse_hardness, image_idx, dim=0)
-        weights = inverse_hardness / normalization[image_idx]
-        return raw_charge + weights * charge_error[image_idx]
+        """Project charges with the ACVR fixed-total-charge specialization."""
+        return project_fixed_total_charge(
+            raw_charge,
+            hardness,
+            image_idx,
+            total_charge.reshape(-1),
+        )
 
     @staticmethod
     def _remove_structure_mean(

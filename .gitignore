@@ -15,6 +15,9 @@ test/*
 !test/test_ewald_theory.py
 !test/test_feature_distillation.py
 !test/test_qeq_task_growth.py
+!test/test_acvr_*.py
+!test/test_variational_*.py
+!test/test_spice_dataset.py
 scripts/
 
 # model files

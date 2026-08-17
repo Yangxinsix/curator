@@ -18,7 +18,7 @@ from pytorch_lightning.utilities.combined_loader import CombinedLoader
 
 logger = logging.getLogger(__name__)
 
-DataTypeName = Literal["Ase", "Numpy", "Bamboo", "Sqlite3"]
+DataTypeName = Literal["Ase", "Numpy", "Bamboo", "Sqlite3", "Spice"]
 SplitMode = Literal["random", "sequential"]
 
 def _is_replay_name(name: str) -> bool:
@@ -91,6 +91,7 @@ class AtomsDataModule(pl.LightningDataModule):
         head_reference_by_species: Optional[Dict[str, Dict[Union[int, str], float]]] = None,
         heads: Optional[List] = None,
         rescale_shift_heads: Optional[List] = None,
+        dataset_kwargs: Optional[Dict] = None,
     ) -> None:
         super().__init__()
 
@@ -118,6 +119,7 @@ class AtomsDataModule(pl.LightningDataModule):
         self.heads = heads
         self.scale_forces = bool(scale_forces)
         self.rescale_shift_heads = rescale_shift_heads or []
+        self.dataset_kwargs = {} if dataset_kwargs is None else dict(dataset_kwargs)
         
         # splitting parameters
         self.split_file = split_file
@@ -242,6 +244,19 @@ class AtomsDataModule(pl.LightningDataModule):
                 default_dtype=self.default_dtype,
                 task=task,
             )
+        elif data_type == 'Spice':
+            from .spice import SpiceDataset
+            dataset = SpiceDataset(
+                datapath,
+                cutoff=self.cutoff,
+                compute_neighbor_list=self.compute_neighbor_list,
+                transforms=self.transforms,
+                default_dtype=self.default_dtype,
+                task=task,
+                **self.dataset_kwargs,
+            )
+        else:
+            raise ValueError(f"Unsupported data_type '{data_type}'.")
         return dataset
 
     @property
