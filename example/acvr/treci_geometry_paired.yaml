@@ -1,0 +1,17 @@
+# Geometry-paired TRECI reader.  The ACVR multi-condition loss must consume
+# batch["variational"]; legacy energy heads do not see condition labels.
+data:
+  _target_: curator.data.AtomsDataModule
+  _convert_: partial
+  data_type: Treci
+  datapath: /absolute/path/to/TRECI/Constant_potential/Training/Dataset
+  split_file: /absolute/path/to/paired_manifest_v1/geometry_split.json
+  cutoff: 6.0
+  compute_neighbor_list: true
+  batch_size: 1
+  num_train: 0
+  num_val: 0
+  num_test: 0
+  shuffle: true
+  num_workers: 0
+  pin_memory: true

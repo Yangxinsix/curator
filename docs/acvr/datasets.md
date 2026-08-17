@@ -139,6 +139,109 @@ under multiple electronic boundary conditions:
 That tier, not SPICE, is what identifies the cross-boundary physics required by
 constant-potential simulations.
 
+## Geometry + conditions data contract
+
+Electronic boundary data use one geometry record with (K) condition records,
+not (K) duplicated ordinary structures:
+
+```text
+geometry(Z, R, cell, groups)
+  condition(PZC)
+  condition(V=-0.50 V vs SHE)
+  condition(V=-0.75 V vs SHE)
+  ...
+```
+
+`AtomsData.variational` carries this typed payload. `collate_atoms_data`
+concatenates the coordinates once and emits `condition_ptr`,
+`condition_geometry_index`, group-member CSR, per-label present masks, and
+ragged response blocks. This prevents same-geometry conditions from leaking
+across a train/test split and distinguishes a real zero label from a missing
+label.
+
+Every condition stores a canonical boundary specification and hash. Gauge
+metadata keep three separate concepts separate:
+
+- thermodynamic control gauge;
+- electrostatic potential reference, such as SHE, vacuum, or differences only;
+- charged-dipole origin or periodic-polarization branch.
+
+The SQLite compatibility path leaves the legacy `data` table unchanged and
+adds `acvr_geometry`, `acvr_group`, `acvr_condition`, `acvr_tensor`, and
+`acvr_response` child tables. ACVR tensors retain their original dtype and full
+shape; unlike legacy `extra_columns`, float64 values are not silently reduced
+to float32.
+
+## Periodic multi-electron-number DFT oracle
+
+[`scripts/generate_acvr_pyscf_pbc.py`](../../scripts/generate_acvr_pyscf_pbc.py)
+generates a small, reproducible periodic PBE oracle using PySCF's gamma-point
+periodic RKS/UKS and analytic multigrid gradients. The 2026-08-17 artifact has:
+
+- three H--H distances: 0.6, 0.7, and 0.9 angstrom;
+- the same cell and nuclei at (Q=-1,0,+1), hence nine electronic states;
+- energy, force, electron count, spin, orbital energies, and the exact
+  calculation settings;
+- HDF5 SHA-256
+  `ed0cdc682be2b46870a743ad27e5bfd65672951f1615008a0676854655f60e30`.
+
+It is stored externally under
+`/workspace/data/datasets/acvr/pyscf_pbc_h2_multicharge/v0.1/` in the reference
+workspace. `ElectronicStatesDataset` reads one sample per geometry with three
+conditions. This is a pipeline/derivative oracle, not a training dataset or a
+constant-potential electrode benchmark. Charged periodic energies depend on
+the recorded cell and Ewald/exchange-divergence convention. PySCF documents
+the periodic [SCF/DFT methods](https://pyscf.org/user/pbc/scf.html) and
+[analytic periodic gradients](https://pyscf.org/pyscf_api_docs/pyscf.pbc.grad.html).
+
+## TRECI same-geometry potential matrix
+
+The authors' MIT-licensed
+[TRECI repository](https://github.com/michelegiovannibianchi/TRECI) describes a
+Double Reference constant-potential workflow and publishes the Cu/water
+training files used by that workflow. The reader pins git commit
+`24a0fe816e8aa93b6b604df9aa354806a9867cf8`.
+
+An independent audit of the eight principal extxyz files found:
+
+- 236 nuclear geometries common to PZC and all seven numerical targets from
+  -0.5 to -2.0 V vs SHE;
+- 188/24/24 deterministic geometry-level train/validation/test records;
+- only 15 of the 236 geometries have `NELECT`, actual `U_vs_SHE`, and Bader
+  atomic charge in all eight conditions;
+- energy, `free_energy`, force, and stress are available more broadly.
+
+Use `TreciDataset` to preserve the paired conditions:
+
+```yaml
+data:
+  _target_: curator.data.AtomsDataModule
+  data_type: Treci
+  datapath: /path/to/TRECI/Constant_potential/Training/Dataset
+  split_file: /path/to/paired_manifest_v1/geometry_split.json
+  cutoff: 6.0
+  compute_neighbor_list: true
+  batch_size: 1
+```
+
+[`scripts/audit_acvr_treci.py`](../../scripts/audit_acvr_treci.py) regenerates
+the source hashes, paired-geometry manifest, fully labeled subset, and split.
+The reference split SHA-256 is
+`8a06c7fd2615a8a6e809c375e094829ed54b7aa84a237aa327c16a31ce93e7b6`.
+
+Two semantics remain deliberately fail-closed:
+
+1. the extxyz `free_energy` field is not called the ACVR grand potential until
+   the Double Reference energy definition, reference offsets, and Legendre
+   sign are audited;
+2. Bader atomic and Cu-group charges are partition-dependent proxies, not an
+   unambiguous conductor free charge.
+
+Consequently, all 236 records can test same-geometry cross-potential
+energy/force conditioning, while (N_e(V)), Bader (Q(V)), and finite-
+difference response claims must use the 15-record fully labeled subset. PZC is
+a reference ensemble, not an eighth fixed numerical voltage.
+
 ## Capability checks
 
 ```python

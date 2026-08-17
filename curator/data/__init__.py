@@ -18,7 +18,16 @@ from .atoms_data import AtomsData
 from .collate_atoms_data import collate_atoms_data
 from .datamodule import AtomsDataModule
 from .spice import SpiceDataset, ion_pair_distance_split
+from .electronic_states import ElectronicStatesDataset
+from .treci import TreciDataset, treci_geometry_split
 from .capabilities import DatasetCapabilityManifest, MissingDatasetCapabilityError
+from .variational_data import (
+    VariationalCondition,
+    VariationalData,
+    VariationalResponse,
+    canonical_boundary_hash,
+    collate_variational_data,
+)
 from ._type_mapper import TypeMapper
 from ._transform import EnsureBidirectionalEdges, Transform, UnitTransform
 from .utils import read_trajectory
@@ -60,6 +69,14 @@ __all__ = [
     AtomsDataModule,
     SpiceDataset,
     ion_pair_distance_split,
+    ElectronicStatesDataset,
+    TreciDataset,
+    treci_geometry_split,
+    VariationalCondition,
+    VariationalData,
+    VariationalResponse,
+    canonical_boundary_hash,
+    collate_variational_data,
     DatasetCapabilityManifest,
     MissingDatasetCapabilityError,
     UncertaintyModule,

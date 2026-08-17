@@ -19,7 +19,7 @@ from pytorch_lightning.utilities.combined_loader import CombinedLoader
 
 logger = logging.getLogger(__name__)
 
-DataTypeName = Literal["Ase", "Numpy", "Bamboo", "Sqlite3", "Spice"]
+DataTypeName = Literal["Ase", "Numpy", "Bamboo", "Sqlite3", "Spice", "ElectronicStates", "Treci"]
 SplitMode = Literal["random", "sequential"]
 
 def _is_replay_name(name: str) -> bool:
@@ -248,6 +248,28 @@ class AtomsDataModule(pl.LightningDataModule):
         elif data_type == 'Spice':
             from .spice import SpiceDataset
             dataset = SpiceDataset(
+                datapath,
+                cutoff=self.cutoff,
+                compute_neighbor_list=self.compute_neighbor_list,
+                transforms=self.transforms,
+                default_dtype=self.default_dtype,
+                task=task,
+                **self.dataset_kwargs,
+            )
+        elif data_type == 'ElectronicStates':
+            from .electronic_states import ElectronicStatesDataset
+            dataset = ElectronicStatesDataset(
+                datapath,
+                cutoff=self.cutoff,
+                compute_neighbor_list=self.compute_neighbor_list,
+                transforms=self.transforms,
+                default_dtype=self.default_dtype,
+                task=task,
+                **self.dataset_kwargs,
+            )
+        elif data_type == 'Treci':
+            from .treci import TreciDataset
+            dataset = TreciDataset(
                 datapath,
                 cutoff=self.cutoff,
                 compute_neighbor_list=self.compute_neighbor_list,

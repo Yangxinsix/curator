@@ -1,0 +1,17 @@
+# Tiny periodic DFT interface oracle: three geometries, each with Q=-1,0,+1.
+# It is not a production training set or a fixed-potential electrode benchmark.
+data:
+  _target_: curator.data.AtomsDataModule
+  _convert_: partial
+  data_type: ElectronicStates
+  datapath: /absolute/path/to/pyscf_pbc_h2_multicharge/v0.1/states.h5
+  cutoff: 4.0
+  compute_neighbor_list: true
+  batch_size: 3
+  num_train: 2
+  num_val: 1
+  num_test: 0
+  train_val_split: sequential
+  shuffle: false
+  num_workers: 0
+  pin_memory: true

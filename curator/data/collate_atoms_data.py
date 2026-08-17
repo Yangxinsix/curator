@@ -6,6 +6,7 @@ import torch
 
 from . import properties
 from .atoms_data import AtomsData, atoms_data_from_dict, is_atomwise_target
+from .variational_data import collate_variational_data
 
 
 def cat_tensors(tensors: List[torch.Tensor]) -> torch.Tensor:
@@ -114,6 +115,13 @@ def collate_atoms_data(samples: List[Any], pin_memory: bool = False) -> Dict[str
     tasks = [s.task for s in atoms_data]
     weights = torch.tensor([float(s.weight) for s in atoms_data], dtype=torch.float)
     metas = [s.meta for s in atoms_data]
+    variational = [s.variational for s in atoms_data]
+    if any(value is not None for value in variational) and not all(
+        value is not None for value in variational
+    ):
+        raise ValueError(
+            "Cannot mix variational and legacy samples in one batch without an explicit adapter."
+        )
 
     collated = _collate_atoms_dicts(atoms_list, pin_memory=pin_memory)
 
@@ -155,4 +163,9 @@ def collate_atoms_data(samples: List[Any], pin_memory: bool = False) -> Dict[str
     collated["task"] = tasks
     collated["weight"] = weights
     collated["meta"] = metas
+    if variational and variational[0] is not None:
+        collated["variational"] = collate_variational_data(
+            variational,
+            [int(atoms[properties.n_atoms].item()) for atoms in atoms_list],
+        )
     return collated

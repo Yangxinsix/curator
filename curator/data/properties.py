@@ -42,6 +42,8 @@ strain: Final[str] = "strain"
 stress: Final[str] = "stress"
 virial: Final[str] = "virial"
 total_charge: Final[str] = "total_charge"
+electron_count: Final[str] = "electron_count"
+external_field: Final[str] = "external_field"
 atomic_charge: Final[str] = "atomic_charge"
 dipole: Final[str] = "dipole"
 total_magmom: Final[str] = "total_magmom"
@@ -60,6 +62,29 @@ chemical_potential_residual_normalized: Final[str] = (
     "chemical_potential_residual_normalized"
 )
 residual_forces: Final[str] = "residual_forces"     # optional J_q^T chemical-potential residual
+
+# Variational condition labels.  These live in ``AtomsData.variational`` rather
+# than the legacy node/graph target dictionaries because condition, constraint,
+# group, and response axes are independently ragged.
+variable_value: Final[str] = "variable_value"
+condition_energy: Final[str] = "condition_energy"
+condition_free_energy: Final[str] = "condition_free_energy"
+condition_forces: Final[str] = "condition_forces"
+condition_stress: Final[str] = "condition_stress"
+electrode_potential: Final[str] = "electrode_potential"
+group_charge: Final[str] = "group_charge"
+group_potential: Final[str] = "group_potential"
+constraint_multiplier: Final[str] = "constraint_multiplier"
+stationarity_residual: Final[str] = "stationarity_residual"
+primal_residual: Final[str] = "primal_residual"
+stationarity_norm: Final[str] = "stationarity_norm"
+primal_norm: Final[str] = "primal_norm"
+minimum_curvature: Final[str] = "minimum_curvature"
+solver_converged: Final[str] = "solver_converged"
+solver_feasible: Final[str] = "solver_feasible"
+solver_stable: Final[str] = "solver_stable"
+solver_reliable: Final[str] = "solver_reliable"
+polarization: Final[str] = "polarization"
 
 # uncertainties
 e_var: Final[str] = "energy_var"      # energy variance

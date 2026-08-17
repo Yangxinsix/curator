@@ -7,6 +7,7 @@ from collections.abc import MutableMapping
 import torch
 
 from . import properties
+from .variational_data import VariationalData, move_variational_data
 
 _TARGET_KEY_ALIASES: Dict[str, str] = {
     "energy": properties.energy,
@@ -46,6 +47,7 @@ class AtomsData(MutableMapping[str, Any]):
     task: str
     weight: float = 1.0
     meta: Optional[Dict[str, Any]] = None
+    variational: Optional[VariationalData] = None
 
     def get_target(self, key: str, default=None):
         key = normalize_target_key(key)
@@ -76,6 +78,14 @@ class AtomsData(MutableMapping[str, Any]):
             task=self.task,
             weight=self.weight,
             meta=self.meta,
+            variational=None
+            if self.variational is None
+            else move_variational_data(
+                self.variational,
+                device=device,
+                dtype=dtype,
+                non_blocking=non_blocking,
+            ),
         )
 
     @staticmethod
@@ -101,6 +111,7 @@ class AtomsData(MutableMapping[str, Any]):
         include_meta: bool = False,
         include_task: bool = False,
         include_weight: bool = False,
+        include_variational: bool = False,
     ) -> Dict[str, Any]:
         data = dict(self.atoms)
         data.update(self.targets)
@@ -110,6 +121,8 @@ class AtomsData(MutableMapping[str, Any]):
             data["weight"] = self.weight
         if include_meta and self.meta is not None:
             data["meta"] = self.meta
+        if include_variational and self.variational is not None:
+            data["variational"] = self.variational
         return data
 
     def __getitem__(self, key: str) -> Any:
@@ -123,6 +136,8 @@ class AtomsData(MutableMapping[str, Any]):
             return self.atoms
         if key == "targets":
             return self.targets
+        if key == "variational":
+            return self.variational
         if key in self.atoms:
             return self.atoms[key]
         norm_key = normalize_target_key(key)
@@ -146,6 +161,9 @@ class AtomsData(MutableMapping[str, Any]):
         if key == "targets":
             self.targets = dict(value)
             return
+        if key == "variational":
+            self.variational = value
+            return
         norm_key = normalize_target_key(key)
         if norm_key in _TARGET_KEY_ALIASES.values() or norm_key in self.targets:
             self.targets[norm_key] = value
@@ -153,7 +171,7 @@ class AtomsData(MutableMapping[str, Any]):
             self.atoms[key] = value
 
     def __delitem__(self, key: str) -> None:
-        if key in {"task", "weight", "meta"}:
+        if key in {"task", "weight", "meta", "variational"}:
             raise KeyError(f"Cannot delete '{key}' from AtomsData.")
         if key in self.atoms:
             del self.atoms[key]
@@ -174,9 +192,13 @@ class AtomsData(MutableMapping[str, Any]):
             if key not in yielded:
                 yielded.add(key)
                 yield key
+        if self.variational is not None:
+            yield "variational"
 
     def __len__(self) -> int:
-        return len(set(self.atoms.keys()) | set(self.targets.keys()))
+        return len(set(self.atoms.keys()) | set(self.targets.keys())) + int(
+            self.variational is not None
+        )
 
 
 def split_atoms_targets(atoms_dict: Dict[str, torch.Tensor]) -> tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor]]:
