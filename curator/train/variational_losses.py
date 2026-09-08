@@ -7,6 +7,7 @@ from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 import torch
 from torch import nn
+from .structured_output import StructuredModelOutput
 
 
 def _validated_ptr(ptr, length, value_count, name):
@@ -398,20 +399,21 @@ class VariationalJointLoss(nn.Module):
         reference = _reference_tensor(predicted, target)
         axes = self._batch_axes(batch, target, reference)
         n_conditions = axes[0].numel()
-        total = reference.sum() * 0
+        zero = reference.sum() * 0
+        total = zero
         terms = {}
 
         predicted_labels = predicted.get("labels", {})
         for name, coefficient in self.supervised_weights.items():
             if coefficient == 0:
-                terms[name] = self._term(0.0, (total, total, total, 0, 0), n_conditions)
+                terms[name] = self._term(0.0, (zero, zero, zero, 0, 0), n_conditions)
                 terms[name]["status"] = "disabled"
                 continue
             target_entry = target.get("labels", {}).get(name)
             if target_entry is None:
                 if name in self.required_labels:
                     raise KeyError("required variational label %s is missing" % name)
-                reduced = (total, total, total, 0, 0)
+                reduced = (zero, zero, zero, 0, 0)
             else:
                 if name not in predicted_labels:
                     raise KeyError("prediction is missing variational label %s" % name)
@@ -426,7 +428,7 @@ class VariationalJointLoss(nn.Module):
         for name, coefficient in self.certificate_weights.items():
             if coefficient == 0:
                 key = "certificate:" + name
-                terms[key] = self._term(0.0, (total, total, total, 0, 0), n_conditions)
+                terms[key] = self._term(0.0, (zero, zero, zero, 0, 0), n_conditions)
                 terms[key]["status"] = "disabled"
                 continue
             if name not in certificates:
@@ -469,81 +471,16 @@ class VariationalJointLoss(nn.Module):
         return values
 
 
-class VariationalModelOutput(nn.Module):
+class VariationalModelOutput(StructuredModelOutput):
     """Adapter that makes :class:`VariationalJointLoss` usable by Curator's trainer."""
 
-    def __init__(self, loss_fn: VariationalJointLoss, name: str = "variational") -> None:
-        super().__init__()
+    def __init__(self, loss_fn: VariationalJointLoss, name: str = "variational", *, loss_weight: float = 1.0) -> None:
         if not isinstance(loss_fn, VariationalJointLoss):
             raise TypeError("loss_fn must be a VariationalJointLoss")
-        self.loss_fn = loss_fn
-        self.name = str(name)
-        self.term_names = tuple(loss_fn.term_coefficients)
-        self.register_buffer("_epoch_numerator", torch.zeros(len(self.term_names), dtype=torch.float64))
-        self.register_buffer("_epoch_denominator", torch.zeros(len(self.term_names), dtype=torch.float64))
-        self._last_result = None
+        super().__init__(loss_fn, name, loss_fn.term_coefficients, loss_weight)
 
-    def calculate_loss(self, prediction, batch=None, return_num_obs=True):
+    def calculate_loss(self, prediction, batch=None, return_num_obs=True, *, subset=None):
         if batch is None:
             raise ValueError("VariationalModelOutput requires the complete batch")
         result = self.loss_fn(prediction, batch)
-        self._last_result = result
-        with torch.no_grad():
-            for index, name in enumerate(self.term_names):
-                term = result["terms"][name]
-                self._epoch_numerator[index].add_(
-                    term["numerator"].detach().to(self._epoch_numerator)
-                )
-                self._epoch_denominator[index].add_(
-                    term["denominator"].detach().to(self._epoch_denominator)
-                )
-        if return_num_obs:
-            count = max((term["n_geometries"] for term in result["terms"].values()), default=0)
-            return result["loss"], count
-        return result["loss"]
-
-    def _global_sums(self):
-        numerator = self._epoch_numerator.clone()
-        denominator = self._epoch_denominator.clone()
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            torch.distributed.all_reduce(numerator)
-            torch.distributed.all_reduce(denominator)
-        return numerator, denominator
-
-    def accumulate_loss(self):
-        numerator, denominator = self._global_sums()
-        total = numerator.new_zeros(())
-        coefficients = self.loss_fn.term_coefficients
-        for index, name in enumerate(self.term_names):
-            if denominator[index] > 0:
-                total = total + coefficients[name] * numerator[index] / denominator[index]
-        return float(total.cpu())
-
-    def calculate_metrics(self, prediction, batch, subset):
-        if self._last_result is None:
-            return {}
-        result = {
-            "%s_%s_%s_loss" % (subset, self.name, name.replace(":", "_")):
-            term["loss"].detach()
-            for name, term in self._last_result["terms"].items()
-        }
-        self._last_result = None
-        return result
-
-    def accumulate_metrics(self, subset):
-        numerator, denominator = self._global_sums()
-        coefficients = self.loss_fn.term_coefficients
-        return {
-            name.replace(":", "_") + "_loss":
-            float((coefficients[name] * numerator[index] / denominator[index]).cpu())
-            for index, name in enumerate(self.term_names)
-            if denominator[index] > 0
-        }
-
-    def reset_loss(self):
-        self._epoch_numerator.zero_()
-        self._epoch_denominator.zero_()
-        self._last_result = None
-
-    def reset_metrics(self, subset=None):
-        return None
+        return self._record_result(result, return_num_obs, subset)

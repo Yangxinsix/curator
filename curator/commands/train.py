@@ -1,4 +1,5 @@
 import os
+import inspect
 import socket
 from dataclasses import dataclass
 from pathlib import Path
@@ -261,6 +262,7 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
             model=model,
             resume_from=model_path,
             wrapper_from_checkpoint=wrapper_from_checkpoint,
+            initialize_from_datamodule=False,
         )
 
     if source_mode == "weights":
@@ -435,7 +437,7 @@ def run_train_config(config: DictConfig) -> None:
     log.debug(
         "Instantiating datamodule <%s> from dataset %s",
         config.data._target_,
-        config.data.datapath or config.data.train_path,
+        config.data.get("datapath") or config.data.get("train_path") or "generated data",
     )
     datamodule = instantiate(config.data)
     datamodule.setup()
@@ -477,7 +479,12 @@ def run_train_config(config: DictConfig) -> None:
     if isinstance(trainer.logger, WandbLogger):
         os.makedirs(trainer.logger.save_dir + "/wandb", exist_ok=True)
 
-    trainer.fit(model=task, datamodule=datamodule, ckpt_path=loaded.resume_from)
+    fit_kwargs = {}
+    if loaded.resume_from is not None and "weights_only" in inspect.signature(trainer.fit).parameters:
+        # Curator checkpoints contain model/output/configuration objects as well
+        # as tensors, and have already been loaded by _load_model above.
+        fit_kwargs["weights_only"] = False
+    trainer.fit(model=task, datamodule=datamodule, ckpt_path=loaded.resume_from, **fit_kwargs)
 
     if config.deploy_model:
         best_model = find_best_model(run_path=config.run_path + "/model_path")

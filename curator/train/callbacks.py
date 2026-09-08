@@ -63,7 +63,7 @@ class DistillLossWeightSchedule(Callback):
             self.original_weight = float(output.loss_weight)
         output.loss_weight = self.original_weight * self.factor if self.reduced else self.original_weight
 
-    def on_validation_epoch_end(self, trainer, pl_module) -> None:
+    def on_validation_end(self, trainer, pl_module) -> None:
         if self.reduced or trainer.sanity_checking:
             return
         value = self._metric(trainer)
@@ -96,14 +96,6 @@ class DistillLossWeightSchedule(Callback):
             threshold,
             self.reference_value,
             self.relative_tolerance,
-        )
-        pl_module.log(
-            f"{self.output_name}_loss_weight",
-            output.loss_weight,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=False,
-            sync_dist=True,
         )
 
     def state_dict(self):

@@ -70,7 +70,10 @@ def run_evaluate_config(config: DictConfig):
         model = EnsembleModel(model) if len(model) > 1 else model[0]
 
     evaluator = instantiate(config.evaluator, model=model)
-    evaluator.evaluate(config.datapath)
+    dataset = config.datapath
+    if isinstance(dataset, DictConfig) and "_target_" in dataset:
+        dataset = instantiate(dataset)
+    evaluator.evaluate(dataset)
 
 
 evaluate = run_evaluate_config

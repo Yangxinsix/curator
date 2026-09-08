@@ -1,0 +1,23 @@
+defaults:
+  - acvr_oracle
+  - _self_
+
+run_path: runs/acvr_oracle/proposal
+model_path:
+  path: runs/acvr_oracle/physical/model_path/last.ckpt
+  mode: weights
+
+model:
+  representation:
+    stage: proposal
+
+task:
+  outputs:
+    - _target_: curator.train.AmortizedTrainingModelOutput
+      loss_fn:
+        _target_: curator.train.AmortizedVariationalLoss
+        state_weight: 1.0
+        kkt_weight: 0.25
+        state_scale: 1.0
+  optimizer:
+    lr: 0.01

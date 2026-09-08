@@ -1,7 +1,6 @@
 from pathlib import Path
 from torch import nn
 from typing import Optional, Dict, Any, Callable
-import copy
 from torchmetrics import Metric
 import torch
 from collections import OrderedDict
@@ -58,10 +57,9 @@ class ModelOutput(nn.Module):
         )
         if metrics is not None:
             self.train_metrics = nn.ModuleDict(metrics)
-            self.val_metrics = nn.ModuleDict({k: copy.copy(v) for k, v in metrics.items()})
-            self.test_metrics = nn.ModuleDict({k: copy.copy(v) for k, v in metrics.items()})
-            
-            # here we found a serious bug that deepcopy is not working in hydra instantiate!!!
+            self.val_metrics = nn.ModuleDict({k: v.clone() for k, v in metrics.items()})
+            self.test_metrics = nn.ModuleDict({k: v.clone() for k, v in metrics.items()})
+
             self.metrics = {
                 "train": self.train_metrics,
                 "val": self.val_metrics,
@@ -234,8 +232,14 @@ class ModelOutput(nn.Module):
             return {}
         
         all_metrics = {}
-        for k, v in self.metrics[subset].items():
-            all_metrics[k] = v.compute()
+        for name, metric in self.metrics[subset].items():
+            if metric.update_count == 0:
+                continue
+            value = metric.compute()
+            if isinstance(value, dict):
+                all_metrics.update(value)
+            else:
+                all_metrics[name] = value
         return all_metrics
     
     def reset_loss(self) -> None:

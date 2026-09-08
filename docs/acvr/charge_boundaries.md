@@ -3,46 +3,46 @@
 The charge plugin uses one functional and changes only the thermodynamic
 boundary. For
 
-\[
+$$
 F(q)=\chi^Tq+\frac12q^THq,
-\]
+$$
 
 the atomic charge chemical potential is
 
-\[
+$$
 \mu=\frac{\partial F}{\partial q}=Hq+\chi.
-\]
+$$
 
 ## Fixed total or fragment charge
 
 A fixed group charge is the equality
 
-\[
+$$
 \sum_{i\in g}q_i=Q_g.
-\]
+$$
 
 At the optimum, every freely redistributing atom in that group has
-\(\mu_i=-\lambda_g\). Therefore a floating conductor is represented by a
+$\mu_i=-\lambda_g$. Therefore a floating conductor is represented by a
 fixed group charge: its common potential is an output, not an input.
 
 ## Fixed electrode potential
 
 A fixed potential is a Legendre control,
 
-\[
+$$
 \Omega(q;V)=F(q)-\sum_gV_g\sum_{i\in g}q_i.
-\]
+$$
 
 It is never compiled as `potential(q) = V` or as an extra charge equality.
-For an unconstrained electrode atom, stationarity gives \(\mu_i=V_g\). The
-electrode charge is then a response. A fixed-\(Q\) solve at that response
-charge recovers the same state and has \(-\lambda=V\).
+For an unconstrained electrode atom, stationarity gives $\mu_i=V_g$. The
+electrode charge is then a response. A fixed-$Q$ solve at that response
+charge recovers the same state and has $-\lambda=V$.
 
 The differential capacitance of a single quadratic electrode is
 
-\[
+$$
 \frac{dQ}{dV}=\mathbf1^TH^{-1}\mathbf1,
-\]
+$$
 
 which is tested against finite differences.
 
@@ -76,9 +76,9 @@ species must retain its electron count.
 
 A checkpoint trained only at one fixed total charge does not determine the
 absolute electronegativity/potential gauge. Adding the same constant to every
-component of \(\chi\) leaves the fixed-charge state unchanged, but changes the
+component of $\chi$ leaves the fixed-charge state unchanged, but changes the
 predicted total charge in a fixed-potential run. Therefore switching an old
-fixed-\(Q\) checkpoint to electron-open fixed-\(V\) is not justified by the new
+fixed-$Q$ checkpoint to electron-open fixed-$V$ is not justified by the new
 solver alone. It needs multiple charge/potential states, chemical-potential
 labels, or an explicit absolute-potential calibration.
 

@@ -6,7 +6,7 @@ from curator.data import properties
 from curator.train.model_output import ModelOutput
 import warnings
 import pytorch_lightning as pl
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 import logging
 from collections import OrderedDict
 from ase.data import atomic_numbers, chemical_symbols
@@ -83,7 +83,7 @@ class LitNNP(pl.LightningModule):
         }
 
     def setup(self, stage: Optional[str]=None) -> None:
-        if stage == "fit":
+        if stage in ("fit", "validate", "test", "predict"):
             if not self.model._initialized:
                 self.model.initialize_modules(self.trainer.datamodule)
             self.rescale_layers = []
@@ -105,7 +105,8 @@ class LitNNP(pl.LightningModule):
         num_obs_dict[subset + '_total_loss'] = 1
         for output in self.outputs:
             key = subset + '_' + output.name + '_loss'
-            loss_dict[key], num_obs_dict[key] = output.calculate_loss(pred, batch, True)
+            kwargs = {"subset": subset} if getattr(output, "supports_subsets", False) else {}
+            loss_dict[key], num_obs_dict[key] = output.calculate_loss(pred, batch, True, **kwargs)
             loss_scale = self._loss_scale_factor(output, batch)
             if loss_scale != 1.0:
                 loss_dict[key] = loss_dict[key] * loss_scale
@@ -124,8 +125,13 @@ class LitNNP(pl.LightningModule):
         weight = self._get_batch_weight(batch)
         if weight == 1.0:
             return
-        for k in list(loss_dict.keys()):
-            loss_dict[k] = loss_dict[k] * weight
+        total_key = next(key for key in loss_dict if key.endswith("_total_loss"))
+        subset = total_key.removesuffix("_total_loss")
+        for output in self.outputs:
+            key = f"{subset}_{output.name}_loss"
+            if not getattr(output, "handles_batch_weight", False):
+                loss_dict[key] = loss_dict[key] * weight
+        loss_dict[total_key] = sum(value for name, value in loss_dict.items() if name != total_key)
 
     def _get_batch_weight(self, batch: Dict) -> float:
         weight = batch.get("weight", 1.0)
@@ -175,6 +181,8 @@ class LitNNP(pl.LightningModule):
         return str(dom)
 
     def _loss_scale_factor(self, output: ModelOutput, batch: Dict) -> float:
+        if getattr(output, "handles_domain_loss", False):
+            return 1.0
         mode = self._get_domain_loss_mode()
         if mode is None:
             return 1.0
@@ -236,7 +244,8 @@ class LitNNP(pl.LightningModule):
         self._write_log_only("\n")
         self._write_log_only("Testing")
         self._debug_rescale_logged["test"] = False
-        self._write_log_only(self._format_header(include_loader=True))
+        if self.metric_names is not None:
+            self._write_log_only(self._format_header(include_loader=True))
     
     def training_step(self, batch: Dict, batch_idx: List[int]) -> torch.Tensor:
         if self._is_combined_batch(batch):
@@ -261,8 +270,8 @@ class LitNNP(pl.LightningModule):
                         sync_dist=True,
                         add_dataloader_idx=False,
                     )
-                log_metrics = {f"{k}/dataloader_idx_{idx}": v for k, v in batch_metrics.items()}
-                self.log_dict(log_metrics, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True, add_dataloader_idx=False)
+                log_metrics = {f"{k}_batch/dataloader_idx_{idx}": v for k, v in batch_metrics.items()}
+                self.log_dict(log_metrics, on_step=True, on_epoch=False, prog_bar=False, sync_dist=True, add_dataloader_idx=False)
 
                 display_loss = dict(loss_dict)
                 display_metrics = dict(batch_metrics)
@@ -294,7 +303,13 @@ class LitNNP(pl.LightningModule):
                 prog_bar=(k == "train_total_loss"),
                 sync_dist=True,
             )
-        self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log_dict(
+            {f"{key}_batch": value for key, value in batch_metrics.items()},
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+            sync_dist=True,
+        )
 
         self.log_head(loss_dict, batch_metrics, 'train')
 
@@ -356,7 +371,7 @@ class LitNNP(pl.LightningModule):
             self.log(
                 k,
                 loss_dict[k].detach().cpu().item(),
-                batch_size=num_abs_dict[k],
+                batch_size=max(1, num_abs_dict[k]),
                 on_step=True,
                 on_epoch=True,
                 prog_bar=False,
@@ -367,7 +382,13 @@ class LitNNP(pl.LightningModule):
         batch_metrics = {}
         for output in self.outputs:
             batch_metrics.update(output.calculate_metrics(pred, batch, 'val'))
-        self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
+        self.log_dict(
+            {f"{key}_batch": value for key, value in batch_metrics.items()},
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+            sync_dist=True,
+        )
         
         # get metric names for first epoch
         self.log_head(loss_dict, batch_metrics, 'val')
@@ -391,17 +412,17 @@ class LitNNP(pl.LightningModule):
         # both targets and pred need to be normalized for calculating loss in validation mode
         unscaled_batch, unscaled_pred = batch, pred
         for layer in self.rescale_layers:
-            unscaled_targets = layer.unscale(unscaled_batch, force_process=True)
+            unscaled_batch = layer.unscale(unscaled_batch, force_process=True)
             unscaled_pred = layer.unscale(unscaled_pred, force_process=True)
         if debug:
-            self._log_rescale_debug("test", batch=unscaled_targets, pred=unscaled_pred, note="post-unscale")
-        loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_targets, 'test')
+            self._log_rescale_debug("test", batch=unscaled_batch, pred=unscaled_pred, note="post-unscale")
+        loss_dict, num_abs_dict = self.loss_fn(unscaled_pred, unscaled_batch, 'test')
         self._apply_batch_weight(loss_dict, num_abs_dict, batch)
         for k in loss_dict.keys():
             self.log(
                 k,
                 loss_dict[k].detach().cpu().item(),
-                batch_size=num_abs_dict[k],
+                batch_size=max(1, num_abs_dict[k]),
                 on_step=True,
                 on_epoch=True,
                 prog_bar=False,
@@ -411,17 +432,57 @@ class LitNNP(pl.LightningModule):
         batch_metrics = {}
         for output in self.outputs:
             batch_metrics.update(output.calculate_metrics(pred, batch, 'test'))
-        self.log_dict(batch_metrics, on_step=True, on_epoch=True, prog_bar=False, sync_dist=True)
-        
+        self.log_dict(
+            {f"{key}_batch": value for key, value in batch_metrics.items()},
+            on_step=True,
+            on_epoch=False,
+            prog_bar=False,
+            sync_dist=True,
+        )
+        self.log_head(loss_dict, batch_metrics, 'test')
+
         # logging metrics to console
         if batch_idx % self.trainer.log_every_n_steps == 0:
             values = self._format_metric_values("test", loss_dict, batch_metrics)
             self._write_log_only(self._format_row(self.current_epoch, batch_idx, self._loader_label(dataloader_idx), values))
         
-        return loss_dict['test_loss']
+        return loss_dict['test_total_loss']
     
     def on_train_epoch_end(self):
-        pass
+        self._log_epoch_metrics("train")
+
+    def _log_epoch_metrics(self, subset: str) -> Dict[str, Any]:
+        metrics = self._collect_epoch_metrics(subset)
+        if metrics:
+            # Metric.compute() has already synchronized distributed metric state.
+            self.log_dict(
+                metrics,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=False,
+                sync_dist=False,
+                add_dataloader_idx=False,
+            )
+        for output in self.outputs:
+            output.reset_metrics(subset=subset)
+        return metrics
+
+    def _collect_epoch_metrics(self, subset: str) -> Dict[str, Any]:
+        metrics = {
+            f"{subset}_{output.name}_{name}": value
+            for output in self.outputs
+            for name, value in output.accumulate_metrics(subset).items()
+        }
+        for output in self.outputs:
+            if getattr(output, "supports_subsets", False):
+                metrics[f"{subset}_{output.name}_loss_exact"] = output.accumulate_loss(subset)
+        if self.outputs and all(getattr(output, "supports_subsets", False) for output in self.outputs):
+            # Independently masked terms have different denominators. Averaging
+            # batch totals cannot reconstruct their full-epoch objective.
+            metrics[f"{subset}_total_loss_exact"] = sum(
+                metrics[f"{subset}_{output.name}_loss_exact"] for output in self.outputs
+            )
+        return metrics
 
     @staticmethod
     def _multi_domain_validation_total(
@@ -449,7 +510,12 @@ class LitNNP(pl.LightningModule):
     
     def on_validation_epoch_end(self):
         if self.trainer.sanity_checking:
+            for output in self.outputs:
+                output.reset_metrics(subset="val")
             return
+
+        val_epoch_metrics = self._log_epoch_metrics("val")
+        train_epoch_metrics = self._collect_epoch_metrics("train")
         
         # used for monitoring total loss in multi-domain training
         dm = getattr(self.trainer, "datamodule", None)
@@ -464,69 +530,44 @@ class LitNNP(pl.LightningModule):
         header = self._format_epoch_header()
         self._write_log_only(header)
         self._write_console(header)
-        train_loader_indices = sorted(self._collect_dataloader_indices("train"))
-        if train_loader_indices:
-            for loader_idx in train_loader_indices:
-                values = self._format_epoch_metric_values("train", loader_idx)
-                row = self._format_epoch_row("Train", self.current_epoch, self._loader_label(loader_idx), values)
-                self._write_log_only(row)
-                self._write_console(row)
-        else:
-            values = self._format_epoch_metric_values("train", 0)
-            row = self._format_epoch_row("Train", self.current_epoch, self._loader_label(0), values)
+        summary = [("val", "Validation", val_epoch_metrics)]
+        if train_epoch_metrics:
+            summary.insert(0, ("train", "Train", train_epoch_metrics))
+        for stage, label, metrics in summary:
+            values = self._format_epoch_metric_values(stage, metrics)
+            row = self._format_epoch_row(label, self.current_epoch, "all", values)
             self._write_log_only(row)
             self._write_console(row)
 
-        loader_indices = sorted(self._collect_dataloader_indices("val"))
-        if loader_indices:
-            for loader_idx in loader_indices:
-                values = self._format_epoch_metric_values("val", loader_idx)
-                row = self._format_epoch_row("Validation", self.current_epoch, self._loader_label(loader_idx), values)
-                self._write_log_only(row)
-                self._write_console(row)
-        else:
-            values = self._format_epoch_metric_values("val", 0)
-            row = self._format_epoch_row("Validation", self.current_epoch, self._loader_label(0), values)
-            self._write_log_only(row)
-            self._write_console(row)
-
-        for output in self.outputs:
-            output.reset_metrics(subset='train')
-            output.reset_metrics(subset='val')
         if not self.metric_names_initialized:
             self.metric_names_initialized = True
         self._write_console("")
 
     def on_test_epoch_end(self):
         if self.trainer.sanity_checking:
+            for output in self.outputs:
+                output.reset_metrics(subset="test")
             return
+        test_epoch_metrics = self._log_epoch_metrics("test")
         self._write_log_only("\n")
         self._write_log_and_console("Epoch summary", level=logging.DEBUG, progress=False)
         header = self._format_epoch_header()
         self._write_log_only(header)
         self._write_console(header)
-        loader_indices = sorted(self._collect_dataloader_indices("test"))
-        if loader_indices:
-            for loader_idx in loader_indices:
-                values = self._format_epoch_metric_values("test", loader_idx)
-                row = self._format_epoch_row("Test", self.current_epoch, self._loader_label(loader_idx), values)
-                self._write_log_only(row)
-                self._write_console(row)
-        else:
-            values = self._format_epoch_metric_values("test", 0)
-            row = self._format_epoch_row("Test", self.current_epoch, self._loader_label(0), values)
-            self._write_log_only(row)
-            self._write_console(row)
-        for output in self.outputs:
-            output.reset_metrics(subset='test')
+        values = self._format_epoch_metric_values("test", test_epoch_metrics)
+        row = self._format_epoch_row("Test", self.current_epoch, "all", values)
+        self._write_log_only(row)
+        self._write_console(row)
         self._write_console("")
 
     def save_configuration(self, config: DictConfig):
         self.config = config
         
     def on_save_checkpoint(self, checkpoint):
-        checkpoint['data_params'] = self.config.data
-        checkpoint['model_params'] = self.config.model
+        # Store self-contained reconstruction configs; references such as
+        # ${seed} otherwise lose their parent node when loaded independently.
+        checkpoint['data_params'] = OmegaConf.create(OmegaConf.to_container(self.config.data, resolve=True))
+        checkpoint['model_params'] = OmegaConf.create(OmegaConf.to_container(self.config.model, resolve=True))
         checkpoint['wrapper_config'] = get_model_wrapper_config(self.model).to_dict()
         checkpoint['outputs'] = self.outputs
         checkpoint['optimizer'] = self.optimizer
@@ -904,36 +945,22 @@ class LitNNP(pl.LightningModule):
             return str(dm.id_to_domain.get(int(loader_idx), loader_idx))
         return str(loader_idx)
 
-    def _collect_dataloader_indices(self, stage: str) -> List[int]:
-        indices = set()
-        for key in self.trainer.callback_metrics.keys():
-            key_str = str(key)
-            marker = "dataloader_idx_"
-            if stage in key_str and marker in key_str:
-                try:
-                    idx = int(key_str.split(marker, 1)[1].split()[0].strip())
-                    indices.add(idx)
-                except ValueError:
-                    continue
-        return sorted(indices)
-
-    def _format_epoch_metric_values(self, stage: str, loader_idx: Optional[int]) -> List[float]:
+    def _format_epoch_metric_values(
+        self,
+        stage: str,
+        exact_metrics: Optional[Dict[str, Any]] = None,
+    ) -> List[float]:
         values: List[float] = []
         metrics = self.trainer.callback_metrics
+        exact_metrics = exact_metrics or {}
         for name in self.metric_names or []:
             base = f"{stage}_{name}"
             key_epoch = f"{base}_epoch"
             key_step = f"{base}"
-            if loader_idx is not None:
-                key_epoch_idx = f"{key_epoch}/dataloader_idx_{loader_idx}"
-                key_step_idx = f"{key_step}/dataloader_idx_{loader_idx}"
-            else:
-                key_epoch_idx = None
-                key_step_idx = None
-            if key_epoch_idx is not None and key_epoch_idx in metrics:
-                val = metrics[key_epoch_idx]
-            elif key_step_idx is not None and key_step_idx in metrics:
-                val = metrics[key_step_idx]
+            if base + "_exact" in exact_metrics:
+                val = exact_metrics[base + "_exact"]
+            elif base in exact_metrics:
+                val = exact_metrics[base]
             elif key_epoch in metrics:
                 val = metrics[key_epoch]
             elif key_step in metrics:

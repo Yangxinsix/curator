@@ -18,7 +18,10 @@ test/*
 !test/test_acvr_*.py
 !test/test_variational_*.py
 !test/test_spice_dataset.py
-scripts/
+!test/test_spice_acvr_data.py
+!test/test_spice_charge_model.py
+scripts/*
+!scripts/acvr_gpu_campaign.py
 
 # model files
 *.pt

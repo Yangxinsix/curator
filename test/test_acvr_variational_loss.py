@@ -245,6 +245,41 @@ def test_zero_weight_terms_and_absent_optional_targets_do_not_produce_nan():
     assert float(result["loss"].detach()) == 0
 
 
+def test_inactive_terms_after_a_nonzero_term_do_not_reuse_its_loss_or_gradient():
+    prediction = _prediction()
+    batch = _batch()
+    energy = prediction["variational_prediction"]["labels"]["energy"]["values"]
+    # Make the reference tensor unambiguous so inactive terms remain connected
+    # to the same prediction graph while contributing exactly zero gradient.
+    prediction["variational_prediction"] = {
+        "value_space": "physical",
+        "labels": {"energy": prediction["variational_prediction"]["labels"]["energy"]},
+    }
+    baseline = VariationalJointLoss({"energy": 2.0}, {"energy": 1.0})(prediction, batch)
+    result = VariationalJointLoss(
+        {"energy": 2.0, "missing_optional": 3.0, "disabled": 0.0},
+        {"energy": 1.0, "missing_optional": 1.0},
+        certificate_weights={"disabled_certificate": 0.0},
+    )(prediction, batch)
+    assert result["loss"].item() == pytest.approx(baseline["loss"].item())
+    assert result["loss"].item() > 0
+    for name, status in (
+        ("missing_optional", "inactive"),
+        ("disabled", "disabled"),
+        ("certificate:disabled_certificate", "disabled"),
+    ):
+        term = result["terms"][name]
+        assert term["status"] == status
+        assert term["n_conditions"] == term["n_geometries"] == 0
+        for key in ("loss", "unweighted", "numerator", "denominator"):
+            assert term[key].item() == 0.0
+            gradient, = torch.autograd.grad(term[key], energy, retain_graph=True)
+            assert torch.equal(gradient, torch.zeros_like(energy))
+    actual_gradient, = torch.autograd.grad(result["loss"], energy)
+    expected_gradient, = torch.autograd.grad(baseline["loss"], energy)
+    assert torch.equal(actual_gradient, expected_gradient)
+
+
 def test_nested_variational_batch_moves_tensors_and_preserves_metadata():
     batch = _batch()
     moved = tree_to_device(batch, torch.device("cpu"))

@@ -9,13 +9,13 @@ Curator's reference electrostatic implementation uses:
 | Quantity | Unit |
 |---|---|
 | position, cell | Å |
-| charge | elementary-charge number (e) |
+| charge | elementary-charge number $e$ |
 | energy | eV |
 | force | eV/Å |
 | virial | eV |
-| electric potential / charge chemical potential | V, numerically eV/(e) |
-| charge Hessian / hardness | eV/(e^2) |
-| dipole | (e\,\text{Å}) |
+| electric potential / charge chemical potential | V, numerically $\mathrm{eV}/e$ |
+| charge Hessian / hardness | $\mathrm{eV}/e^2$ |
+| dipole | $e\,\text{Å}$ |
 | electric field conjugate to dipole | V/Å |
 
 Potential and chemical potential may have the same numerical conversion but

@@ -4,15 +4,15 @@
 
 `NonlinearEqualityProblem` is the float64 dense-autograd oracle for
 
-\[
+$$
 \min_x \phi(x),\qquad c(x)=0.
-\]
+$$
 
 `solve_newton_kkt` forms the exact Lagrangian Hessian
 
-\[
+$$
 W=\nabla^2_{xx}\left[\phi(x)+\lambda^Tc(x)\right]
-\]
+$$
 
 and solves the Newton KKT system. The line search decreases a scaled joint
 stationarity/feasibility residual, not the objective alone. A converged KKT
@@ -29,17 +29,17 @@ backpropagating through this reference Newton loop.
 `solve_implicit(QuadraticProblem)` has the same forward state, multiplier and
 energy semantics as `solve_dense`, but its backward solves one transposed KKT
 system. It supports cotangents on both the state and multiplier and propagates
-gradients through \(H\), \(g\), \(A\), \(b\), and therefore through compiled
-controls such as \(g=g_0-B^Th\).
+gradients through $H$, $g$, $A$, $b$, and therefore through compiled
+controls such as $g=g_0-B^Th$.
 
 For the minimized energy, the tested conjugate identities are
 
-\[
+$$
 \frac{\partial\Phi^*}{\partial H}=\frac12xx^T,\quad
 \frac{\partial\Phi^*}{\partial g}=x,\quad
 \frac{\partial\Phi^*}{\partial b}=-\lambda,\quad
 \frac{\partial\Phi^*}{\partial h}=-Bx.
-\]
+$$
 
 This is the dense reference backward. A matrix-free adjoint using the same
 production KKT operator is still required for large systems.
@@ -48,37 +48,37 @@ production KKT operator is still required for large systems.
 
 Let
 
-\[
+$$
 \mathcal L(R,x,\lambda)=\phi(R,x)+\lambda^Tc(R,x),\qquad
 r=\nabla_x\mathcal L.
-\]
+$$
 
 `differentiate_variational_energy` exposes three modes explicitly.
 
 ### `envelope`
 
-\[
+$$
 F_{\rm env}=-\left.\partial_R\mathcal L\right|_{x,\lambda}.
-\]
+$$
 
 State and multiplier are detached. This includes the multiplier/Pulay term
-when \(A\) or \(b\) depends on geometry. It is the relaxed force at a certified
+when $A$ or $b$ depends on geometry. It is the relaxed force at a certified
 KKT state; at a nonstationary state it is only an approximation. The result
 reports numerical `kkt_certified` separately, but does not call a finite-
 tolerance envelope field strictly conservative.
 
 ### `full_differentiable`
 
-\[
+$$
 F_{\rm full}=-\frac{d}{dR}\phi(R,\hat x(R)).
-\]
+$$
 
 This follows the actual predictor/projection/corrector graph and is exactly
 conservative for the reported composite energy. For a feasible state,
 
-\[
+$$
 F_{\rm full}-F_{\rm env}=-r^T\frac{\partial\hat x}{\partial R}.
-\]
+$$
 
 It need not approximate the relaxed force when the state has a large KKT
 residual.
@@ -87,18 +87,18 @@ residual.
 
 For a feasible approximate state, solve
 
-\[
+$$
 \mathcal K^T\begin{bmatrix}u\\\nu\end{bmatrix}
 =\begin{bmatrix}r\\0\end{bmatrix}
-\]
+$$
 
 and differentiate the scalar surrogate
 
-\[
+$$
 S=\mathcal L-u^Tr-\nu^Tc
-\]
+$$
 
-with \(x,\lambda,u,\nu\) fixed. The correction removes the first-order state
+with $x,\lambda,u,\nu$ fixed. The correction removes the first-order state
 error in the relaxed force; tests observe linear envelope error and quadratic
 adjoint error. It is not generally conservative for the current predictor
 energy and is reported accordingly. The current adjoint solve is detached and

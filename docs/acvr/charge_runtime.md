@@ -3,15 +3,15 @@
 `ACVRChargeRuntime` is the new boundary-conditioned charge path.  It does not
 change the serialized behavior of the legacy `ChargeEquilibration` layer.
 
-For condition (k), the runtime constructs
+For condition $k$, the runtime constructs
 
-\[
+$$
 F_k(q)=\chi^\mathrm{T}q
 +\frac12 q^\mathrm{T}[\operatorname{diag}(\eta)+K_\mathrm{Ewald}]q
 -h_k^\mathrm{T}B_kq
 +\frac12(C_kq-y_k)^\mathrm{T}K_k(C_kq-y_k),
 \qquad A_kq=b_k,
-\]
+$$
 
 directly from a `CompiledBoundary`.  The returned `thermodynamic_energy` is the
 minimum of this complete potential.  `base_energy` is the onsite plus Ewald

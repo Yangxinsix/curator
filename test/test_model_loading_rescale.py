@@ -59,6 +59,22 @@ def test_new_model_initializes_rescale_from_datamodule():
     assert prepared.output_modules[0].scale_by == [3.0, 3.0]
 
 
+def test_resume_preserves_checkpoint_initialization(tmp_path):
+    checkpoint = tmp_path / "model.ckpt"
+    torch.save({"model": _model(7.0)}, checkpoint)
+    config = OmegaConf.create(
+        {
+            "model_path": {"path": str(checkpoint), "mode": "resume"},
+            "model": {"_target_": "torch.nn.Identity"},
+        }
+    )
+
+    loaded = _load_model(config)
+
+    assert loaded.resume_from == checkpoint
+    assert not loaded.initialize_from_datamodule
+
+
 def test_loaded_model_finds_hessian_config_after_outputs_become_a_list(tmp_path):
     checkpoint = tmp_path / "model.ckpt"
     torch.save(

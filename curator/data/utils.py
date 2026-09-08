@@ -24,6 +24,7 @@ import lzma
 from urllib.parse import urlparse
 from urllib.request import urlopen
 import logging
+from lightning_utilities.core.apply_func import apply_to_collection
 try:
     from tqdm.auto import tqdm
     from tqdm.contrib.logging import logging_redirect_tqdm
@@ -233,13 +234,14 @@ def iter_batches(
         if hasattr(batch, "to"):
             yield batch.to(device=device, dtype=dtype)
         else:
-            for k, v in batch.items():
-                if torch.is_tensor(v):
-                    if dtype is not None and v.is_floating_point():
-                        batch[k] = v.to(device, dtype=dtype)
-                    else:
-                        batch[k] = v.to(device)
-            yield batch
+            yield apply_to_collection(
+                batch,
+                torch.Tensor,
+                lambda value: value.to(
+                    device=device,
+                    dtype=dtype if value.is_floating_point() else value.dtype,
+                ),
+            )
 
 def _prepare_data_source(
     url: str,

@@ -1,0 +1,36 @@
+defaults:
+  - acvr_spice
+  - _self_
+
+run_path: runs/acvr_spice/acvr_ef/seed4/proposal
+model_path:
+  path: runs/acvr_spice/acvr_ef/seed4/model_path
+  mode: weights
+
+model:
+  model_outputs: [energy, forces, dipole, atomic_charge, amortized_training]
+  representation:
+    stage: proposal
+
+task:
+  outputs:
+    - _target_: curator.train.AmortizedTrainingModelOutput
+      loss_fn:
+        _target_: curator.train.AmortizedVariationalLoss
+        state_weight: 1.0
+        kkt_weight: 0.25
+        state_scale: 1.0
+  optimizer:
+    lr: 0.003
+
+trainer:
+  max_epochs: 100
+  callbacks:
+    - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+      dirpath: ${run_path}/model_path
+      filename: best_model_{epoch}_{step}_{val_total_loss_exact:.8f}
+      monitor: val_total_loss_exact
+      mode: min
+      save_top_k: 1
+      save_last: true
+      every_n_epochs: 1

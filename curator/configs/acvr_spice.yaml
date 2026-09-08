@@ -1,0 +1,101 @@
+# First real-data charge experiment; isolated SPICE Ion Pairs, fixed total Q.
+seed: 4
+cfg: null
+run_path: runs/acvr_spice/acvr_ef/seed4
+model_path: null
+device: cuda
+compile: false
+deploy_model: false
+finetune: full
+dipole_weight: 0.0
+
+data:
+  _target_: curator.data.spice_acvr.SpiceACVRDataModule
+  datapath: /workspace/data/datasets/spice/2.0.1/ion_pairs/SPICE.hdf5
+  split_file: null
+  batch_size: 32
+  seed: 17
+  num_workers: 0
+  shuffle: true
+  default_dtype: float64
+  train_limit: null
+  val_limit: null
+  test_limit: null
+
+model:
+  _target_: curator.model.NeuralNetworkPotential
+  representation:
+    _target_: curator.model.spice_charge.SpiceChargeModel
+    variant: acvr
+    stage: physical
+    hidden_features: 32
+    cutoff: 6.0
+    gaussian_sigma: 0.8
+    seed: ${seed}
+  input_modules: []
+  output_modules: []
+  model_outputs: [energy, forces, dipole, atomic_charge]
+
+task:
+  _target_: curator.model.LitNNP
+  outputs:
+    - _target_: curator.train.ModelOutput
+      name: energy
+      loss_fn: {_target_: torch.nn.MSELoss}
+      loss_weight: 1.0
+      metrics:
+        rmse: {_target_: torchmetrics.MeanSquaredError, squared: false}
+    - _target_: curator.train.ModelOutput
+      name: forces
+      loss_fn: {_target_: torch.nn.MSELoss}
+      loss_weight: 1.0
+      metrics:
+        rmse: {_target_: torchmetrics.MeanSquaredError, squared: false}
+    - _target_: curator.train.ModelOutput
+      name: dipole
+      loss_fn: {_target_: torch.nn.MSELoss}
+      loss_weight: ${dipole_weight}
+      metrics:
+        rmse: {_target_: torchmetrics.MeanSquaredError, squared: false}
+  optimizer:
+    _target_: torch.optim.Adam
+    _partial_: true
+    lr: 0.003
+  # Constant learning rate keeps checkpoint continuation reproducible. The
+  # installed Lightning saves plateau scheduler state before its epoch update.
+  scheduler: null
+  save_entire_model: true
+  normalize_domain_loss: false
+
+trainer:
+  _target_: pytorch_lightning.Trainer
+  accelerator: gpu
+  devices: 1
+  precision: 64-true
+  max_epochs: 200
+  inference_mode: false
+  deterministic: true
+  gradient_clip_val: 10.0
+  enable_model_summary: false
+  enable_progress_bar: false
+  num_sanity_val_steps: 2
+  log_every_n_steps: 10
+  default_root_dir: ${run_path}
+  logger:
+    _target_: pytorch_lightning.loggers.CSVLogger
+    save_dir: ${run_path}
+    name: metrics
+  callbacks:
+    - _target_: curator.train.spice_metrics.SpiceValidationLoss
+    - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+      dirpath: ${run_path}/model_path
+      filename: best_model_{epoch}_{step}_{val_spice_loss_exact:.8f}
+      monitor: val_spice_loss_exact
+      mode: min
+      save_top_k: 1
+      save_last: true
+      every_n_epochs: 1
+
+hydra:
+  run:
+    dir: ${run_path}/hydra

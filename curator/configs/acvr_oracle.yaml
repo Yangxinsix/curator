@@ -1,0 +1,85 @@
+# CPU reference experiment through the ordinary curator-train entrypoint.
+seed: 4
+cfg: null
+run_path: runs/acvr_oracle/physical
+model_path: null
+device: cpu
+compile: false
+deploy_model: false
+finetune: full
+
+data:
+  _target_: curator.data.variational_oracle.VariationalOracleDataModule
+  batch_size: 16
+  num_train: 64
+  num_val: 16
+  num_test: 16
+  num_conditions: 5
+  seed: 17
+
+model:
+  _target_: curator.model.NeuralNetworkPotential
+  representation:
+    _target_: curator.model.variational_oracle.LearnedVariationalOracle
+    stage: physical
+    hidden_features: 32
+    seed: ${seed}
+    data_seed: ${data.seed}
+  input_modules: []
+  output_modules: []
+  model_outputs: [variational_prediction, amortized_training]
+
+task:
+  _target_: curator.model.LitNNP
+  outputs:
+    - _target_: curator.train.VariationalModelOutput
+      loss_fn:
+        _target_: curator.train.VariationalJointLoss
+        supervised_weights:
+          condition_energy: 1.0
+          condition_forces: 1.0
+          variable_value: 1.0
+        supervised_scales:
+          condition_energy: 1.0
+          condition_forces: 1.0
+          variable_value: 1.0
+        required_labels: [condition_energy, condition_forces, variable_value]
+        response_weight: 1.0
+        response_scales: {"1/eV": 1.0}
+  optimizer:
+    _target_: torch.optim.Adam
+    _partial_: true
+    lr: 0.005
+  scheduler: null
+  save_entire_model: true
+  normalize_domain_loss: false
+
+trainer:
+  _target_: pytorch_lightning.Trainer
+  accelerator: cpu
+  devices: 1
+  precision: 64-true
+  max_epochs: 100
+  inference_mode: false
+  deterministic: true
+  enable_model_summary: false
+  enable_progress_bar: false
+  num_sanity_val_steps: 2
+  log_every_n_steps: 4
+  default_root_dir: ${run_path}
+  logger:
+    _target_: pytorch_lightning.loggers.CSVLogger
+    save_dir: ${run_path}
+    name: metrics
+  callbacks:
+    - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+      dirpath: ${run_path}/model_path
+      filename: best_model_{epoch}_{step}_{val_total_loss_exact:.8f}
+      monitor: val_total_loss_exact
+      mode: min
+      save_top_k: 1
+      save_last: true
+
+hydra:
+  run:
+    dir: ${run_path}/hydra

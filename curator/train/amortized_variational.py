@@ -6,7 +6,9 @@ from typing import Dict, Optional
 import torch
 from torch import nn
 
+from curator.data import properties
 from curator.variational.amortized_training import AmortizedTrainingBatch
+from .structured_output import StructuredModelOutput
 
 
 class AmortizedVariationalLoss(nn.Module):
@@ -206,101 +208,53 @@ class AmortizedVariationalLoss(nn.Module):
         return {"loss": total, "terms": terms, "balance_mode": self.balance_mode}
 
 
-class AmortizedTrainingModelOutput(nn.Module):
+class AmortizedTrainingModelOutput(StructuredModelOutput):
     """Adapter for Curator trainers using ``prediction['amortized_training']``."""
 
     def __init__(
         self,
         loss_fn: AmortizedVariationalLoss,
         name: str = "amortized_variational",
+        *,
+        loss_weight: float = 1.0,
     ) -> None:
-        super().__init__()
         if not isinstance(loss_fn, AmortizedVariationalLoss):
             raise TypeError("loss_fn must be an AmortizedVariationalLoss")
-        self.loss_fn = loss_fn
-        self.name = str(name)
-        self.term_names = tuple(loss_fn.weights)
-        self.register_buffer("_epoch_numerator", torch.zeros(len(self.term_names), dtype=torch.float64))
-        self.register_buffer("_epoch_denominator", torch.zeros(len(self.term_names), dtype=torch.float64))
-        self._last_result = None
+        super().__init__(loss_fn, name, loss_fn.weights, loss_weight)
 
-    def calculate_loss(self, prediction, batch=None, return_num_obs=True):
+    def calculate_loss(self, prediction, batch=None, return_num_obs=True, *, subset=None):
         if "amortized_training" not in prediction:
             raise KeyError("model output is missing amortized_training")
-        if batch is None or "variational" not in batch:
+        if batch is None:
             raise ValueError("amortized training requires variational condition axes")
-        axes = batch["variational"]
+        training = prediction["amortized_training"]
+        if not isinstance(training, AmortizedTrainingBatch):
+            raise TypeError("training must be an AmortizedTrainingBatch")
+        if "variational" in batch:
+            axes = batch["variational"]
+        else:
+            n_atoms = batch.get(properties.n_atoms)
+            if not (
+                isinstance(n_atoms, torch.Tensor)
+                and n_atoms.ndim == 1
+                and n_atoms.numel() == training.n_conditions
+            ):
+                raise ValueError(
+                    "amortized training requires variational condition axes "
+                    "unless there is exactly one condition per geometry"
+                )
+            axes = {
+                "condition_geometry_index": torch.arange(
+                    training.n_conditions, device=training.projected_state.device
+                ),
+            }
         result = self.loss_fn(
-            prediction["amortized_training"],
+            training,
             condition_geometry_index=axes["condition_geometry_index"],
             condition_weight=axes.get("condition_weight"),
             geometry_weight=batch.get("weight"),
         )
-        self._last_result = result
-        with torch.no_grad():
-            for index, name in enumerate(self.term_names):
-                self._epoch_numerator[index].add_(
-                    result["terms"][name]["numerator"].detach().to(self._epoch_numerator)
-                )
-                self._epoch_denominator[index].add_(
-                    result["terms"][name]["denominator"].detach().to(self._epoch_denominator)
-                )
-        if return_num_obs:
-            count = max(
-                (term["n_geometries"] for term in result["terms"].values()),
-                default=0,
-            )
-            return result["loss"], count
-        return result["loss"]
-
-    def _global_sums(self):
-        numerator = self._epoch_numerator.clone()
-        denominator = self._epoch_denominator.clone()
-        if torch.distributed.is_available() and torch.distributed.is_initialized():
-            torch.distributed.all_reduce(numerator)
-            torch.distributed.all_reduce(denominator)
-        return numerator, denominator
-
-    def accumulate_loss(self):
-        numerator, denominator = self._global_sums()
-        total = numerator.new_zeros(())
-        for index, name in enumerate(self.term_names):
-            if denominator[index] > 0:
-                total = total + self.loss_fn.weights[name] * numerator[index] / denominator[index]
-        return float(total.cpu())
-
-    def calculate_metrics(self, prediction, batch, subset):
-        del prediction, batch
-        if self._last_result is None:
-            return {}
-        metrics = {
-            "%s_%s_%s_loss" % (subset, self.name, name): term["loss"].detach()
-            for name, term in self._last_result["terms"].items()
-        }
-        self._last_result = None
-        return metrics
-
-    def accumulate_metrics(self, subset):
-        del subset
-        numerator, denominator = self._global_sums()
-        return {
-            name + "_loss": float(
-                (
-                    self.loss_fn.weights[name]
-                    * numerator[index]
-                    / denominator[index]
-                ).cpu()
-            )
-            for index, name in enumerate(self.term_names)
-            if denominator[index] > 0
-        }
-
-    def reset_loss(self):
-        self._epoch_numerator.zero_()
-        self._epoch_denominator.zero_()
-
-    def reset_metrics(self):
-        self._last_result = None
+        return self._record_result(result, return_num_obs, subset)
 
 
 __all__ = ["AmortizedTrainingModelOutput", "AmortizedVariationalLoss"]
