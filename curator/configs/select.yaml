@@ -11,7 +11,10 @@ data_batch_size: 8
 select_batch_size: 100
 method: lcmd_greedy
 selection_kwargs: {}
-selection_feature: fg-sketch
+# For max_det_greedy only: selection_kwargs: {regularization: 1.0e-6}
+# The ridge is relative to the pool's mean kernel diagonal and ensures an equal
+# selection budget even for low-rank features; zero requests unregularized mode.
+selection_feature: null # Use the first feature spec's versioned output name.
 feature_specs:
   - preset: fg-sketch
     seed: ${seed}
@@ -21,13 +24,32 @@ feature_specs:
 #   preset: fg-sketch-rms
 #   seed: ${seed}
 #
-# - RFF full-gradient:
+# - Gaussian RFF of the complete selected readout parameter gradient:
 #   preset: fg-rff
+#   rff_kernel: rbf  # Joint readout RFF uses one isotropic Gaussian kernel.
+#   sigma: 1.0
+#   seed: ${seed}
+#
+# - Frozen Gaussian Nyström KME of the same selected readout gradient:
+#   feature_specs:
+#     - preset: fg-nystrom  # Also gnn-nystrom, llg-nystrom, local_fg-nystrom.
+#       nystrom_state: /path/to/prepared_readout_nystrom.pt
+#       num_features: 512  # Must match the saved map's requested output width.
+#       sigma: 1.0        # Must match the saved map; no recalibration at selection.
+#   export_normalized_features: false  # Preserve the Gaussian KME distance.
+#   # Use the same model, target_layer, num_layers, and frozen state for pool/train.
+#   # The CLI currently accepts one model for Nyström; prepare one map per model.
+#
+# - Other stationary kernels on a simple GNN feature:
+#   preset: gnn-rff
+#   rff_kernel: matern32  # rbf, matern32, matern52, or laplacian_l1
+#   sigma: 1.0
 #   seed: ${seed}
 #
 # - Override a preset width:
 #   preset: fg-sketch
 #   num_features: 512
+#   # For joint readout presets this is the TOTAL output dimension.
 #   seed: ${seed}
 #
 # - Local full-gradient for atom-level selection:
@@ -47,7 +69,10 @@ num_layers: null # For segmented readouts: positive N selects the first N segmen
 invariants_only: true # For segmented equivariant inputs, keep only invariant channels from each selected segment
 save_features: null # H5 cache file path when set
 save_selected_features: null # Selected feature file path when set
-export_normalized_features: true
+# Preserve the raw feature kernel for selection. Only enable the legacy /variance
+# transform when explicitly reproducing historical geometry (no train_set).
+legacy_variance_normalization: false
+export_normalized_features: false # Deprecated alias of the legacy option; also affects SELECTION.
 save_images: false
 compute_features_only: false
 target_domain: null

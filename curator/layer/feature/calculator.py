@@ -82,6 +82,7 @@ class FeatureCalculator(nn.Module):
             grads=feature_data[properties.gradient],
             atomic_numbers=data.get(properties.atomic_numbers),
             num_atoms=data.get(properties.n_atoms),
+            readout_layouts=feature_data.get("readout_layouts"),
         )
 
     def register_repr_callback(self, repr_callback: nn.Module) -> None:
@@ -220,19 +221,7 @@ class FeatureCalculator(nn.Module):
         kernels: Optional[Sequence[Union[FeatureKernel, FeatureSpec, dict]]],
     ) -> List[FeatureKernel]:
         if kernels is None:
-            kernels = [
-                {
-                    "name": _DEFAULT_KERNEL,
-                    "raw_feature": normalize_kernel(_DEFAULT_KERNEL),
-                    "mapping": "gaussian_sketch",
-                    "num_features": 500,
-                    "layer_combine": "concat",
-                    "layer_norm": "none",
-                    "pooling": "sum",
-                    "sigma": 1.0,
-                    "seed": 0,
-                }
-            ]
+            kernels = [{"preset": "fg-sketch", "num_features": 500}]
         built: List[FeatureKernel] = []
         for item in kernels:
             if isinstance(item, FeatureKernel):

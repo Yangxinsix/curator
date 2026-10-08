@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+from dataclasses import asdict
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
@@ -17,7 +18,7 @@ except ImportError:
     logging_redirect_tqdm = None
 
 from .calculator import FeatureCalculator
-from .common import _DEFAULT_KERNEL, FeatureSpec, KernelName, feature_spec_from_object, normalize_kernel
+from .common import FeatureSpec, KernelName, feature_spec_from_object, normalize_kernel
 from .extractor import FeatureExtractor
 from .store import H5Feature
 
@@ -60,15 +61,31 @@ class FeatureStatistics:
     def get_features(
         self,
         dataset: Optional[torch.utils.data.Dataset] = None,
-        normalize: bool = True,
+        normalize: bool = False,
         save: bool = False,
     ) -> Dict[str, torch.Tensor]:
+        """Return raw coordinates by default, preserving their kernel geometry.
+
+        ``normalize=True`` explicitly reproduces the historical coordinate
+        transform ``(features - mean) / variance``; it is not standard scaling
+        by the standard deviation and changes the represented kernel.
+        """
         if dataset is not None:
             self.dataset = dataset
         calculators, kernel_names = self._resolve_calculators()
+        if normalize and any(kc.spec.mapping == "nystrom" for calc in calculators for kc in calc.kernels):
+            raise ValueError(
+                "Nyström features must retain their kernel geometry: use normalize=False "
+                "(selection config: export_normalized_features: false). "
+                "Coordinate standardization changes the approximated Gaussian KME kernel."
+            )
         cache = self._compute(calculators, kernel_names)
         features = self._load_features(cache, kernel_names)
         if normalize:
+            logger.warning(
+                "Applying legacy variance normalization (Z - mean) / variance; "
+                "this changes feature distances and the represented kernel."
+            )
             features = {k: self._normalize_features(v) for k, v in features.items()}
         if save and self.save_path is not None:
             torch.save(features, self.save_path)
@@ -105,6 +122,12 @@ class FeatureStatistics:
             return self.calculators, kernel_names
 
         kernel_specs = self._resolve_kernel_specs()
+        if len(self.models) > 1 and any(spec.mapping == "nystrom" for spec in kernel_specs):
+            raise ValueError(
+                "A shared Nyström state cannot be applied automatically to an ensemble. "
+                "Supply one FeatureCalculator with a separately prepared state per model; "
+                "use the same output width and kernel names across calculators."
+            )
         calculators = []
         for model in self.models:
             extractor = FeatureExtractor(
@@ -122,6 +145,14 @@ class FeatureStatistics:
         norm_kernel = normalize_kernel(str(kernel))
         if norm_kernel not in kernel_names:
             raise ValueError(f"Kernel '{norm_kernel}' is not available in FeatureStatistics.")
+        if len(calculators) > 1 and any(
+            kc.kernel == norm_kernel and kc.spec.mapping == "nystrom"
+            for calc in calculators for kc in calc.kernels
+        ):
+            raise ValueError(
+                "Streaming cannot average Nyström coordinates from independent model-specific bases. "
+                "Use get_features(normalize=False), which keeps the model axis for kernel averaging."
+            )
         size = len(self.dataset) if hasattr(self.dataset, "__len__") else None
         model_dtype = next(self.models[0].parameters()).dtype
         desc = f"stream-kernel={norm_kernel} size={size if size is not None else '?'} bs={self.batch_size}"
@@ -139,15 +170,8 @@ class FeatureStatistics:
     def _resolve_kernel_specs(self) -> List[FeatureSpec]:
         kernels = list(self.kernels) if self.kernels is not None else [
             {
-                "name": _DEFAULT_KERNEL,
-                "raw_feature": normalize_kernel(_DEFAULT_KERNEL),
-                "mapping": "gaussian_sketch",
+                "preset": "fg-sketch",
                 "num_features": 500,
-                "layer_combine": "concat",
-                "layer_norm": "none",
-                "pooling": "sum",
-                "sigma": 1.0,
-                "seed": 0,
             }
         ]
         specs: List[FeatureSpec] = []
@@ -220,7 +244,22 @@ class FeatureStatistics:
 
     def _compute_store(self, calculators: List[FeatureCalculator], kernel_names: List[str]) -> None:
         size = len(self.dataset) if hasattr(self.dataset, "__len__") else None
-        self.store.ensure(kernel_names, dataset_size=size)
+        identities = []
+        if any(kc.spec.mapping == "nystrom" for calc in calculators for kc in calc.kernels):
+            identities = [
+                [
+                    {
+                        "spec": asdict(kc.spec),
+                        **({
+                            "nystrom_fingerprint": kc.kme.state.fingerprint,
+                            "nystrom_file_sha256": kc.kme.state_file_sha256,
+                        } if kc.spec.mapping == "nystrom" else {}),
+                    }
+                    for kc in calc.kernels
+                ]
+                for calc in calculators
+            ]
+        self.store.ensure(kernel_names, dataset_size=size, feature_identities=identities)
         offsets: List[int] = [0] * len(self.models)
         image_idx = self.store.load_image_idx(kernel_names[0])
         if image_idx is not None:
@@ -296,6 +335,7 @@ class FeatureStatistics:
 
     @staticmethod
     def _normalize_features(features: torch.Tensor) -> torch.Tensor:
+        """Historical variance scaling, retained only for explicit reproduction."""
         if features.numel() == 0:
             return features
         if features.dim() == 2:

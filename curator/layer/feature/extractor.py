@@ -9,6 +9,7 @@ from torch import nn
 
 from curator.data import properties
 from ..utils import find_layer_by_name_recursive
+from .readout import readout_parameter_layout
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,11 @@ class FeatureExtractor(nn.Module):
         self.repr_callback = repr_callback
         self._features: List[torch.Tensor] = []
         self._grads: List[torch.Tensor] = []
+        self._execution_grads: List[Optional[torch.Tensor]] = []
+        self._readout_layouts = []
+        self._module_execution_indices = {}
+        self._captured_parameter_ids = set()
+        self._module_names = {}
         self.hooks = []
         self.model_outputs = model_outputs if model_outputs is not None else ["feature", "gradient"]
         self.target_layer = target_layer
@@ -39,12 +45,33 @@ class FeatureExtractor(nn.Module):
         if self.repr_callback is not None:
             self.add_hooks()
 
-    def save_feats_hook(self, _, in_feat) -> None:
+    def save_feats_hook(self, module, in_feat) -> None:
         new_feat = torch.cat(
             (in_feat[0].detach().clone(), torch.ones_like(in_feat[0][:, 0:1])),
             dim=-1,
         )
         self._features.append(new_feat)
+        layout = readout_parameter_layout(module)
+        layout["module_name"] = self._module_names.get(id(module), type(module).__name__)
+        parameter_ids = {id(p) for p in module.parameters(recurse=False)}
+        if parameter_ids & self._captured_parameter_ids:
+            layout.update(supported=False, reason="Repeated/shared readout parameters need their gradient contributions combined before projection.")
+        self._captured_parameter_ids.update(parameter_ids)
+        self._readout_layouts.append(layout)
+        self._execution_grads.append(None)
+        self._module_execution_indices.setdefault(id(module), []).append(len(self._features) - 1)
+
+    def save_output_hook(self, module, _, output) -> None:
+        # Autograd may visit independent branches in a different order from
+        # their forward execution. Bind each adjoint to its own captured input.
+        index = self._module_execution_indices[id(module)].pop()
+        if torch.is_tensor(output) and output.requires_grad:
+            gradients = self._execution_grads
+
+            def save_gradient(gradient):
+                gradients[index] = gradient.detach().clone()
+
+            output.register_hook(save_gradient)
 
     def save_segmented_feats_hook(self, module, in_feat) -> None:
         feat = in_feat[0]
@@ -102,18 +129,21 @@ class FeatureExtractor(nn.Module):
             return
 
         layer = self._default_target(layer)
+        self._module_names = {id(module): name for name, module in layer.named_modules()}
         linear_modules = [m for m in layer.modules() if isinstance(m, self._linear_types)]
         if not linear_modules:
             logger.warning("No linear-like submodules found under target layer %s", self.target_layer)
         for child in linear_modules:
             self.hooks.append(child.register_forward_pre_hook(self.save_feats_hook))
-            self.hooks.append(child.register_backward_hook(self.save_grads_hook))
+            self.hooks.append(child.register_forward_hook(self.save_output_hook))
 
     def forward(self, data: properties.Type, predict: bool = False) -> properties.Type:
         if predict:
             data = self.repr_callback(data.copy())
         data[properties.feature] = self._features
-        data[properties.gradient] = self._grads[::-1]
+        captured_grads = [gradient for gradient in self._execution_grads if gradient is not None]
+        data[properties.gradient] = captured_grads if captured_grads else self._grads[::-1]
+        data["readout_layouts"] = self._readout_layouts
         self._reset()
         return data
 
@@ -127,6 +157,10 @@ class FeatureExtractor(nn.Module):
     def _reset(self) -> None:
         self._features = []
         self._grads = []
+        self._execution_grads = []
+        self._readout_layouts = []
+        self._module_execution_indices = {}
+        self._captured_parameter_ids = set()
 
     def _select_segmented_feat(self, module: nn.Module, feat: torch.Tensor) -> torch.Tensor:
         widths = [int(width) for width in getattr(module, "in_features_list")]

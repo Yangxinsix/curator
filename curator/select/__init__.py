@@ -4,6 +4,7 @@ from .kernel import (
     DiagonalKernelMatrix, 
     FeatureCovKernelMatrix,
 )
+from .exact_kme import ExactGaussianKMEKernelMatrix
 from .select import (
     direct_birch,
     max_diag,

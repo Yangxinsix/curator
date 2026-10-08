@@ -1,3 +1,9 @@
+"""Legacy factor-wise projectors retained for historical reproduction.
+
+The production FeatureKernel uses kme.py. Joint projection of actual readout
+parameter gradients is implemented there with gaussian.py and readout.py.
+These legacy full-gradient formulas do not approximate that Gaussian kernel.
+"""
 from __future__ import annotations
 
 import math

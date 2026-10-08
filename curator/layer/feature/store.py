@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import List, Optional, Sequence, Tuple, Union
 
@@ -34,6 +35,7 @@ class H5Feature:
         self,
         kernels: Optional[Sequence[KernelName]] = None,
         dataset_size: Optional[int] = None,
+        feature_identities: Optional[Sequence] = None,
     ) -> List[str]:
         if kernels is None:
             kernels = self.kernels
@@ -59,6 +61,25 @@ class H5Feature:
                     handle.attrs["dataset_size"] = int(dataset_size)
                 elif int(existing_size) != int(dataset_size):
                     raise ValueError("HDF5 dataset_size does not match.")
+            if feature_identities is not None:
+                identity = json.dumps(feature_identities, sort_keys=True, separators=(",", ":"))
+                existing_identity = handle.attrs.get("feature_identities")
+                if existing_identity is None:
+                    populated = "features" in handle and any(
+                        "counts" in group and bool((group["counts"][()] > 0).any())
+                        for group in handle["features"].values()
+                    )
+                    if feature_identities and populated:
+                        raise ValueError(
+                            "Existing HDF5 feature cache has no Nyström mapping identity. "
+                            "Use a new cache path or explicitly remove the stale cache."
+                        )
+                    handle.attrs["feature_identities"] = identity
+                elif existing_identity != identity:
+                    raise ValueError(
+                        "HDF5 feature mapping identities do not match (spec, Nyström anchors, or state changed). "
+                        "Use a new cache path or explicitly remove the stale cache."
+                    )
         self.kernels = kernels_list
         if dataset_size is not None:
             self.dataset_size = int(dataset_size)
@@ -107,6 +128,7 @@ class H5Feature:
                     maxshape=(self.num_models, None, feats.shape[1]),
                     chunks=chunks,
                     compression=self.compression,
+                    dtype=feats.detach().cpu().numpy().dtype,
                 )
             elif data.shape[0] != self.num_models or data.shape[2] != feats.shape[1]:
                 raise ValueError("HDF5 data shape does not match.")

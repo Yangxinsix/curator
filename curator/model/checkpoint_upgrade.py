@@ -9,6 +9,7 @@ import torch
 from curator.data import properties
 from curator.data.properties import HEAD_PRESETS, HeadConfig
 from curator.layer import AtomwiseNN, GlobalRescaleShift
+from curator.layer._rescale import PerSpeciesScale
 
 from .conversion import convert_single_to_multi_domain
 
@@ -62,6 +63,27 @@ def _upgrade_legacy_rescale_transforms(module: GlobalRescaleShift) -> None:
 
 
 def _upgrade_legacy_rescale_module(module: GlobalRescaleShift) -> None:
+    # The head-based format predates per-species multiplicative scales. Its
+    # existing transform buffers can contain fitted/trained values that differ
+    # from the head's initial configuration, and must not be reconstructed via
+    # the older output_keys/scale_by migration below.
+    if (all(hasattr(module, name) for name in ("heads", "scales", "shifts", "atomic_shifts"))
+            and not hasattr(module, "atomic_scales")):
+        reference = next((value for value in module.buffers() if value.is_floating_point()), None)
+        if reference is None:
+            reference = next(module.parameters(), None)
+        additions = torch.nn.ModuleList([
+            PerSpeciesScale(
+                head.key,
+                values=(getattr(head, "per_species_scale", None)
+                        if isinstance(getattr(head, "per_species_scale", None), dict) else None),
+                data_key=GlobalRescaleShift._preferred_data_key(head),
+            )
+            for head in module.heads
+        ])
+        if reference is not None:
+            additions.to(device=reference.device, dtype=reference.dtype)
+        module.atomic_scales = additions
     if all(hasattr(module, name) for name in ("heads", "scales", "shifts", "atomic_scales", "atomic_shifts")):
         _upgrade_legacy_rescale_transforms(module)
         return

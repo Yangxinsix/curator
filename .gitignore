@@ -9,6 +9,14 @@ build/
 test/*
 !test/test_native_neighborlist.py
 !test/test_direct_birch_selection.py
+!test/test_rff_kernels.py
+!test/test_readout_joint_rff.py
+!test/test_readout_gradient_factors.py
+!test/test_nystrom.py
+!test/test_greedy_selection.py
+!test/test_selection_normalization.py
+!test/test_exact_kme_selection.py
+!test/test_checkpoint_rescale_upgrade.py
 scripts/
 
 # model files

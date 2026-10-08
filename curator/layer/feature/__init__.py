@@ -6,6 +6,7 @@ from .extractor import FeatureExtractor
 from .kme import (
     BaseKMEAggregator,
     IdentityKMEAggregator,
+    NystromKMEAggregator,
     RandomFourierKMEAggregator,
     SketchingKMEAggregator,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "IdentityKMEAggregator",
     "KernelName",
     "MeanAggregator",
+    "NystromKMEAggregator",
     "RandomFourierKMEAggregator",
     "Reduction",
     "SketchingKMEAggregator",

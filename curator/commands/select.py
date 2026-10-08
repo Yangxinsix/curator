@@ -8,6 +8,21 @@ from omegaconf import DictConfig, OmegaConf
 from .common import CONFIGS_PATH, configure_cli_logger, ensure_resolvers, log, log_logo, prepare_cli_environment, prepare_run_path
 
 
+def _legacy_variance_normalization(config: DictConfig) -> bool:
+    """Resolve the explicit legacy option and the old, misleading config alias."""
+    old_export_flag = bool(OmegaConf.select(config, "export_normalized_features", default=False))
+    if old_export_flag:
+        log.warning(
+            "export_normalized_features=true is a legacy alias affecting SELECTION, "
+            "not just export: it applies (Z - mean) / variance. Use "
+            "legacy_variance_normalization=true only to reproduce old geometry; "
+            "otherwise leave both options false."
+        )
+    return old_export_flag or bool(
+        OmegaConf.select(config, "legacy_variance_normalization", default=False)
+    )
+
+
 @hydra.main(config_path=CONFIGS_PATH, config_name="select", version_base=None)
 def select(config: DictConfig):
     prepare_cli_environment()
@@ -125,7 +140,7 @@ def select(config: DictConfig):
         save_json=save_json,
         save_images=save_images,
         save_selected_features=save_selected_features,
-        normalize_features=OmegaConf.select(config, "export_normalized_features", default=True),
+        normalize_features=_legacy_variance_normalization(config),
         compute_features_only=bool(
             OmegaConf.select(config, "compute_features_only", default=False)
         ),

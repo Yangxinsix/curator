@@ -1,5 +1,6 @@
 import inspect
 import math
+import operator
 import warnings
 from typing import Any, Callable, Optional
 
@@ -39,6 +40,21 @@ def max_diag(matrix: KernelMatrix, batch_size: int) -> torch.Tensor:
     """
     return torch.argsort(matrix.get_diag())[-batch_size:]
 
+def _selection_sizes(matrix: KernelMatrix, batch_size: int, n_train: int) -> tuple[int, int]:
+    """Validate the shared pool/train layout and cap the requested pool budget."""
+    try:
+        batch_size = operator.index(batch_size)
+        n_train = operator.index(n_train)
+    except TypeError as exc:
+        raise ValueError("batch_size and n_train must be integers.") from exc
+    n_total = matrix.get_number_of_columns()
+    if batch_size < 0:
+        raise ValueError("batch_size must be nonnegative.")
+    if not 0 <= n_train <= n_total:
+        raise ValueError("n_train must be between zero and the number of kernel columns.")
+    n_pool = n_total - n_train
+    return n_pool, min(batch_size, n_pool)
+
 def max_dist_greedy(matrix: KernelMatrix, batch_size: int, n_train: int = 0) -> torch.Tensor:
     """Greedily select points that maximise the distance to the current set.
 
@@ -47,29 +63,28 @@ def max_dist_greedy(matrix: KernelMatrix, batch_size: int, n_train: int = 0) -> 
     landscape before picking new pool elements.
     """
 
-    n_pool = matrix.get_number_of_columns() - n_train
-    if n_pool <= 0 or batch_size <= 0:
-        return torch.empty(0, dtype=torch.long)
-
+    n_pool, batch_size = _selection_sizes(matrix, batch_size, n_train)
     diag = matrix.get_diag()[:n_pool]
     device = diag.device
     dtype = diag.dtype
+    if batch_size == 0:
+        return torch.empty(0, dtype=torch.long, device=device)
 
+    min_sq_dists = torch.full((n_pool,), float('inf'), device=device, dtype=dtype)
     if n_train > 0:
-        min_sq_dists = torch.full((n_pool,), float('inf'), device=device, dtype=dtype)
         for j in range(n_pool, n_pool + n_train):
             train_dists = matrix.get_sq_dists(j)[:n_pool]
             min_sq_dists = torch.minimum(min_sq_dists, train_dists)
         start_idx = torch.argmax(min_sq_dists)
     else:
-        min_sq_dists = diag.clone()
+        # The origin only determines the first point; it is not an extra centre.
         start_idx = torch.argmax(diag)
 
     selected = [start_idx]
     selected_mask = torch.zeros(n_pool, dtype=torch.bool, device=device)
     selected_mask[start_idx] = True
 
-    while len(selected) < min(batch_size, n_pool):
+    while len(selected) < batch_size:
         sq_dists = matrix.get_sq_dists(selected[-1])[:n_pool]
         min_sq_dists = torch.minimum(min_sq_dists, sq_dists)
         min_sq_dists = min_sq_dists.masked_fill(selected_mask, float('-inf'))
@@ -81,27 +96,103 @@ def max_dist_greedy(matrix: KernelMatrix, batch_size: int, n_train: int = 0) -> 
 
     return torch.tensor(selected, device=device, dtype=torch.long)
 
-def max_det_greedy(matrix: KernelMatrix, batch_size: int) -> torch.Tensor:
-    vec_c = matrix.get_diag()
-    batch_idxs = [torch.argmax(vec_c)]
+def max_det_greedy(
+    matrix: KernelMatrix,
+    batch_size: int,
+    n_train: int = 0,
+    regularization: float = 1e-6,
+) -> torch.Tensor:
+    """Greedily maximise a regularised kernel determinant at a fixed budget.
 
-    l_n = None
+    The objective is ``logdet(K[S,S] + lambda * I)``, equivalently
+    ``logdet(I + K[S,S] / lambda)`` at a fixed cardinality, where
+    ``lambda = regularization * mean(diag(K)[:n_pool])``. A zero pool diagonal
+    uses scale 1. The default relative ridge is a numerical-stability rule,
+    not a tuned or empirically optimal selection hyperparameter.
 
-    for n in range(1, batch_size):
-        opt_idx = batch_idxs[-1]
-        l_n_T_l_n = 0.0 if l_n is None else torch.einsum('w,wc->c', l_n[:, opt_idx], l_n)
-        mat_col = matrix.get_column(opt_idx)
-        update = (1 / torch.sqrt(vec_c[opt_idx])) * (mat_col - l_n_T_l_n)
-        vec_c = vec_c - update ** 2
-        l_n = update.unsqueeze(0) if l_n is None else torch.concat((l_n, update.unsqueeze(0)))
-        new_idx = torch.argmax(vec_c)
-        if vec_c[new_idx] <= 1e-12 or new_idx in batch_idxs:
-            break
+    The final ``n_train`` columns, when present, are conditioned on first using
+    the same regularised kernel. Only pool indices are returned. This maximises
+    the joint log determinant minus the fixed training-set log determinant.
+
+    Incremental Cholesky updates use float64 and fetch individual columns, not
+    the full Gram matrix. ``regularization=0`` requests the unregularised
+    objective; numerical rank exhaustion then raises instead of silently
+    returning fewer structures. Kernel columns must describe a finite PSD
+    matrix; float64 accumulation cannot repair inaccurate input kernel values.
+    """
+    n_pool, batch_size = _selection_sizes(matrix, batch_size, n_train)
+    try:
+        regularization = float(regularization)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("regularization must be a finite nonnegative number.") from exc
+    if not math.isfinite(regularization) or regularization < 0:
+        raise ValueError("regularization must be a finite nonnegative number.")
+
+    diag = matrix.get_diag().detach().to(dtype=torch.float64)
+    n_total = matrix.get_number_of_columns()
+    if diag.shape != (n_total,) or not torch.isfinite(diag).all() or (diag < 0).any():
+        raise ValueError("MaxDet requires a finite, nonnegative kernel diagonal.")
+    if batch_size == 0:
+        return torch.empty(0, dtype=torch.long, device=diag.device)
+
+    pool_max = diag[:n_pool].max()
+    if pool_max == 0:
+        scale = diag.new_tensor(1.0)
+    else:
+        # Taking a raw sum/mean can overflow even if every Kii is finite.
+        scale = pool_max * (diag[:n_pool] / pool_max).mean()
+    residuals = diag / scale + regularization
+    if not torch.isfinite(residuals).all():
+        raise ValueError("Kernel scaling overflowed; rescale the kernel before MaxDet.")
+    tolerance = 64 * torch.finfo(torch.float64).eps * max(1.0, float(residuals.max()))
+    rows = torch.empty(
+        (n_train + batch_size - 1, n_total), dtype=torch.float64, device=diag.device
+    )
+    used = torch.zeros(n_total, dtype=torch.bool, device=diag.device)
+    selected: list[int] = []
+
+    for step in range(n_train + batch_size):
+        if step < n_train:
+            index = n_pool + step
         else:
-            batch_idxs.append(new_idx)
+            index = int(torch.argmax(residuals[:n_pool].masked_fill(used[:n_pool], -float('inf'))))
 
-    batch_idxs = torch.hstack(batch_idxs)    
-    return batch_idxs
+        pivot = residuals[index]
+        minimum_pivot = tolerance * max(1, step) if regularization == 0 else 0.0
+        if pivot <= minimum_pivot:
+            if regularization == 0:
+                raise ValueError(
+                    "Unregularized MaxDet exhausted the numerical kernel rank before "
+                    "the requested budget; use positive regularization."
+                )
+            raise ValueError(
+                "Regularized MaxDet encountered a nonpositive pivot; check that the "
+                "kernel is PSD, compute its columns in higher precision, or increase regularization."
+            )
+        used[index] = True
+        if step >= n_train:
+            selected.append(index)
+        if len(selected) == batch_size:
+            break
+
+        column = matrix.get_column(index).detach().to(dtype=torch.float64)
+        if column.shape != (n_total,) or not torch.isfinite(column).all():
+            raise ValueError("MaxDet requires finite kernel columns matching its diagonal.")
+        column = column / scale
+        column[index] += regularization
+        if step:
+            column = column - rows[:step, index] @ rows[:step]
+        rows[step] = column / torch.sqrt(pivot)
+        residuals = residuals - rows[step].square()
+        if not torch.isfinite(residuals).all():
+            raise ValueError("MaxDet Cholesky updates became nonfinite; check kernel scale and precision.")
+        if (residuals[~used] < -tolerance * (step + 1)).any():
+            raise ValueError(
+                "MaxDet encountered a negative conditional variance; the supplied "
+                "kernel is not PSD at this precision. Check kernel columns or increase regularization."
+            )
+
+    return torch.tensor(selected, dtype=torch.long, device=diag.device)
 
 def max_det_greedy_local(matrix: KernelMatrix, batch_size: int, num_atoms: torch.Tensor) -> torch.Tensor:
     vec_c = matrix.get_diag()

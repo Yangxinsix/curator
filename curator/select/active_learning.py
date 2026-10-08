@@ -128,9 +128,27 @@ class GeneralActiveLearning:
         save_json: Optional[Union[str, Path]] = None,
         save_images: Optional[Union[bool, str, Path]] = None,
         save_selected_features: Optional[Union[bool, str, Path]] = None,
-        normalize_features: bool = True,
+        normalize_features: bool = False,
         compute_features_only: bool = False,
     ) -> List[int]:
+        # This opt-in is the historical /variance transform, not /std.
+        feature_normalization = "legacy_variance" if normalize_features else "none"
+        if normalize_features and train_set is not None:
+            raise ValueError(
+                "Legacy variance normalization cannot be used with train_set: "
+                "independently scaling pool and train features gives incompatible "
+                "coordinates. Use normalize_features=False."
+            )
+        if save_json is not None and Path(save_json).exists():
+            previous = json.loads(Path(save_json).read_text())
+            if (
+                previous.get("selection_protocol_version") != 2
+                or previous.get("feature_normalization") != feature_normalization
+            ):
+                raise ValueError(
+                    "save_json contains a different or unversioned selection protocol. "
+                    "Use a new output path to preserve historical results."
+                )
         if compute_features_only:
             logger.info(
                 "compute_features_only=True: features will be computed/exported and structure selection is skipped."
@@ -197,6 +215,9 @@ class GeneralActiveLearning:
                     "kernel": self.selection_feature,
                     "selection": None,
                     "compute_features_only": True,
+                    "selection_protocol_version": 2,
+                    "feature_normalization": feature_normalization,
+                    "feature_store_normalization": "none",
                     "dataset": {
                         "pool": str(pool_set),
                         "train": str(train_set) if train_set is not None else None,
@@ -244,9 +265,14 @@ class GeneralActiveLearning:
             raise ValueError("max_det_greedy_local requires local features.")
         if self.selection == "direct_birch" and num_atoms is not None:
             raise ValueError("direct_birch currently requires global structure-level features.")
+        selection_kwargs = dict(self.selection_kwargs)
+        if self.selection == "max_det_greedy":
+            # Resolve the default here as well so saved metadata includes the
+            # actual ridge rather than an ambiguous empty kwargs dictionary.
+            selection_kwargs.setdefault("regularization", 1e-6)
         idxs = _call_selection(
             selection_fn,
-            selection_kwargs=self.selection_kwargs,
+            selection_kwargs=selection_kwargs,
             matrix=matrix,
             batch_size=select_batch_size,
             n_train=n_train,
@@ -261,6 +287,10 @@ class GeneralActiveLearning:
             payload = {
                 "kernel": self.selection_feature,
                 "selection": self.selection,
+                "selection_protocol_version": 2,
+                "selection_kwargs": selection_kwargs,
+                "feature_normalization": feature_normalization,
+                "feature_store_normalization": "none",
                 "dataset": {
                     "pool": str(pool_set),
                     "train": str(train_set) if train_set is not None else None,
@@ -379,6 +409,12 @@ class GeneralActiveLearning:
         models: List[nn.Module],
         feature_specs: List[FeatureSpec],
     ) -> List[FeatureCalculator]:
+        if len(models) > 1 and any(spec.mapping == "nystrom" for spec in feature_specs):
+            raise ValueError(
+                "Nyström selection currently requires one model and its matching prepared state. "
+                "For ensemble feature extraction, use FeatureStatistics with a separate "
+                "FeatureCalculator and Nyström state for each model."
+            )
         calculators: List[FeatureCalculator] = []
         for model in models:
             extractor = FeatureExtractor(

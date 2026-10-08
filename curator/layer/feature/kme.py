@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import math
+import hashlib
+from pathlib import Path
 from typing import Optional
 
 import torch
@@ -11,6 +13,7 @@ except ImportError:
     from curator.utils import scatter_add
 
 from .aggregation import FeatureAggregator
+from .gaussian import BlockGaussianProjection
 
 _RMS_EPS = 1e-8
 _SKETCH_FEAT_SEED_STEP = 13
@@ -40,10 +43,12 @@ class BaseKMEAggregator(FeatureAggregator):
         super().__init__()
         if pooling not in {"sum", "mean"}:
             raise ValueError(f"Unsupported pooling '{pooling}'.")
-        if layer_combine not in {"concat", "sum"}:
+        if layer_combine not in {"concat", "sum", "joint"}:
             raise ValueError(f"Unsupported layer_combine '{layer_combine}'.")
         if layer_norm not in {"none", "rms"}:
             raise ValueError(f"Unsupported layer_norm '{layer_norm}'.")
+        if layer_combine == "joint" and layer_norm != "none":
+            raise ValueError("joint projection requires layer_norm='none'.")
         self.num_features = int(num_features)
         self.pooling = pooling
         self.layer_combine = layer_combine
@@ -57,6 +62,9 @@ class BaseKMEAggregator(FeatureAggregator):
 
     def aggregate(self, atomic_features: torch.Tensor, image_idx: torch.Tensor) -> torch.Tensor:
         return self.reduce(atomic_features, image_idx)
+
+    def structure_features(self, raw_feature, image_idx: torch.Tensor) -> torch.Tensor:
+        return self.aggregate(self.transform(raw_feature), image_idx)
 
     def reduce(self, transformed: torch.Tensor, image_idx: torch.Tensor) -> torch.Tensor:
         num_structures = _num_structures(image_idx)
@@ -74,6 +82,10 @@ class BaseKMEAggregator(FeatureAggregator):
         return reduced / torch.clamp(counts, min=1.0)
 
     def _transform_full_gradient(self, feats: list[torch.Tensor], grads: list[torch.Tensor]) -> torch.Tensor:
+        if len(feats) != len(grads):
+            raise ValueError("Readout feature and gradient layer counts differ.")
+        if self.layer_combine == "joint":
+            return self.transform_joint(list(zip(feats, grads)))
         blocks = []
         for idx, (feat, grad) in enumerate(zip(feats, grads)):
             block = self.transform_pair(feat, grad, idx)
@@ -83,6 +95,9 @@ class BaseKMEAggregator(FeatureAggregator):
         if self.layer_combine == "sum":
             return torch.stack(blocks, dim=0).sum(dim=0)
         return torch.cat(blocks, dim=1)
+
+    def transform_joint(self, pairs: list[tuple[torch.Tensor, torch.Tensor]]) -> torch.Tensor:
+        raise NotImplementedError
 
     def transform_pair(self, feat: torch.Tensor, grad: torch.Tensor, layer_idx: int) -> torch.Tensor:
         raise NotImplementedError
@@ -111,6 +126,57 @@ class IdentityKMEAggregator(BaseKMEAggregator):
         return atomic_features
 
 
+class NystromKMEAggregator(BaseKMEAggregator):
+    """Use one frozen Nyström map for every atom and structure in the dataset."""
+
+    def __init__(
+        self,
+        state_path: str,
+        num_features: int,
+        sigma: float,
+        pooling: str = "mean",
+        layer_combine: str = "concat",
+        raw_feature: Optional[str] = None,
+    ) -> None:
+        from .nystrom import NystromMap
+
+        super().__init__(num_features=num_features, pooling=pooling, layer_combine=layer_combine)
+        self.state = NystromMap.load(state_path)
+        self.state_file_sha256 = hashlib.sha256(Path(state_path).read_bytes()).hexdigest()
+        if self.state.num_features != num_features:
+            raise ValueError(
+                f"Nyström state width {self.state.num_features} differs from num_features={num_features}."
+            )
+        if not math.isclose(self.state.sigma, sigma, rel_tol=1e-12, abs_tol=0.0):
+            raise ValueError(f"Nyström state sigma={self.state.sigma} differs from feature spec sigma={sigma}.")
+        state_source = self.state.metadata.get("raw_feature")
+        if state_source is not None and state_source != raw_feature:
+            raise ValueError(f"Nyström state raw_feature={state_source!r} differs from {raw_feature!r}.")
+
+    @staticmethod
+    def _map_input(raw_feature):
+        if isinstance(raw_feature, tuple):
+            feats, grads = raw_feature
+            if len(feats) != len(grads):
+                raise ValueError("Readout feature and gradient layer counts differ.")
+            return list(zip(feats, grads))
+        return raw_feature
+
+    def _prepare_input(self, raw_feature):
+        raw = self._map_input(raw_feature)
+        device = raw.device if isinstance(raw, torch.Tensor) else raw[0][0].device
+        self.state.to(device=device)
+        return raw
+
+    def transform(self, raw_feature) -> torch.Tensor:
+        return self.state.transform(self._prepare_input(raw_feature))
+
+    def structure_features(self, raw_feature, image_idx: torch.Tensor) -> torch.Tensor:
+        # The Gaussian kernel is applied per atom; only its final linear
+        # correction commutes with pooling. This avoids per-atom whitening.
+        return self.state.structure_features(self._prepare_input(raw_feature), image_idx, pooling=self.pooling)
+
+
 class SketchingKMEAggregator(BaseKMEAggregator):
     def __init__(
         self,
@@ -119,6 +185,7 @@ class SketchingKMEAggregator(BaseKMEAggregator):
         layer_combine: str = "concat",
         layer_norm: str = "none",
         seed: int = 0,
+        projection_cache_bytes: int = 64 * 1024**2,
     ) -> None:
         if num_features <= 0:
             raise ValueError("num_features must be positive for sketching KME.")
@@ -129,11 +196,21 @@ class SketchingKMEAggregator(BaseKMEAggregator):
             layer_norm=layer_norm,
         )
         self.seed = int(seed)
+        self.projection = BlockGaussianProjection(num_features, self.seed, cache_bytes=projection_cache_bytes)
         self._feat_proj_buffers: list[str] = []
         self._grad_proj_buffers: list[str] = []
         self._simple_proj_buffers: list[str] = []
 
+    def transform_joint(self, pairs: list[tuple[torch.Tensor, torch.Tensor]]) -> torch.Tensor:
+        return self.finish_projection(self.projection.project_pairs(pairs))
+
+    def finish_projection(self, projected: torch.Tensor) -> torch.Tensor:
+        """Finish a shared Gaussian projection of all readout coordinates."""
+        return projected / math.sqrt(self.num_features)
+
     def transform_pair(self, feat: torch.Tensor, grad: torch.Tensor, layer_idx: int) -> torch.Tensor:
+        if self.layer_combine == "joint":
+            raise ValueError("joint projection requires all readout layers together; use transform().")
         feat_proj = self._ensure_projection(
             buffer_names=self._feat_proj_buffers,
             block=feat,
@@ -209,11 +286,17 @@ class RandomFourierKMEAggregator(BaseKMEAggregator):
         layer_norm: str = "none",
         sigma: float = 1.0,
         seed: int = 0,
+        rff_kernel: str = "rbf",
+        projection_cache_bytes: int = 64 * 1024**2,
     ) -> None:
         if num_features <= 0:
             raise ValueError("num_features must be positive for RFF KME.")
-        if sigma <= 0:
+        if not math.isfinite(sigma) or sigma <= 0:
             raise ValueError("sigma must be positive.")
+        if rff_kernel not in {"rbf", "matern32", "matern52", "laplacian_l1"}:
+            raise ValueError(f"Unsupported RFF kernel '{rff_kernel}'.")
+        if layer_combine == "joint" and rff_kernel != "rbf":
+            raise ValueError("joint readout RFF supports only rff_kernel='rbf'.")
         super().__init__(
             num_features=num_features,
             pooling=pooling,
@@ -221,7 +304,9 @@ class RandomFourierKMEAggregator(BaseKMEAggregator):
             layer_norm=layer_norm,
         )
         self.sigma = float(sigma)
+        self.rff_kernel = rff_kernel
         self.seed = int(seed)
+        self.projection = BlockGaussianProjection(num_features, self.seed, cache_bytes=projection_cache_bytes)
         self._feat_weight_buffers: list[str] = []
         self._feat_bias_buffers: list[str] = []
         self._grad_weight_buffers: list[str] = []
@@ -229,7 +314,17 @@ class RandomFourierKMEAggregator(BaseKMEAggregator):
         self._simple_weight_buffers: list[str] = []
         self._simple_bias_buffers: list[str] = []
 
+    def transform_joint(self, pairs: list[tuple[torch.Tensor, torch.Tensor]]) -> torch.Tensor:
+        return self.finish_projection(self.projection.project_pairs(pairs))
+
+    def finish_projection(self, projected: torch.Tensor) -> torch.Tensor:
+        """Apply one global phase and cosine, before any atomic pooling."""
+        phase = self.projection.phase(projected.device, projected.dtype)
+        return math.sqrt(2.0 / self.num_features) * torch.cos(projected / self.sigma + phase)
+
     def transform_pair(self, feat: torch.Tensor, grad: torch.Tensor, layer_idx: int) -> torch.Tensor:
+        if self.layer_combine == "joint":
+            raise ValueError("joint projection requires all readout layers together; use transform().")
         feat_weight, feat_bias = self._ensure_rff_parameters(
             weight_buffers=self._feat_weight_buffers,
             bias_buffers=self._feat_bias_buffers,
@@ -314,6 +409,16 @@ class RandomFourierKMEAggregator(BaseKMEAggregator):
     ) -> tuple[torch.Tensor, torch.Tensor]:
         generator = torch.Generator(device="cpu")
         generator.manual_seed(seed)
-        weight = torch.randn(input_dim, output_dim, generator=generator, dtype=dtype) / self.sigma
+        if self.rff_kernel == "rbf":
+            weight = torch.randn(input_dim, output_dim, generator=generator, dtype=dtype) / self.sigma
+        elif self.rff_kernel == "laplacian_l1":
+            uniform = torch.rand(input_dim, output_dim, generator=generator, dtype=dtype)
+            eps = torch.finfo(dtype).eps
+            weight = torch.tan(math.pi * (uniform.clamp(eps, 1 - eps) - 0.5)) / self.sigma
+        else:
+            degrees = 3 if self.rff_kernel == "matern32" else 5
+            normal = torch.randn(input_dim, output_dim, generator=generator, dtype=dtype)
+            chi2 = torch.randn(degrees, output_dim, generator=generator, dtype=dtype).square().sum(dim=0)
+            weight = normal * torch.sqrt(degrees / chi2.clamp_min(torch.finfo(dtype).tiny)) / self.sigma
         bias = 2.0 * math.pi * torch.rand(output_dim, generator=generator, dtype=dtype)
         return weight.to(device=device, dtype=dtype), bias.to(device=device, dtype=dtype)
