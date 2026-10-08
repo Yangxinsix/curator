@@ -63,6 +63,9 @@ def _upgrade_legacy_rescale_transforms(module: GlobalRescaleShift) -> None:
 
 
 def _upgrade_legacy_rescale_module(module: GlobalRescaleShift) -> None:
+    if not hasattr(module, "energy_derivatives"):
+        module.energy_derivatives = []
+        module._derivatives_before_scale = False
     # The head-based format predates per-species multiplicative scales. Its
     # existing transform buffers can contain fitted/trained values that differ
     # from the head's initial configuration, and must not be reconstructed via
@@ -201,6 +204,9 @@ def _upgrade_legacy_checkpoint_model(model: torch.nn.Module) -> torch.nn.Module:
             _upgrade_legacy_atomwise_module(module)
         if isinstance(module, GlobalRescaleShift):
             _upgrade_legacy_rescale_module(module)
+    for module in model.modules():
+        if hasattr(module, "collect_outputs"):
+            module.collect_outputs()
     return model
 
 

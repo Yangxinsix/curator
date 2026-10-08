@@ -39,6 +39,7 @@ class LitNNP(pl.LightningModule):
         normalize_domain_loss: Union[bool, str] = False,
         debug_rescale: bool = False,
         debug_rescale_path: Optional[str] = None,
+        scheduler_interval: str = "auto",
         *args,
         **kwargs,
     ) -> None:
@@ -50,6 +51,7 @@ class LitNNP(pl.LightningModule):
             optimizer (Type[torch.optim.Optimizer]): Optimizer
             scheduler (Optional[Type], optional): Scheduler. Defaults to None.
             scheduler_monitor (Optional[str], optional): Scheduler monitor. Defaults to None.
+            scheduler_interval (str): auto selects validation for plateau and epoch otherwise; also step/epoch/validation.
             warmup_steps (int, optional): Warmup steps. Defaults to 0.
         """
         super().__init__()
@@ -59,6 +61,10 @@ class LitNNP(pl.LightningModule):
         self.optimizer = optimizer
         self.scheduler = scheduler
         self.scheduler_monitor = scheduler_monitor
+        if scheduler_interval not in {"auto", "validation", "step", "epoch"}:
+            raise ValueError("scheduler_interval must be auto, validation, step, or epoch")
+        self.scheduler_interval = scheduler_interval
+        self._validation_scheduler = None
         self.warmup_steps = warmup_steps
         self.save_entire_model = save_entire_model
         self.optimizer_groups = dict(optimizer_groups or {})
@@ -86,6 +92,9 @@ class LitNNP(pl.LightningModule):
         if stage == "fit":
             if not self.model._initialized:
                 self.model.initialize_modules(self.trainer.datamodule)
+            # Loaded inference models retain eval mode; Lightning preserves it.
+            # Restore training before rescale layers choose their loss-space path.
+            self.train()
             self.rescale_layers = []
             for layer in self.model.output_modules:
                 if hasattr(layer, "unscale"):
@@ -593,6 +602,11 @@ class LitNNP(pl.LightningModule):
             param_groups.append(optimizer_group)
         return param_groups
     
+    def configure_callbacks(self):
+        from curator.train.callbacks import ValidationScheduler
+
+        return [ValidationScheduler(self.scheduler_monitor)] if self.scheduler is not None else []
+
     def configure_optimizers(self) -> Type[torch.optim.Optimizer]:
         param_groups = self._build_optimizer_param_groups()
         default_lr = self._resolve_optimizer_default_lr()
@@ -615,23 +629,21 @@ class LitNNP(pl.LightningModule):
             logger.info("Frozen groups: %s", ", ".join(frozen_groups))
 
         optimizer = self.optimizer(params=param_groups)
+        self._validation_scheduler = None
         if self.scheduler is not None:
             scheduler = self.scheduler(optimizer=optimizer)
-            lr_scheduler = {"scheduler": scheduler}
+            interval = self.scheduler_interval
+            if interval == "auto":
+                interval = "validation" if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau) else "epoch"
+            logger.info("Learning rate scheduler: %s, interval=%s", type(scheduler).__name__, interval)
+            if interval == "validation":
+                if not isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau) or not self.scheduler_monitor:
+                    raise ValueError("validation scheduling requires ReduceLROnPlateau and scheduler_monitor")
+                self._validation_scheduler = scheduler
+                return optimizer
+            lr_scheduler = {"scheduler": scheduler, "interval": interval}
             if self.scheduler_monitor:
                 lr_scheduler["monitor"] = self.scheduler_monitor
-            if self._trainer is not None:
-                if self.trainer.val_check_interval < 1.0:
-                    warnings.warn(
-                        "Learning rate is scheduled after epoch end. To enable scheduling before epoch end, "
-                        "please specify val_check_interval by the number of training epochs after which the "
-                        "model is validated."
-                    )
-                # in case model is validated before epoch end (recommended use of val_check_interval)
-                if self.trainer.val_check_interval > 1.0:
-                    lr_scheduler["interval"] = "step"
-                    lr_scheduler["frequency"] = self.trainer.val_check_interval
-                
             return {
                 "optimizer": optimizer,
                 "lr_scheduler": lr_scheduler,

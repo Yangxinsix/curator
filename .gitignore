@@ -17,6 +17,10 @@ test/*
 !test/test_selection_normalization.py
 !test/test_exact_kme_selection.py
 !test/test_checkpoint_rescale_upgrade.py
+!test/test_energy_derivative_scaling.py
+!test/test_validation_scheduler.py
+!test/test_mace_conversion_precision.py
+!test/test_training_mode.py
 scripts/
 
 # model files

@@ -22,7 +22,7 @@ log_every_n_steps: 10                                               # logging fr
 gradient_clip_val: 10.0                                             # gradient clipping norm value
 gradient_clip_algorithm: norm                                       # clipping algorithm
 accumulate_grad_batches: 1                                          # gradient accumulation steps
-val_check_interval: 1.0                                             # validation frequency (fraction of epoch or steps)
+val_check_interval: 1.0                                             # fraction of epoch or integer training batches
 check_val_every_n_epoch: 1                                          # run validation every N epochs
 
 num_sanity_val_steps: -1                                            # sanity validation steps before training

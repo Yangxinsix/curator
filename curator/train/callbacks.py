@@ -5,6 +5,53 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+class ValidationScheduler(Callback):
+    """Advance a metric scheduler once per completed fitting validation loop."""
+
+    def __init__(self, monitor):
+        self.monitor = monitor
+        self.scheduler = None
+        self.last_validation_step = None
+        self._pending_state = None
+
+    @property
+    def state_key(self):
+        return f"{type(self).__qualname__}[monitor={self.monitor}]"
+
+    def on_fit_start(self, trainer, pl_module):
+        self.scheduler = getattr(pl_module, "_validation_scheduler", None)
+        if self.scheduler is not None and self._pending_state is not None:
+            self.scheduler.load_state_dict(self._pending_state)
+            self._pending_state = None
+
+    def on_validation_end(self, trainer, pl_module):
+        if self.scheduler is None or trainer.sanity_checking or trainer.state.fn != "fit":
+            return
+        metrics = trainer.callback_metrics
+        if self.monitor not in metrics:
+            raise RuntimeError(f"Validation scheduler metric {self.monitor!r} is missing; available: {list(metrics)}")
+        self.scheduler.step(metrics[self.monitor])
+        self.last_validation_step = trainer.global_step
+
+    def state_dict(self):
+        return {
+            "scheduler": self.scheduler.state_dict() if self.scheduler is not None else self._pending_state,
+            "last_validation_step": self.last_validation_step,
+        }
+
+    def load_state_dict(self, state_dict):
+        self._pending_state = state_dict.get("scheduler")
+        self.last_validation_step = state_dict.get("last_validation_step")
+        if self.scheduler is not None and self._pending_state is not None:
+            self.scheduler.load_state_dict(self._pending_state)
+            self._pending_state = None
+
+    def on_load_checkpoint(self, trainer, pl_module, checkpoint):
+        # Curator previously registered its single plateau scheduler with Lightning.
+        if self.state_key not in checkpoint.get("callbacks", {}) and checkpoint.get("lr_schedulers"):
+            self.load_state_dict({"scheduler": checkpoint["lr_schedulers"][0]})
+
+
 class ExponentialMovingAverage(Callback):
     def __init__(self, decay: float, use_num_updates: bool=True, *args, **kwargs):
         self.decay = decay

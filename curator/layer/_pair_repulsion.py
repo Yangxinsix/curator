@@ -40,6 +40,7 @@ class ZBLBasis(nn.Module):
         cutoff: float | None = None,
         cutoff_by_species: bool = True,
         scatter_to: str = "receiver",
+        screening_length_factor: float = 1.0,
     ):
         super().__init__()
         self.register_buffer(
@@ -60,6 +61,7 @@ class ZBLBasis(nn.Module):
             torch.tensor(ase_data.covalent_radii, dtype=torch.get_default_dtype()),
         )
         self.cutoff_by_species = bool(cutoff_by_species)
+        self.screening_length_factor = float(screening_length_factor)
         self.scatter_to = str(scatter_to)
         if self.scatter_to not in {"receiver", "center"}:
             raise ValueError(f"Unsupported scatter_to={scatter_to!r}; expected 'receiver' or 'center'.")
@@ -117,7 +119,9 @@ class ZBLBasis(nn.Module):
         screening_arg = (
             torch.pow(Z_u, screening_exponent.to(x.dtype))
             + torch.pow(Z_v, screening_exponent.to(x.dtype))
-        ) * x / screening_length.to(x.dtype)
+        ) * x / (
+            screening_length.to(x.dtype) * getattr(self, "screening_length_factor", 1.0)
+        )
         phi = (
             self.c[0] * torch.exp(-phi_exponents[0].to(x.dtype) * screening_arg)
             + self.c[1] * torch.exp(-phi_exponents[1].to(x.dtype) * screening_arg)

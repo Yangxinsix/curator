@@ -345,12 +345,11 @@ def _prepare_model(
         model = convert_model_wrapper(model, wrapper_to_apply, target_dtype=data_dtype)
         model = _copy_curator_model_metadata(source_model, model)
 
-    model.initialize_modules(datamodule)
-    log.debug("Initialized model modules from datamodule before task setup.")
-
     if data_dtype is not None:
         model = model.to(dtype=data_dtype)
         log.debug("Casting model dtype to data dtype %s", data_dtype)
+    model.initialize_modules(datamodule)
+    log.debug("Initialized model modules from datamodule before task setup.")
     if config.compile:
         log.debug("Compiling model with torch.compile")
         model = torch.compile(model)

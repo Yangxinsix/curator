@@ -1,5 +1,6 @@
 _target_: pytorch_lightning.callbacks.EarlyStopping   # stop training when monitored metric stalls
 monitor: val_total_loss                               # metric to monitor
 min_delta: 0.0                                        # minimum change to qualify as improvement
-patience: ${task.patience}                            # epochs to wait before stopping
+patience: ${task.patience}                            # validation checks without improvement
+check_on_train_epoch_end: false                       # check each completed validation
 mode: min                                             # smaller metric is better

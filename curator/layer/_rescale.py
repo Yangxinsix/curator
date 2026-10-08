@@ -36,7 +36,7 @@ class ScaleTransform(nn.Module):
         data_key: Optional[str] = None,
     ):
         super().__init__()
-        scale = scale if torch.is_tensor(scale) else torch.tensor([scale], dtype=torch.float)
+        scale = scale if torch.is_tensor(scale) else torch.tensor([scale], dtype=torch.get_default_dtype())
         if trainable:
             self.scale = nn.Parameter(scale)
         else:
@@ -62,7 +62,7 @@ class ShiftTransform(nn.Module):
         data_key: Optional[str] = None,
     ):
         super().__init__()
-        shift = shift if torch.is_tensor(shift) else torch.tensor([shift], dtype=torch.float)
+        shift = shift if torch.is_tensor(shift) else torch.tensor([shift], dtype=torch.get_default_dtype())
         if trainable:
             self.shift = nn.Parameter(shift)
         else:
@@ -96,7 +96,7 @@ class AtomwiseShift(nn.Module):
         atomwise_data_key: bool = False,
     ):
         super().__init__()
-        shift = shift if torch.is_tensor(shift) else torch.tensor([shift], dtype=torch.float)
+        shift = shift if torch.is_tensor(shift) else torch.tensor([shift], dtype=torch.get_default_dtype())
         if trainable:
             self.shift = nn.Parameter(shift)
         else:
@@ -151,7 +151,7 @@ class PerSpeciesShift(nn.Module):
         atomwise_data_key: bool = False,
     ):
         super().__init__()
-        values_dict = torch.zeros((119,), dtype=torch.float)
+        values_dict = torch.zeros((119,), dtype=torch.get_default_dtype())
         if values is not None:
             for k, v in values.items():
                 idx = atomic_numbers[k] if isinstance(k, str) else k
@@ -214,7 +214,7 @@ class PerSpeciesScale(nn.Module):
         data_key: Optional[str] = None,
     ):
         super().__init__()
-        values_dict = torch.ones((119,), dtype=torch.float)
+        values_dict = torch.ones((119,), dtype=torch.get_default_dtype())
         if values is not None:
             for k, v in values.items():
                 idx = atomic_numbers[k] if isinstance(k, str) else k
@@ -265,6 +265,9 @@ class GlobalRescaleShift(nn.Module):
             heads = [HEAD_PRESETS["energy"]]
         # ensure heads are HeadConfig instances (keep explicit HeadConfig overrides)
         self.heads = resolve_heads(heads)
+        # Bound by NeuralNetworkPotential from its GradientOutput modules.
+        self.energy_derivatives: List[str] = []
+        self._derivatives_before_scale = False
         self._initialize_transforms(scale_trainable=scale_trainable, shift_trainable=shift_trainable)
 
     def _initialize_transforms(
@@ -394,6 +397,8 @@ class GlobalRescaleShift(nn.Module):
 
     def _sync_reduced_outputs(self, data: properties.Type) -> properties.Type:
         for head in self.heads:
+            if head.key in self.energy_derivatives:
+                continue
             atomwise_key = getattr(head, "atomwise_key", None)
             reduction = getattr(head, "reduction", None)
             if not head.is_atomwise or atomwise_key is None or atomwise_key == head.key:
@@ -410,6 +415,21 @@ class GlobalRescaleShift(nn.Module):
                 data[head.key] = scatter_mean(data[atomwise_key], data[properties.image_idx], dim=0)
         return data
 
+    def _scale_energy_derivatives(self, data: properties.Type, inverse: bool = False) -> properties.Type:
+        for sc, atomic_sc in zip(self.scales, self.atomic_scales):
+            if sc.key != properties.energy:
+                continue
+            for key in self.energy_derivatives:
+                if key not in data:
+                    continue
+                if atomic_sc.enabled:
+                    raise ValueError(
+                        "Energy derivatives cannot be scaled after differentiation or unscaled as labels "
+                        "with per-species energy scales; a shared global energy scale is required."
+                    )
+                data[key] = data[key] / sc.scale if inverse else data[key] * sc.scale
+        return data
+
     def forward(self, data: properties.Type) -> properties.Type:
         return self.scale(data, force_process=False)
 
@@ -423,16 +443,20 @@ class GlobalRescaleShift(nn.Module):
             return data
         # scale then shifts
         for sc in self.scales:
-            data = sc(data)
+            if sc.key not in self.energy_derivatives:
+                data = sc(data)
         for sc in self.atomic_scales:
-            data = sc(data)
+            if sc.key not in self.energy_derivatives:
+                data = sc(data)
         for sh in self.atomic_shifts:
-            data = sh(data)
+            if sh.key not in self.energy_derivatives:
+                data = sh(data)
         for sh in self.shifts:
-            if isinstance(sh, AtomwiseShift):
+            if sh.key not in self.energy_derivatives:
                 data = sh(data)
-            else:
-                data = sh(data)
+        # Before GradientOutput, autograd already differentiates the scaled energy.
+        if force_process or self._derivatives_before_scale:
+            data = self._scale_energy_derivatives(data)
         return self._sync_reduced_outputs(data)
 
     def unscale(
@@ -446,6 +470,8 @@ class GlobalRescaleShift(nn.Module):
 
         # undo shifts (structure + atomwise)
         for sh in self.shifts:
+            if sh.key in self.energy_derivatives:
+                continue
             target_key = sh.data_key if getattr(sh, "data_key", sh.key) in data else sh.key
             if target_key not in data:
                 continue
@@ -459,9 +485,12 @@ class GlobalRescaleShift(nn.Module):
                 data[target_key] = data[target_key] - sh.shift
 
         for sh in self.atomic_shifts:
-            data = sh.apply(data, sign=-1.0)
+            if sh.key not in self.energy_derivatives:
+                data = sh.apply(data, sign=-1.0)
 
         for sc in self.atomic_scales:
+            if sc.key in self.energy_derivatives:
+                continue
             target_key = sc.data_key if getattr(sc, "data_key", sc.key) in data else sc.key
             if not sc.enabled or target_key not in data:
                 continue
@@ -474,11 +503,13 @@ class GlobalRescaleShift(nn.Module):
 
         # undo scale
         for sc in self.scales:
+            if sc.key in self.energy_derivatives:
+                continue
             target_key = sc.data_key if getattr(sc, "data_key", sc.key) in data else sc.key
             if target_key in data:
                 data[target_key] = data[target_key] / sc.scale
 
-        return self._sync_reduced_outputs(data)
+        return self._sync_reduced_outputs(self._scale_energy_derivatives(data, inverse=True))
 
     def setup_from_context(self, ctx: DataContext):
         if self._initialized:
@@ -526,17 +557,22 @@ class GlobalRescaleShift(nn.Module):
     def setup_from_datamodule(self, dm):
         if hasattr(dm, "domain_modules"):
             return
+        from .wrappers.utils import infer_module_device_dtype, temporary_default_dtype
+
         try:
+            device, dtype = infer_module_device_dtype(self)
             scale_trainable = any(isinstance(sc.scale, nn.Parameter) for sc in getattr(self, "scales", []))
             shift_trainable = any(
                 hasattr(sh, "shift") and isinstance(sh.shift, nn.Parameter)
                 for sh in getattr(self, "shifts", [])
             )
             self.heads = _effective_rescale_heads(dm)
-            self._initialize_transforms(
-                scale_trainable=scale_trainable,
-                shift_trainable=shift_trainable,
-            )
+            with temporary_default_dtype(dtype):
+                self._initialize_transforms(
+                    scale_trainable=scale_trainable,
+                    shift_trainable=shift_trainable,
+                )
+            self.to(device=device)
             ctx = dm.build_context(self.heads)
         except Exception:
             return

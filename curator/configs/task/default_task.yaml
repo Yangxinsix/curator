@@ -6,6 +6,7 @@ defaults:
 
 _target_: curator.model.LitNNP       # LightningModule wrapper around the model
 scheduler_monitor: val_total_loss    # metric monitored by the scheduler
+scheduler_interval: auto             # auto: validation for plateau, epoch otherwise; also step/epoch/validation
 warmup_steps: 0                      # optional linear warmup steps for optimizer
 save_entire_model: True              # save full model object (not just state dict)
 optimizer_groups: null               # optional per-group optimizer overrides, e.g. backbone/readout/output_modules
@@ -14,4 +15,4 @@ normalize_domain_loss: null          # auto-enable for multi-domain training whe
 # optional task-side loss overrides keyed by output name, e.g. {energy: 2, forces: 98}
 loss_weights: {}
 energy_per_atom_loss: true            # match MACE: compute energy MSE from (E_pred - E_ref) / n_atoms
-patience: 200                        # early stopping patience (epochs)
+patience: 200                        # early stopping patience (validation checks)

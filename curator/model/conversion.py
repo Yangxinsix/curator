@@ -616,6 +616,10 @@ def _create_curator_mace_representation(
         },
         strict=False,
     )
+    # This is a Python scalar in Curator, so load_state_dict cannot copy it.
+    curator_mace.embeddings.radial_basis.basis.prefactor = float(
+        mace_model.radial_embedding.bessel_fn.prefactor
+    )
     curator_mace.embeddings.chemical_embedding.linear.load_state_dict(
         {
             key: value.detach().cpu()
@@ -627,6 +631,7 @@ def _create_curator_mace_representation(
         curator_mace.interactions[idx].avg_num_neighbors = torch.tensor(
             mace_model.interactions[idx].avg_num_neighbors
         )
+        curator_mace.interactions[idx]._initialized = True
         _load_state_dict_by_shape(
             curator_mace.interactions[idx],
             {
@@ -638,7 +643,13 @@ def _create_curator_mace_representation(
         )
         _load_state_dict_by_shape(
             curator_mace.products[idx],
-            {key: value.detach().cpu() for key, value in mace_model.products[idx].state_dict().items()},
+            {
+                key: value.detach().cpu()
+                for key, value in mace_model.products[idx].state_dict().items()
+                if not key.endswith("_zeroed")  # Native bookkeeping, not a Curator tensor.
+            },
+            strict_shapes=True,
+            label=f"official MACE product {idx}",
         )
     return curator_mace
 
@@ -715,11 +726,25 @@ def _build_curator_mace_model(
     output_modules: List[torch.nn.Module] = []
     pair_fn = getattr(mace_model, "pair_repulsion_fn", None)
     if pair_fn is not None:
-        basis = ZBLBasis()
+        basis = ZBLBasis(screening_length_factor=0.529)
         basis.load_state_dict(
             {key: value.detach().cpu() for key, value in pair_fn.state_dict().items()},
             strict=False,
         )
+        # The native names differ; strict=False previously dropped these values.
+        for source_name, target_name in (
+            ("a_exp", "screening_exponent"),
+            ("a_prefactor", "screening_length"),
+        ):
+            value = getattr(pair_fn, source_name).detach().cpu().clone()
+            if isinstance(getattr(pair_fn, source_name), torch.nn.Parameter):
+                delattr(basis, target_name)
+                basis.register_parameter(
+                    target_name,
+                    torch.nn.Parameter(value, requires_grad=getattr(pair_fn, source_name).requires_grad),
+                )
+            else:
+                setattr(basis, target_name, value)
         output_modules.append(PairRepulsionEnergy(basis, atomic_numbers=curator_mace.atomic_numbers))
     output_modules.append(GlobalRescaleShift(heads=[build_energy_head(template_head_idx)]))
     output_modules.append(
@@ -776,10 +801,9 @@ def _build_curator_mace_model(
     for module in model.output_modules:
         if isinstance(module, MultiDomainRescaleShift):
             for domain, head_idx in domain_to_head_idx.items():
-                module.domain_modules[str(domain)] = GlobalRescaleShift(
-                    heads=[build_energy_head(head_idx)]
-                )
+                module.domain_modules[str(domain)] = GlobalRescaleShift(heads=[build_energy_head(head_idx)])
     model.representation._official_mace_template_bytes = template_buffer.getvalue()
+    model.collect_outputs()
     return model
 
 
@@ -817,11 +841,18 @@ def _create_model_from_mace_impl(
             raise ValueError(f"Head {head_name} not found in heads={heads}")
         domain_to_head_idx = {"0": heads.index(head_name)}
 
-    return _build_curator_mace_model(
-        mace_model,
-        domain_to_head_idx,
-        mode=mode,
-    )
+    # Construct in the source dtype: casting after load_state_dict has already
+    # rounded FP64 weights/buffers if the global default was FP32.
+    previous_dtype = torch.get_default_dtype()
+    try:
+        torch.set_default_dtype(next(mace_model.parameters()).dtype)
+        return _build_curator_mace_model(
+            mace_model,
+            domain_to_head_idx,
+            mode=mode,
+        )
+    finally:
+        torch.set_default_dtype(previous_dtype)
 
 
 def _build_mace_from_curator_impl(curator_model):

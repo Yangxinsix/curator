@@ -228,14 +228,33 @@ class NeuralNetworkPotential(nn.Module):
                 module.setup_from_datamodule(datamodule)
             elif hasattr(module, "datamodule"):
                 module.datamodule(datamodule)
+        self.collect_outputs()
         self._initialized = True
 
     def collect_outputs(self) -> None:
+        from curator.layer import GradientOutput, GlobalRescaleShift
+
         model_outputs = set()
         for module in self.modules():
             if hasattr(module, "model_outputs") and module.model_outputs is not None:
                 model_outputs.update(module.model_outputs)
         self.model_outputs = list(set(self.model_outputs + list(model_outputs)))
+        derivatives = set()
+        for module in self.output_modules:
+            if isinstance(module, GradientOutput):
+                derivatives.update(set(module.model_outputs) & {
+                    properties.forces, properties.stress, properties.virial, properties.edge_forces,
+                })
+                if properties.stress in module.model_outputs:
+                    derivatives.add(properties.virial)
+        before_scale = False
+        for output in self.output_modules:
+            if isinstance(output, GradientOutput):
+                before_scale = True
+            for module in output.modules():
+                if isinstance(module, GlobalRescaleShift):
+                    module.energy_derivatives = sorted(derivatives)
+                    module._derivatives_before_scale = before_scale
 
     def extract_outputs(self, data: properties.Type) -> properties.Type:
         if "all" in self.model_outputs:
@@ -261,6 +280,7 @@ class NeuralNetworkPotential(nn.Module):
                 register_module(module)
         else:
             register_module(target_module)
+        self.collect_outputs()
 
     def clone_with_representation(self, representation: nn.Module) -> "NeuralNetworkPotential":
         return self.__class__(
@@ -331,25 +351,25 @@ class CallbackModuleList(nn.ModuleList):
             super().extend(modules)
 
     def append(self, module):
+        super().append(module)
         if self.on_register_callback is not None:
             self.on_register_callback(module)
-        super().append(module)
 
     def extend(self, modules):
         module_list = list(modules)
+        super().extend(module_list)
         if self.on_register_callback is not None:
             self.on_register_callback(module_list)
-        super().extend(module_list)
 
     def insert(self, index, module):
+        super().insert(index, module)
         if self.on_register_callback is not None:
             self.on_register_callback(module)
-        super().insert(index, module)
 
     def __setitem__(self, idx, module):
+        super().__setitem__(idx, module)
         if self.on_register_callback is not None:
             self.on_register_callback(module)
-        super().__setitem__(idx, module)
 
 
 def __getattr__(name: str):

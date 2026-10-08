@@ -41,7 +41,10 @@ class MLCalculator(Calculator):
             cutoff = find_layer_by_name_recursive(self.model, 'cutoff')
         
         assert cutoff is not None, "Valid cutoff value should be given or inferred from model!"
-        self.ase_data_reader = AseDataReader(cutoff, compute_neighbor_list=compute_neighbor_list, transforms=transforms)
+        self.ase_data_reader = AseDataReader(
+            cutoff, compute_neighbor_list=compute_neighbor_list, transforms=transforms,
+            default_dtype=next(self.model.parameters()).dtype,
+        )
         self.energy_scale = energy_scale
         self.forces_scale = forces_scale
         self.stress_scale = stress_scale

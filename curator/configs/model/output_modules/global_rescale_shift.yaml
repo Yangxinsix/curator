@@ -1,1 +1,3 @@
 _target_: curator.layer.GlobalRescaleShift   # apply global scaling and shifting to outputs
+# GradientOutput derivatives automatically share the energy scale, with no shift.
+# Independently predicted heads retain their own HeadConfig scaling.
