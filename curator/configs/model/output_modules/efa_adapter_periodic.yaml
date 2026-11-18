@@ -1,0 +1,10 @@
+# Official raw-lattice EFA encoding, for fully periodic (TTT) structures.
+# Frequency settings follow the authors' AuMgO configuration; adapter width
+# remains 32 to match our other MACE+EFA comparisons, not the full paper model.
+_target_: curator.layer.efa.EFAAdapter
+hidden_features: 32
+num_directions: null
+max_frequency: 0.7853981633974483
+max_length: 1.0
+energy_scale: 0.01
+use_equivariant_queries: true

@@ -1,0 +1,18 @@
+# Fine-tune a two-scale q-EFA checkpoint; reuse matching local proposal weights.
+defaults:
+  - acvr_efa_charge_two_scale
+  - _self_
+
+run_path: runs/acvr_efa_charge_shared
+model_path:
+  transform:
+    - type: efa_shared_charge_proposal
+      inherit_local: true
+      proposal_options:
+        hidden_irreps: 64x0e + 16x1o
+        readout_features: 64
+    - type: efa_reuse
+      residual_evaluation: reuse
+      contraction: auto
+task:
+  _target_: curator.train.VariationalGradientTask

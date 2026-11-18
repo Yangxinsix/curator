@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 from collections import defaultdict
+from dataclasses import asdict
 from functools import lru_cache
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from . import properties
 from .atoms_data import AtomsData
 from .collate_atoms_data import collate_atoms_data
 from .spice import SpiceDataset, ion_pair_distance_split
+from .variational_data import VariationalCondition, VariationalData, canonical_boundary_hash, geometry_hash
 
 
 SPICE_ACVR_UNITS = {
@@ -220,7 +222,7 @@ class SpiceACVRDataset(Dataset):
     """One distance split, with identical source/split manifests across phases."""
 
     def __init__(self, datapath, split="train", split_file=None, default_dtype="float64",
-                 train_limit=None, val_limit=None, test_limit=None):
+                 train_limit=None, val_limit=None, test_limit=None, variational=False):
         if split not in {"train", "val", "test"}:
             raise ValueError("split must be train, val, or test")
         self.datapath = str(Path(datapath).expanduser().resolve())
@@ -240,6 +242,13 @@ class SpiceACVRDataset(Dataset):
             "split_statistics": {phase: _split_statistics(samples, indices) for phase, indices in selected.items()},
         })
         self.split, self.indices = split, selected[split]
+        self.variational = bool(variational)
+        if self.variational:
+            self.metadata["variational_adapter"] = {
+                "schema": "spice_fixed_charge_conditions_v1",
+                "variable": "charge", "state_unit": "e", "conjugate_unit": "eV/e",
+                "boundary": "fixed_total_charge", "atomic_charge_supervision": False,
+            }
         self.species = self.metadata["species"]
         self.samples = tuple(samples[index] for index in self.indices)
 
@@ -248,10 +257,53 @@ class SpiceACVRDataset(Dataset):
 
     def __getitem__(self, index):
         sample = self.samples[index]
-        return AtomsData(
+        result = AtomsData(
             atoms={key: value.clone() for key, value in sample.atoms.items()},
             targets={key: value.clone() for key, value in sample.targets.items()},
             task=sample.task, weight=sample.weight, meta=copy.deepcopy(sample.meta),
+        )
+        if self.variational:
+            result.atoms.setdefault(properties.pbc, torch.zeros((1, 3), dtype=torch.bool))
+            result.variational = self._variational_payload(result)
+        return result
+
+    def _variational_payload(self, sample):
+        """Adapt physical labels; no partition-charge labels or solver are added."""
+        from curator.variational import BoundarySpec, ConstraintSpec, GroupSpec, VariableSpec
+
+        count = int(sample[properties.n_atoms].item())
+        variable = VariableSpec("charge", "charge", unit="e", conjugate_unit="eV/e")
+        charge = sample[properties.total_charge].reshape(())
+        boundary = asdict(BoundarySpec(
+            variable, groups=(GroupSpec.all(),),
+            equalities=(ConstraintSpec.group_sum("total_charge", "all", float(charge), unit="e"),),
+        ))
+        uid = f"spice-{self.metadata['source_sha256']}-{sample.meta['source_index']}"
+        labels = {
+            "condition_energy": sample[properties.energy].reshape(1),
+            "condition_forces": sample[properties.forces],
+            "dipole": sample[properties.dipole].reshape(3),
+        }
+        condition = VariationalCondition(
+            condition_uid=uid + "-fixed-charge",
+            electron_count=None, electron_count_convention=None, net_charge=charge,
+            boundary_spec=boundary, boundary_hash=canonical_boundary_hash(boundary),
+            gauge=copy.deepcopy(self.metadata["gauge"]), labels=labels,
+            label_units={"condition_energy": "eV", "condition_forces": "eV/Angstrom", "dipole": "e*Angstrom"},
+            label_metadata={
+                "condition_energy": {"energy_kind": "fixed_charge_formation_energy"},
+                "dipole": {"origin": sample.meta["dipole_origin"]},
+            },
+            provenance={"split": self.split, "source_index": sample.meta["source_index"]},
+        )
+        return VariationalData(
+            schema_version="1", geometry_uid=uid,
+            geometry_hash=geometry_hash(sample[properties.atomic_numbers], sample[properties.positions],
+                                        sample[properties.cell], sample[properties.pbc]),
+            variable_spec=asdict(variable),
+            group_member_ptr=torch.tensor([0, count], dtype=torch.long),
+            group_atom_index=torch.arange(count), group_names=("all",), group_roles=("system",),
+            conditions=(condition,), provenance={"split": self.split},
         )
 
     def get_n_atoms(self, index):
@@ -263,7 +315,7 @@ class SpiceACVRDataModule(pl.LightningDataModule):
 
     def __init__(self, datapath, split_file=None, batch_size=32, seed=17, num_workers=0,
                  shuffle=True, default_dtype="float64", heads=None,
-                 train_limit=None, val_limit=None, test_limit=None):
+                 train_limit=None, val_limit=None, test_limit=None, variational=False):
         super().__init__()
         if type(batch_size) is not int or batch_size < 1:
             raise ValueError("batch_size must be a positive integer")
@@ -278,7 +330,7 @@ class SpiceACVRDataModule(pl.LightningDataModule):
         self.heads = heads or ["energy", "forces", "dipole"]
         self.dataset_kwargs = dict(datapath=self.datapath, split_file=split_file,
                                    default_dtype=self.default_dtype, train_limit=train_limit,
-                                   val_limit=val_limit, test_limit=test_limit)
+                                   val_limit=val_limit, test_limit=test_limit, variational=variational)
         self.generator = torch.Generator().manual_seed(self.seed)
         self.datasets = {}
 

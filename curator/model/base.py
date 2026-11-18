@@ -168,6 +168,11 @@ class Representation(nn.Module):
             "for direct-force prediction."
         )
 
+    @torch.jit.unused
+    def response_feature_spec(self):
+        """Declare response features; existing direct-force backbones stay usable."""
+        return self.direct_force_feature_spec()
+
 
 class NeuralNetworkPotential(nn.Module):
     """Base class for neural network potentials."""
@@ -191,9 +196,37 @@ class NeuralNetworkPotential(nn.Module):
         )
         self.heads = heads
         self._initialized: bool = False
+        self.configure_variational_outputs()
         self.configure_force_outputs()
         self.collect_outputs()
         self.register_callbacks()
+
+    @torch.jit.unused
+    def configure_variational_outputs(self) -> None:
+        outputs = [module for module in self.output_modules
+                   if getattr(module, "joint_variational_output", False)]
+        self._requires_energy_grad = bool(outputs)
+        if len(outputs) > 1:
+            raise ValueError("only one joint variational output may own the total energy")
+        for module in outputs:
+            cutoff = float(self.representation.cutoff)
+            for preprocessing in self.input_modules:
+                batch_neighbors = getattr(preprocessing, "batch_nl", None)
+                neighbors = getattr(batch_neighbors, "neighbor_list", batch_neighbors)
+                neighbor_cutoff = getattr(neighbors, "cutoff", cutoff)
+                if float(neighbor_cutoff) < cutoff:
+                    raise ValueError("joint variational neighbor cutoff must cover the representation cutoff")
+            module.bind(self.representation.response_feature_spec(), cutoff=cutoff)
+            proposal_ids = {id(parameter) for parameter in module.proposal.parameters()}
+            physical_modules = [self.representation, self.input_modules, module.internal_energy]
+            physical_modules.extend(other for other in self.output_modules if other is not module)
+            physical_ids = {id(parameter) for physical in physical_modules for parameter in physical.parameters()}
+            if proposal_ids & physical_ids:
+                raise ValueError("proposal parameters must be exclusive; shared GNN features are inputs, "
+                                 "not shared proposal/physical weights")
+            reference = next(self.representation.parameters(), None)
+            if reference is not None:
+                module.to(device=reference.device, dtype=reference.dtype)
 
     @torch.jit.unused
     def configure_force_outputs(self) -> None:
@@ -221,6 +254,29 @@ class NeuralNetworkPotential(nn.Module):
             force_output.bind(self.representation.direct_force_feature_spec())
 
     def forward(self, data: properties.Type) -> properties.Type:
+        if not torch.jit.is_scripting():
+            if getattr(self, "_requires_energy_grad", False):
+                return self._forward_with_energy_grad(data)
+        return self._forward_modules(data)
+
+    @torch.jit.unused
+    def _forward_with_energy_grad(self, data):
+        if torch.is_inference_mode_enabled():
+            raise RuntimeError("joint variational evaluation requires inference_mode=False")
+        # Preserve the caller's no_grad only for explicitly supported deployment
+        # outputs. Unknown derivative heads and all training retain the default.
+        if not self.training and not torch.is_grad_enabled():
+            derivative_modules = [module for module in self.modules()
+                                  if module is not self and getattr(module, "requires_energy_grad", False)]
+            if derivative_modules and all(
+                getattr(module, "allows_no_grad_evaluation", False) is True
+                for module in derivative_modules
+            ):
+                return self._forward_modules(data)
+        with torch.enable_grad():
+            return self._forward_modules(data)
+
+    def _forward_modules(self, data: properties.Type) -> properties.Type:
         data = data.copy()
         for module in self.input_modules:
             data = module(data)
@@ -268,6 +324,11 @@ class NeuralNetworkPotential(nn.Module):
         self._initialized = True
 
     def collect_outputs(self) -> None:
+        if getattr(self, "_requires_energy_grad", False):
+            # The geometry readout is a baseline, not the condition-dependent
+            # total energy. Do not leak it under the standard energy key.
+            self.model_outputs = ["variational_prediction"]
+            return
         model_outputs = set()
         for module in self.modules():
             if hasattr(module, "model_outputs") and module.model_outputs is not None:
@@ -333,6 +394,16 @@ class NeuralNetworkPotential(nn.Module):
     def module_groups(self) -> "OrderedDict[str, List[nn.Module]]":
         groups: "OrderedDict[str, List[nn.Module]]" = OrderedDict()
 
+        joint = [module for module in self.output_modules
+                 if getattr(module, "joint_variational_output", False)]
+        if joint:
+            groups["backbone"] = [module for name, module in self.representation.named_children()
+                                  if name != "readout"]
+            groups["baseline"] = [self.representation.readout]
+            groups["functional"] = [joint[0].internal_energy]
+            groups["proposal"] = [joint[0].proposal]
+            return groups
+
         if len(self.input_modules) > 0:
             groups["input_modules"] = [self.input_modules]
 
@@ -357,6 +428,19 @@ class NeuralNetworkPotential(nn.Module):
             if params:
                 group_defaults = dict(defaults) if defaults is not None else None
                 groups.append(ParameterGroup(name=str(name), params=params, defaults=group_defaults))
+
+        joint = [module for module in self.output_modules
+                 if getattr(module, "joint_variational_output", False)]
+        if joint:
+            baseline = self.representation.readout
+            baseline_ids = {id(parameter) for parameter in baseline.parameters()}
+            append_group("backbone", [parameter for parameter in self.representation.parameters()
+                                      if id(parameter) not in baseline_ids])
+            append_group("baseline", [baseline])
+            append_group("functional", [joint[0].internal_energy])
+            append_group("proposal", [joint[0].proposal])
+            append_group("misc", [self])
+            return groups
 
         if len(self.input_modules) > 0:
             append_group("input_modules", [self.input_modules])

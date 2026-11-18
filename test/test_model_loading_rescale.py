@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 import torch
 from omegaconf import OmegaConf
 
@@ -73,6 +74,34 @@ def test_resume_preserves_checkpoint_initialization(tmp_path):
 
     assert loaded.resume_from == checkpoint
     assert not loaded.initialize_from_datamodule
+
+
+@pytest.mark.parametrize("mode", ["resume", "model"])
+def test_cuda_checkpoint_metadata_can_load_without_cuda(tmp_path, monkeypatch, mode):
+    checkpoint = tmp_path / "cuda_model.ckpt"
+    model = _model(7.0)
+    model.register_buffer("device_probe", torch.tensor([3.0]))
+    # Write a genuine CUDA storage tag without requiring a GPU for this test.
+    # The default deserializer is restored before loading the checkpoint.
+    with monkeypatch.context() as serialization:
+        serialization.setattr(
+            torch.serialization, "_package_registry", list(torch.serialization._package_registry)
+        )
+        torch.serialization.register_package(0, lambda storage: "cuda:0", lambda storage, location: None)
+        torch.save({"model": model}, checkpoint)
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    config = OmegaConf.create({
+        "model_path": {"path": str(checkpoint), "mode": mode},
+        "model": {"_target_": "torch.nn.Identity"},
+    })
+
+    loaded = _load_model(config)
+
+    if mode == "resume":
+        assert loaded.resume_from == checkpoint
+    else:
+        assert loaded.model.device_probe.device.type == "cpu"
+        torch.testing.assert_close(loaded.model.device_probe, torch.tensor([3.0]))
 
 
 def test_loaded_model_finds_hessian_config_after_outputs_become_a_list(tmp_path):

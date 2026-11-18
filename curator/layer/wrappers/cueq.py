@@ -209,6 +209,10 @@ def make_fully_connected_tensor_product(*args, **kwargs):
     if not IS_CUET_AVAILABLE:
         raise RuntimeError("cuequivariance is not available.")
     kwargs = _apply_dtype_defaults(kwargs)
+    # MACE's selector TP is small; the generic fused fallback is costly in
+    # force-loss double backward. Match upstream MACE, preserving explicit choices.
+    if kwargs.get("method") is None and kwargs.get("use_fallback") is None:
+        kwargs["method"] = "naive"
     (irreps_in1, irreps_in2, irreps_out), rest, kwargs = _consume_irreps_args(
         args,
         kwargs,

@@ -49,3 +49,12 @@ __all__ = [
     fit_variance_scales,
     train,
 ]
+
+
+def __getattr__(name):
+    # LitNNP imports curator.train during initialization; defer the task import
+    # so the convenient Hydra target does not create an eager circular import.
+    if name == "VariationalGradientTask":
+        from .variational_optimization import VariationalGradientTask
+        return VariationalGradientTask
+    raise AttributeError(name)

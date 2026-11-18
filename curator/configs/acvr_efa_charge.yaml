@@ -1,0 +1,104 @@
+# Fine-tune a trained q-EFA checkpoint with a boundary-conditioned proposal.
+# Run with curator-train --config-name acvr_efa_charge and explicit data/model paths.
+seed: 3407
+cfg: null
+run_path: runs/acvr_efa_charge
+model_path:
+  path: ???
+  mode: model
+  transform:
+  - type: efa_charge_proposal
+    residual_scale: 1.0  # V; normalization is fixed, not learned.
+    proposal_options:
+      hidden_irreps: 64x0e + 16x1o
+      num_layers: 2
+      hidden_features: 32
+      readout_features: 64
+      num_directions: 110
+      max_length: 32.0
+      charge_scale: 1.0  # e
+      potential_scale: 1.0  # V
+device: cuda
+compile: false
+# MACE/EFA has no cross-geometry coupling; also applies to loaded proposal checkpoints.
+variational_batch_observables: true
+deploy_model: false
+finetune: full
+model: {}
+data:
+  _target_: curator.data.acvr_ef.ACVREFDataModule
+  datapath: ???
+  manifest_dir: ${run_path}/data
+  split_file: null
+  energy_reference_file: null
+  seed: ${seed}
+  num_train: ???
+  num_val: ???
+  num_test: 0
+  batch_size: 4
+  val_batch_size: 4
+  num_workers: 0
+  default_dtype: float32
+  boundary:
+    type: fixed_charge
+    total_charge: 0.0
+  energy_convention: internal  # internal U or thermodynamic G; forces derive from G.
+  heads: [energy, forces]
+task:
+  _target_: curator.model.LitNNP
+  outputs:
+  - _target_: curator.train.VariationalModelOutput
+    loss_fn:
+      _target_: curator.train.VariationalJointLoss
+      supervised_weights: {condition_energy: 200.0, condition_forces: 200.0}
+      supervised_scales: {condition_energy: 1.0, condition_forces: 1.0}
+      required_labels: [condition_energy, condition_forces]
+      energy_per_atom: true
+      residual_weights: {stationarity: 1.0}
+  optimizer:
+    _target_: torch.optim.Adam
+    _partial_: true
+    lr: 1.0e-5
+    eps: 1.0e-8
+    amsgrad: true
+    weight_decay: 0.0
+  optimizer_groups:
+    proposal: {lr: 1.0e-4, eps: 1.0e-12}
+  scheduler: null
+  save_entire_model: true
+  normalize_domain_loss: false
+trainer:
+  _target_: pytorch_lightning.Trainer
+  accelerator: gpu
+  devices: 1
+  precision: 32-true
+  max_epochs: 30
+  inference_mode: false
+  deterministic: true
+  gradient_clip_val: 10.0
+  accumulate_grad_batches: 3
+  enable_model_summary: false
+  enable_progress_bar: false
+  num_sanity_val_steps: -1
+  log_every_n_steps: 10
+  default_root_dir: ${run_path}
+  logger:
+    _target_: pytorch_lightning.loggers.CSVLogger
+    save_dir: ${run_path}
+    name: metrics
+  callbacks:
+  - _target_: curator.train.acvr_monitor.ACVRPhysicalMonitor
+    output_path: ${run_path}/physical_metrics.jsonl
+  - _target_: curator.train.joint_callbacks.JointValidationLoss
+  - _target_: curator.train.joint_callbacks.JointModelCheckpoint
+    dirpath: ${run_path}/model_path
+    filename: best_model_{epoch}_{step}_{val_joint_predicted_loss:.8f}
+    monitor: val_joint_predicted_loss
+    mode: min
+    save_top_k: 1
+    save_last: true
+    every_n_epochs: 1
+    save_on_train_epoch_end: true
+hydra:
+  run:
+    dir: ${run_path}/hydra

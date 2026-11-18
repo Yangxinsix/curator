@@ -1,0 +1,12 @@
+# Free variational charge: no total-charge projection or potential control.
+# Stationarity is dU/dq=0, relative to the model's charge chemical-potential reference.
+defaults:
+  - acvr_efa_charge
+  - _self_
+
+run_path: runs/acvr_efa_unconstrained
+data:
+  boundary:
+    type: none
+    total_charge: null
+  charge_mode: variational

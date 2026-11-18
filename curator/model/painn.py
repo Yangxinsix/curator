@@ -316,6 +316,10 @@ class Painn(Representation):
             vector_channels=self.num_features,
         )
 
+    @torch.jit.unused
+    def response_feature_spec(self) -> ScalarVectorFeatureSpec:
+        return self.direct_force_feature_spec()
+
     def module_groups(self):
         return OrderedDict(
             (

@@ -542,7 +542,10 @@ class BatchNeighborList(nn.Module):
             atoms_dict = {
                 properties.R: data[properties.positions][num_offset[i]:num_offset[i]+num_atoms],
             }
-            if properties.cell in data:
+            periodic = properties.pbc not in data or bool(
+                data[properties.pbc].reshape(-1, 3)[i].any()
+            )
+            if properties.cell in data and periodic:
                 atoms_dict[properties.cell] = data[properties.cell][i*3: (i+1)*3]
             atoms_dict = self.neighbor_list(atoms_dict)
             batch_pairs.append(atoms_dict[properties.edge_idx] + num_offset[i])

@@ -1,0 +1,30 @@
+# Independent geometry EFA and convex q energy; one shared proposal communication.
+_target_: curator.layer.VariationalEnergyOutput
+state_kind: scalar
+components: 1
+state_unit: e
+conjugate_unit: V
+residual_scale: 1.0
+residual_gradient_policy: proposal_only
+residual_evaluation: reuse
+state_mode: predicted
+energy_convention: thermodynamic
+compute_forces: true
+batch_observables: true
+internal_energy:
+  _target_: curator.layer.efa.SharedTwoScaleQConditionedEFAEnergy
+  hidden_features: 32
+  num_directions: 110
+  max_length: 32.0
+  energy_scale: 0.01
+  charge_features: 32
+  curvature_floor: 0.01
+  hardness_init: 0.1
+  driving_scale: null
+  curvature_scale: null
+proposal:
+  _target_: curator.layer.efa.SharedGeometryChargeProposal
+  hidden_irreps: 64x0e + 16x1o
+  readout_features: 64
+  charge_scale: 1.0
+  potential_scale: 1.0

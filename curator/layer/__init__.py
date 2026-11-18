@@ -12,7 +12,11 @@ from ._atomwise_reduce import AtomwiseReduce
 from ._atomwise_nn import AtomwiseNN, MACEAtomwiseNN, MultiDomainAtomwiseNN, MultiDomainMACEAtomwiseNN
 from ._convnet import ConvNetLayer
 from ._charge_equilibration import ChargeEquilibration
+from ._differentiable_inputs import DifferentiableInputs
 from ._energy_hessian import EnergyHessianOutput
+from ._variational_output import VariationalEnergyOutput, VariationalStateHead, StableInternalEnergy
+from ._variational_proposal import BoundaryConditionedProposal
+from ._charge_internal_energy import EwaldChargeEnergy
 from ._ewald import EwaldSummation
 from ._grad_output import EnergyGradientOutput, GradientOutput
 from ._force_output import (
@@ -83,7 +87,29 @@ from .utils import (
     find_layer_by_name_recursive,
 )
 
+from .efa import (EuclideanFastAttention, EFAAdapter, LatentChargeEFAAdapter,
+                  QConditionedEFAAdapter, QConditionedEFAEnergy, ConvexQConditionedEFAEnergy,
+                  TwoScaleQConditionedEFAEnergy, EFAChargeProposal, EquivariantEFA,
+                  SharedGeometryChargeProposal, SharedTwoScaleQConditionedEFAEnergy,
+                  ScalarChargeEncoder, GatedChargeEncoder, StateEFAEnergy,
+                  InvariantEnergyReadout)
+
 __all__ = [
+    EuclideanFastAttention,
+    EFAAdapter,
+    LatentChargeEFAAdapter,
+    QConditionedEFAAdapter,
+    QConditionedEFAEnergy,
+    ConvexQConditionedEFAEnergy,
+    TwoScaleQConditionedEFAEnergy,
+    EFAChargeProposal,
+    SharedGeometryChargeProposal,
+    SharedTwoScaleQConditionedEFAEnergy,
+    EquivariantEFA,
+    ScalarChargeEncoder,
+    GatedChargeEncoder,
+    StateEFAEnergy,
+    InvariantEnergyReadout,
     AtomwiseLinear,
     AtomwiseNonLinear,
     FeatureProjection,
@@ -96,6 +122,11 @@ __all__ = [
     ConvNetLayer,
     ChargeEquilibration,
     EnergyHessianOutput,
+    VariationalEnergyOutput,
+    VariationalStateHead,
+    StableInternalEnergy,
+    BoundaryConditionedProposal,
+    EwaldChargeEnergy,
     EwaldSummation,
     InteractionLayer,
     EquivariantProductBasisBlock,
@@ -129,6 +160,7 @@ __all__ = [
     get_pair_distance,
     reshape_irreps,
     PairwiseDistance,         # input modules (preprocess, calculate pairwise distances)
+    DifferentiableInputs,
     Strain,                   # input modules (preprocess, add strain on cell and atom positions)
     ZBLBasis,
     PairRepulsionEnergy,

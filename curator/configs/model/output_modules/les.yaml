@@ -1,0 +1,6 @@
+_target_: curator.layer._latent_ewald.LatentEwaldEnergy
+hidden_features: [32, 16]
+output_scale: 0.1
+sigma: 1.0
+dl: 2.0
+remove_self_interaction: true

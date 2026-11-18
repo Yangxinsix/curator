@@ -1,0 +1,32 @@
+# Strongly convex charge energy with an independent ordinary geometry EFA.
+_target_: curator.layer.VariationalEnergyOutput
+state_kind: scalar
+components: 1
+state_unit: e
+conjugate_unit: V
+residual_scale: 1.0
+residual_gradient_policy: joint
+state_mode: predicted
+energy_convention: thermodynamic
+compute_forces: true
+batch_observables: true
+internal_energy:
+  _target_: curator.layer.efa.ConvexQConditionedEFAEnergy
+  hidden_features: 32
+  num_directions: 110
+  max_length: 32.0
+  energy_scale: 0.01
+  charge_features: 32
+  curvature_floor: 0.01  # eV/e^2; model curvature floor, not measured hardness
+  hardness_init: 0.1    # eV/e^2
+  output_weight_init: 0.03125
+proposal:
+  _target_: curator.layer.efa.EFAChargeProposal
+  hidden_irreps: 64x0e + 16x1o
+  num_layers: 2
+  hidden_features: 32
+  readout_features: 64
+  num_directions: 110
+  max_length: 32.0
+  charge_scale: 1.0
+  potential_scale: 1.0

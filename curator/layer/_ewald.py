@@ -9,6 +9,33 @@ except ImportError:
     from curator.utils import scatter_add
 from scipy import constants
 
+
+def apply_ewald(context, values):
+    """Apply a current-forward Ewald context to [atoms] or [atoms, channels].
+
+    All prepared values are tensors so ACVR's detached residual replay keeps
+    its existing gradient isolation. No geometry is cached between forwards.
+    A dense context remains supported for reference solvers and old callers.
+    """
+    if "ewald_kernel" in context:
+        return context["ewald_kernel"] @ values
+    if values.ndim not in (1, 2) or values.shape[0] != context["ewald_cos"].shape[0]:
+        raise ValueError("Ewald values must have shape [atoms] or [atoms, channels]")
+    scalar = values.ndim == 1
+    vector = values[:, None] if scalar else values
+    cosine, sine, weight = (context[key] for key in
+                            ("ewald_cos", "ewald_sin", "ewald_weight"))
+    product = (cosine @ (weight * (cosine.T @ vector))
+               + sine @ (weight * (sine.T @ vector)))
+    edges, real = context["ewald_edges"], context["ewald_real"]
+    # Symmetrize also for low-level callers supplying an asymmetric edge list.
+    product = product.index_add(0, edges[:, 0], 0.5 * real * vector[edges[:, 1]])
+    product = product.index_add(0, edges[:, 1], 0.5 * real * vector[edges[:, 0]])
+    product = (product + context["ewald_self"] * vector
+               + context["ewald_background"] * vector.sum(0, keepdim=True))
+    return product[:, 0] if scalar else product
+
+
 class EwaldSummation(nn.Module):
     """Calculate a 3D-periodic Ewald energy in physical eV units.
 
@@ -26,6 +53,7 @@ class EwaldSummation(nn.Module):
         acc_factor=12.0,
         neutralizing_background=True,
         *args,
+        neighbor_backend="auto",
         **kwargs,
     ):
         super().__init__(*args, **kwargs)
@@ -35,6 +63,9 @@ class EwaldSummation(nn.Module):
         self.cutoff = cutoff or self.accf / self.alpha
         self.k_cutoff = k_cutoff or 2 * self.alpha * self.accf
         self.neutralizing_background = neutralizing_background
+        if neighbor_backend not in ("ase", "matscipy", "auto"):
+            raise ValueError("neighbor_backend must be ase, matscipy, or auto")
+        self.neighbor_backend = neighbor_backend
 
     def forward(
         self,
@@ -231,14 +262,12 @@ class EwaldSummation(nn.Module):
                 recip_per_image = torch.zeros((n, n), dtype=dist.dtype, device=dist.device)
             else:
                 k_dot_r = pos @ k_vec.T
-                phase_diff = k_dot_r.unsqueeze(1) - k_dot_r.unsqueeze(0)
-
                 # 0.5 * q^T K q uses a pair kernel, so the reciprocal prefactor is doubled here.
-                damping = torch.exp(- k_sq / (4.0 * self.alpha ** 2)).view(1, 1, -1)
-                recip_per_image = 2.0 * p * torch.sum(
-                    damping * torch.cos(phase_diff) / k_sq.view(1, 1, -1),
-                    dim=-1,
-                )
+                weight = 2.0 * p * torch.exp(-k_sq / (4.0 * self.alpha ** 2)) / k_sq
+                cosine, sine = k_dot_r.cos(), k_dot_r.sin()
+                # cos(a-b) = cos(a)cos(b) + sin(a)sin(b): never allocate N*N*G.
+                recip_per_image = ((cosine * weight) @ cosine.T
+                                   + (sine * weight) @ sine.T)
 
             # add up self part
             kernel_matrix = real_per_image + recip_per_image + torch.eye(
@@ -256,6 +285,40 @@ class EwaldSummation(nn.Module):
             kernel_list.append(kernel_matrix * EwaldSummation.CONV_FACT)
 
         return kernel_list
+
+    def prepare(self, cell, num_atoms, positions, edge_dist, edge_idx):
+        """Prepare reusable tensor-only operators from complete periodic edges.
+
+        Stores O(N*G + edges) values rather than an N*N kernel. Coordinates,
+        cell, first derivatives and mixed higher derivatives remain live.
+        The caller owns the context for one forward and must rebuild it after
+        any geometry/cell change. ``acc_factor`` and all Ewald terms are unchanged.
+        """
+        contexts = []
+        offset = 0
+        for lattice, count in zip(cell.reshape(-1, 3, 3), num_atoms.tolist()):
+            local = positions[offset:offset + count]
+            mask = ((edge_idx[:, 0] >= offset) & (edge_idx[:, 0] < offset + count)
+                    & (edge_dist < self.cutoff))
+            edges, distances = edge_idx[mask] - offset, edge_dist[mask]
+            reciprocal, squared = self.get_reciprocal_k_vectors(lattice, self.k_cutoff)
+            phase = local @ reciprocal.T
+            volume = torch.linalg.det(lattice).abs()
+            weight = (4.0 * math.pi / volume
+                      * torch.exp(-squared / (4.0 * self.alpha**2)) / squared)
+            contexts.append({
+                "ewald_cos": phase.cos(), "ewald_sin": phase.sin(),
+                "ewald_weight": (weight * self.CONV_FACT)[:, None],
+                "ewald_edges": edges,
+                "ewald_real": (torch.erfc(self.alpha * distances) / distances
+                               * self.CONV_FACT)[:, None],
+                "ewald_self": local.new_tensor(-2.0 * self.alpha / math.sqrt(math.pi)
+                                                * self.CONV_FACT),
+                "ewald_background": (-math.pi / (self.alpha**2 * volume) * self.CONV_FACT
+                                     if self.neutralizing_background else volume * 0.0),
+            })
+            offset += count
+        return contexts
 
     @classmethod
     def get_reciprocal_k_vectors(cls, cell, k_cut):

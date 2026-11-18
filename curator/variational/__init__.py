@@ -32,6 +32,8 @@ from .compiler import (
     compile_boundary_batch,
 )
 from .functional import QuadraticProblem
+from .functionals import FunctionalProblem, FunctionalStationarity, solve_functional_reference
+from .functional_response import FunctionalLinearResponse, solve_functional_linear_response
 from .forces import ForceMode, VariationalDerivative, differentiate_variational_energy
 from .implicit import implicit_kkt_state, solve_implicit
 from .kkt import assemble_kkt, evaluate_kkt
@@ -42,6 +44,8 @@ from .nonlinear import (
     nonlinear_from_quadratic,
     solve_newton_kkt,
 )
+from .observables import EnergyObservables, ObservableSpec, CHARGE_BOUNDARY_OBSERVABLES
+from .stationary_observables import StationaryEnergyObservables
 from .projection import project_to_equalities
 from .operators import (
     BoundaryQuadraticOperator,
@@ -78,6 +82,8 @@ from .spec import (
 from .variables.charge_runtime import ACVRChargeRuntime, ChargeRuntimeResult
 
 __all__ = [
+    "CHARGE_BOUNDARY_OBSERVABLES",
+    "StationaryEnergyObservables",
     "AnalyticQuadraticCase",
     "ACVRChargeRuntime",
     "AmortizedResult",
@@ -93,8 +99,12 @@ __all__ = [
     "EnvironmentSpec",
     "ElectrodeThermoRecord",
     "EwaldChargeOperator",
+    "EnergyObservables",
     "GaugeSpec",
     "ForceMode",
+    "FunctionalProblem",
+    "FunctionalLinearResponse",
+    "FunctionalStationarity",
     "GroupSpec",
     "InconsistentConstraintsError",
     "KKTResiduals",
@@ -105,6 +115,7 @@ __all__ = [
     "NonlinearEqualityProblem",
     "DenseQuadraticOperator",
     "OperatorQuadraticProblem",
+    "ObservableSpec",
     "ProjectionResult",
     "ProjectedCGResult",
     "QuadraticOperator",
@@ -136,6 +147,8 @@ __all__ = [
     "parse_electrode_thermo",
     "read_electrode_thermo",
     "solve_dense",
+    "solve_functional_reference",
+    "solve_functional_linear_response",
     "solve_implicit",
     "solve_amortized",
     "solve_projected_cg",

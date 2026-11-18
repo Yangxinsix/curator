@@ -1,0 +1,10 @@
+# Opt-in protocol: reduction after eight consecutive non-improving checks.
+_target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+_partial_: true
+mode: min
+factor: 0.5
+patience: 7
+threshold: 0.005
+threshold_mode: rel
+cooldown: 3
+min_lr: 1.0e-6

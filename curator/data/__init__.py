@@ -27,6 +27,7 @@ from .variational_data import (
     VariationalResponse,
     canonical_boundary_hash,
     collate_variational_data,
+    condition_input,
 )
 from ._type_mapper import TypeMapper
 from ._transform import EnsureBidirectionalEdges, Transform, UnitTransform

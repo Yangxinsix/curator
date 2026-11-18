@@ -1,0 +1,147 @@
+# Fresh joint training; existing QM/MM split and TRAIN-only property scales.
+# Select pointwise/mp/attention; proposal: mlp selects the historical baseline.
+seed: 17
+cfg: null
+run_path: runs/acvr_qmmm_global/pointwise
+model_path: null
+device: cpu
+compile: false
+deploy_model: false
+finetune: full
+data:
+  _target_: curator.data.public_response.PublicResponseDataModule
+  dataset: field_schnet/ethanol_methanol_qmmm
+  root: /workspace/data/datasets/acvr/public_response
+  batch_size: 16
+  seed: 17
+  default_dtype: float64
+  num_workers: 0
+  shuffle: true
+  train_limit: null
+  val_limit: null
+  test_limit: null
+  split_file: /workspace/data/work/agent-curator/experiments/acvr_public_response_20260909/ethanol_methanol_qmmm/splits.json
+  verify_hashes: true
+  state_kind: vector
+  state_unit: e*Angstrom
+  conjugate_unit: V/Angstrom
+  local_field_conditions: 1
+  local_field_std_ratio: 0.1
+  local_field_seed: 17
+model:
+  _target_: curator.model.NeuralNetworkPotential
+  representation:
+    _target_: curator.model.Painn
+    num_interactions: 3
+    num_features: 48
+    num_basis: 8
+    cutoff: 5.0
+    heads:
+    - energy
+  input_modules:
+  - _target_: curator.layer.PairwiseDistance
+    compute_neighbor_list: true
+    compute_distance_from_R: true
+    compute_forces: true
+    cutoff: 5.0
+  - _target_: curator.layer._differentiable_inputs.DifferentiableInputs
+    uniform_field: true
+    strain: false
+  output_modules:
+  - _target_: curator.layer.VariationalEnergyOutput
+    state_kind: vector
+    components: 3
+    hidden_features: 48
+    state_unit: e*Angstrom
+    conjugate_unit: V/Angstrom
+    residual_scale: 1.0
+    state_mode: predicted
+    compute_forces: false
+    compute_responses: false
+    observables:
+    - name: dipole
+      derivatives:
+      - external_field
+      factor: -1.0
+      unit: e*Angstrom
+    - name: polarizability
+      derivatives:
+      - external_field
+      - external_field
+      factor: -1.0
+      unit: e^2*Angstrom^2/eV
+    batch_observables: true
+    proposal:
+      _target_: curator.layer.BoundaryConditionedProposal
+      communication: pointwise
+      hidden_features: 48
+      num_layers: 2
+      num_heads: 4
+  model_outputs:
+  - variational_prediction
+  heads:
+  - energy
+task:
+  _target_: curator.model.LitNNP
+  outputs:
+  - _target_: curator.train.VariationalModelOutput
+    loss_fn:
+      _target_: curator.train.VariationalJointLoss
+      supervised_weights:
+        condition_energy: 1.0
+        dipole: 1.0
+        polarizability: 1.0
+      supervised_scales:
+        condition_energy: 0.27609816956438477
+        dipole: 0.26379260711333513
+        polarizability: 0.17889236794611743
+      required_labels:
+      - condition_energy
+      - dipole
+      - polarizability
+      residual_weights:
+        stationarity: 0.1
+  optimizer:
+    _target_: torch.optim.Adam
+    _partial_: true
+    lr: 0.001
+  scheduler: null
+  save_entire_model: true
+  normalize_domain_loss: false
+trainer:
+  _target_: pytorch_lightning.Trainer
+  accelerator: cpu
+  devices: 1
+  precision: 64-true
+  max_epochs: 20
+  inference_mode: false
+  deterministic: true
+  gradient_clip_val: 10.0
+  accumulate_grad_batches: 1
+  enable_model_summary: false
+  enable_progress_bar: false
+  num_sanity_val_steps: 2
+  log_every_n_steps: 1
+  default_root_dir: ${run_path}
+  logger:
+    _target_: pytorch_lightning.loggers.CSVLogger
+    save_dir: ${run_path}
+    name: metrics
+  callbacks:
+  - _target_: curator.train.joint_callbacks.JointValidationLoss
+  - _target_: pytorch_lightning.callbacks.EarlyStopping
+    monitor: val_joint_predicted_loss
+    mode: min
+    patience: 20
+    min_delta: 1.0e-05
+    check_on_train_epoch_end: true
+  - _target_: curator.train.joint_callbacks.JointModelCheckpoint
+    dirpath: ${run_path}/model_path
+    filename: best_model_{epoch}_{step}_{val_joint_predicted_loss:.8f}
+    monitor: val_joint_predicted_loss
+    mode: min
+    save_top_k: 1
+    save_last: true
+    every_n_epochs: 1
+    save_on_train_epoch_end: true
+  max_steps: 2000

@@ -1,0 +1,43 @@
+# Evaluate predicted states and optional local equilibrium on the same functional.
+cfg: null
+run_path: runs/acvr_joint/evaluate
+model_path: runs/acvr_joint/model_path/last.ckpt
+device: cpu
+deploy: null
+
+datapath:
+  _target_: curator.data.variational_oracle.VariationalOracleDataset
+  split: test
+  num_train: 64
+  num_val: 16
+  num_test: 16
+  num_conditions: 3
+  seed: 17
+
+evaluator:
+  _target_: curator.evaluate.variational.VariationalEvaluator
+  output_dir: ${run_path}
+  device: ${device}
+  batch_size: 8
+  save_data: true
+  state_mode: predicted
+  compare_converged: true
+  compute_responses: true
+  loss_fn:
+    _target_: curator.train.VariationalJointLoss
+    supervised_weights:
+      condition_energy: 1.0
+      condition_forces: 1.0
+      variable_value: 1.0
+    supervised_scales:
+      condition_energy: 1.0
+      condition_forces: 1.0
+      variable_value: 1.0
+    required_labels: [condition_energy, condition_forces, variable_value]
+    residual_weights: {stationarity: 0.1}
+    response_weight: 1.0
+    response_scales: {"1/eV": 1.0}
+
+hydra:
+  run:
+    dir: ${run_path}/hydra

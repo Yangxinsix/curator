@@ -1,0 +1,12 @@
+# Identical model/loss/optimizer to fixed charge; only data conditions differ.
+defaults:
+  - acvr_efa_charge
+  - _self_
+
+run_path: runs/acvr_efa_potential
+data:
+  boundary:
+    type: fixed_potential
+    total_charge: null  # Open charge; set 0.0 explicitly for overall neutrality.
+    potential: 0.0  # V, with G = U - V*Q. Or use potential_key from ASE info.
+  energy_convention: internal

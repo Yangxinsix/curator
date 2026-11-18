@@ -1,0 +1,9 @@
+_target_: curator.layer.efa.QConditionedEFAAdapter
+hidden_features: 32
+num_directions: 110
+max_length: 32.0
+energy_scale: 0.01
+use_equivariant_queries: true
+q_mode: learned
+q_hidden_features: 64
+norm_epsilon: 1.0e-8

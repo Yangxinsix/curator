@@ -49,6 +49,10 @@ class VariationalCondition:
     responses: Tuple[VariationalResponse, ...] = ()
     weight: float = 1.0
     provenance: Dict[str, Any] = field(default_factory=dict)
+    # Numeric controls remain tensors outside the serialized boundary template.
+    # The output head applies these overrides before constructing its AD graph.
+    inputs: Dict[str, torch.Tensor] = field(default_factory=dict)
+    label_eligible: Dict[str, bool] = field(default_factory=dict)
 
     def validate(self, n_atoms: int) -> None:
         if not self.condition_uid:
@@ -64,6 +68,18 @@ class VariationalCondition:
                 raise ValueError("%s must be finite" % name)
         if not torch.isfinite(torch.tensor(float(self.weight))) or self.weight < 0:
             raise ValueError("condition weight must be finite and nonnegative")
+        for name, value in self.inputs.items():
+            if name not in {"local_external_field", "external_field", "control_value", "constraint_target"}:
+                raise ValueError("unsupported condition input: %s" % name)
+            if not isinstance(value, torch.Tensor) or not value.is_floating_point() or not torch.isfinite(value).all():
+                raise ValueError("condition input %s must be a finite floating-point tensor" % name)
+            if name == "local_external_field":
+                if value.ndim != 2 or value.shape[0] != n_atoms:
+                    raise ValueError("condition local_external_field must have shape [n_atoms, components]")
+            elif value.ndim != 1:
+                raise ValueError("condition input %s must be one-dimensional" % name)
+        if any(not isinstance(key, str) or type(value) is not bool for key, value in self.label_eligible.items()):
+            raise TypeError("label_eligible must map label names to booleans")
         missing_units = sorted(set(self.labels) - set(self.label_units))
         if missing_units:
             raise ValueError("labels are missing units: %s" % missing_units)
@@ -125,6 +141,10 @@ class VariationalData:
             raise ValueError("condition_uid values must be unique within a geometry")
         for condition in self.conditions:
             condition.validate(n_atoms)
+            for name in ("local_external_field", "external_field"):
+                value = condition.inputs.get(name)
+                if value is not None and value.shape[-1] != int(self.variable_spec.get("components", 1)):
+                    raise ValueError("condition %s component count differs from variable_spec" % name)
             for key in ("group_charge", "group_potential"):
                 value = condition.labels.get(key)
                 if value is not None and value.numel() != n_groups:
@@ -199,6 +219,8 @@ def move_variational_data(
                 responses=responses,
                 weight=condition.weight,
                 provenance=condition.provenance,
+                inputs={key: move(value) for key, value in condition.inputs.items()},
+                label_eligible=condition.label_eligible,
             )
         )
     return VariationalData(
@@ -251,7 +273,7 @@ def collate_variational_data(
         atom_offset += int(count)
 
     labels = {}
-    label_keys = sorted({key for condition in conditions for key in condition.labels})
+    label_keys = sorted({key for condition in conditions for key in (*condition.labels, *condition.label_eligible)})
     for key in label_keys:
         values = []
         ptr = [0]
@@ -281,8 +303,24 @@ def collate_variational_data(
             "ptr": torch.tensor(ptr, dtype=torch.long),
             "shape": tuple(shapes),
             "present": torch.tensor(present, dtype=torch.bool),
+            "eligible": torch.tensor([item.label_eligible.get(key, True) for item in conditions], dtype=torch.bool),
             "unit": next(iter(units), None),
             "metadata": tuple(metadata),
+        }
+
+    condition_inputs = {}
+    for name in sorted({key for condition in conditions for key in condition.inputs}):
+        values, ptr, shapes, present = [], [0], [], []
+        for condition in conditions:
+            value = condition.inputs.get(name)
+            present.append(value is not None)
+            shapes.append(None if value is None else tuple(value.shape))
+            if value is not None:
+                values.append(value.reshape(-1))
+            ptr.append(ptr[-1] + (0 if value is None else value.numel()))
+        condition_inputs[name] = {
+            "values": torch.cat(values), "ptr": torch.tensor(ptr, dtype=torch.long),
+            "shape": tuple(shapes), "present": torch.tensor(present, dtype=torch.bool),
         }
 
     responses = [response for condition in conditions for response in condition.responses]
@@ -318,6 +356,7 @@ def collate_variational_data(
         "condition_group_ptr": condition_group_ptr,
         "condition_uid": tuple(item.condition_uid for item in conditions),
         "condition_weight": torch.tensor([item.weight for item in conditions]),
+        "condition_inputs": condition_inputs,
         "electron_count": electron_count,
         "electron_count_present": electron_count_present,
         "electron_count_convention": tuple(item.electron_count_convention for item in conditions),
@@ -351,3 +390,16 @@ def collate_variational_data(
         "response_gauge": tuple(item.gauge for item in responses),
         "response_provenance": tuple(item.provenance for item in responses),
     }
+
+
+def condition_input(batch: Dict[str, Any], name: str, index: int) -> Optional[torch.Tensor]:
+    """Return a live condition input view, or None for the legacy fallback.
+
+    Call before building the energy and reuse this view for differentiation;
+    making a new view afterwards does not recover its upstream autograd node.
+    """
+    entry = batch.get("condition_inputs", {}).get(name)
+    if entry is None or not bool(entry["present"][index]):
+        return None
+    start, stop = int(entry["ptr"][index]), int(entry["ptr"][index + 1])
+    return entry["values"][start:stop].reshape(entry["shape"][index])

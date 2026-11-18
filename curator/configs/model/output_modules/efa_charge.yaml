@@ -1,0 +1,26 @@
+# For new models. Use the efa_charge_proposal transform to preserve trained EFA weights.
+_target_: curator.layer.VariationalEnergyOutput
+state_kind: scalar
+components: 1
+state_unit: e
+conjugate_unit: V
+residual_scale: 1.0
+state_mode: predicted
+energy_convention: thermodynamic  # Training data metadata selects U or G automatically.
+compute_forces: true
+internal_energy:
+  _target_: curator.layer.efa.QConditionedEFAEnergy
+  hidden_features: 32
+  num_directions: 110
+  max_length: 32.0
+  energy_scale: 0.01
+proposal:
+  _target_: curator.layer.efa.EFAChargeProposal
+  hidden_irreps: 64x0e + 16x1o
+  num_layers: 2
+  hidden_features: 32
+  readout_features: 64
+  num_directions: 110
+  max_length: 32.0
+  charge_scale: 1.0
+  potential_scale: 1.0

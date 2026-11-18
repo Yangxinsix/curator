@@ -213,6 +213,10 @@ class LitNNP(pl.LightningModule):
         return None
 
     def on_train_start(self):
+        # A serialized model can retain eval mode through sanity validation.
+        # Force/residual losses need training-mode derivative graphs during fit.
+        # Keep task outputs (including frozen teachers) and requires_grad unchanged.
+        self.model.train()
         self._write_log_only("\n")
         logger.debug("Start training model")
         logger.info(f"{self.optimizers()}")

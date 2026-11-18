@@ -22,6 +22,9 @@ test/*
 !test/test_spice_charge_model.py
 scripts/*
 !scripts/acvr_gpu_campaign.py
+!scripts/acvr_proposal_diagnostic.py
+!scripts/acvr_prepare_proposals.py
+!scripts/acvr_prepare_field_data.py
 
 # model files
 *.pt
@@ -63,3 +66,18 @@ Thumbs.db
 # temporary files
 *.tmp
 *.bak
+
+# ACVR MATPES initialization and physical-unit regression
+!scripts/acvr_prepare_matpes.py
+!test/test_physical_energy_rescale.py
+!test/test_fit_derivative_mode.py
+!test/test_neural_charge_diagonal.py
+!test/test_neural_charge_state_energy.py
+!test/test_legacy_qeq_compat.py
+
+!test/test_efa_adapter.py
+
+!test/test_efa_periodic.py
+
+# Global nonlinear multipole ACVR regression tests
+!test/test_multipole_*.py

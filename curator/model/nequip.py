@@ -16,6 +16,7 @@ from curator.layer import (
     InteractionLayer,
 )
 from curator.model.base import ParameterGroup, Representation
+from curator.model.features import IrrepsFeatureSpec
 
 from typing import Any, Dict, List, Optional, Sequence, Union, Callable, Type
 from functools import partial
@@ -297,6 +298,7 @@ class Nequip(Representation):
         data[properties.node_embedding] = data[properties.node_feat]
 
         node_feat = data[properties.node_feat]
+        response_features = []
         for interaction in self.interactions:
             node_feat = interaction(
                 node_feat,
@@ -309,12 +311,25 @@ class Nequip(Representation):
                 n_local=n_local,
                 n_ghost=n_ghost,
             )
+            response_features.append(node_feat)
 
+        data["response_node_feat"] = torch.cat(response_features, dim=-1)
         data[properties.node_feat] = node_feat
         data = self.readout(data)
 
         self._restore_cutoff_mask(data, edge_cache)
         return data
+
+    @torch.jit.unused
+    def response_feature_spec(self) -> IrrepsFeatureSpec:
+        """Expose every interaction output while keeping the scalar energy readout."""
+        return IrrepsFeatureSpec(
+            key="response_node_feat",
+            irreps=sum(
+                [interaction.irreps_out[properties.node_feat] for interaction in self.interactions],
+                o3.Irreps([]),
+            ),
+        )
 
     def module_groups(self):
         return OrderedDict(

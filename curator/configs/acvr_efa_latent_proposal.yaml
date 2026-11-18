@@ -1,0 +1,9 @@
+# Same global proposal and q-EFA energy, trained from energy/force labels only.
+# State semantics automatically skip residual evaluation and its loss term.
+defaults:
+  - acvr_efa_unconstrained
+  - _self_
+
+run_path: runs/acvr_efa_latent_proposal
+data:
+  charge_mode: latent

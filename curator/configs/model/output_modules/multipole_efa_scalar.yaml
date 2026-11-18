@@ -1,0 +1,33 @@
+# Finite systems; assemble using curator.model.multipole.augment_multipole_model.
+# The existing proposal is shared between these ablations and uses O(N^2) attention.
+# Only the state encoder differs between gated and scalar injection presets.
+_target_: curator.layer._multipole_variational_output.MultipoleVariationalOutput
+energy_model:
+  _target_: curator.layer.efa.StateEFAEnergy
+  hidden_irreps: 64x0e + 16x1o + 8x2e
+  num_layers: 2
+  hidden_features: 32
+  num_directions: 110
+  max_frequency: 6.283185307179586
+  max_length: 32.0
+  encoder: scalar
+  tensor_integration: true
+  integration_lmax: 2
+  readout_features: 64
+  coupling_features: 16
+  energy_scale: 1.0
+  charge_scale: 1.0
+  dipole_scale: 1.0
+  include_dipoles: true
+proposal:
+  _target_: curator.layer._multipole_state_proposal.MultipoleStateProposal
+  hidden_irreps: 64x0e + 16x1o + 8x2e
+  num_layers: 2
+  num_heads: 4
+  radial_features: 8
+  max_length: 32.0
+  readout_scale: 0.05
+charge_residual_scale: 1.0  # V
+dipole_residual_scale: 1.0  # V/Angstrom
+compute_residuals: true
+state_mode: predicted

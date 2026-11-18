@@ -1,0 +1,36 @@
+# Compare proposal and locally converged states on held-out SPICE geometries.
+cfg: null
+run_path: runs/acvr_spice_joint/evaluate
+model_path: runs/acvr_spice_joint/model_path/last.ckpt
+device: cpu
+deploy: null
+
+datapath:
+  _target_: curator.data.spice_acvr.SpiceACVRDataset
+  datapath: /workspace/data/datasets/spice/2.0.1/ion_pairs/SPICE.hdf5
+  split: test
+  default_dtype: float64
+  variational: true
+  train_limit: null
+  val_limit: null
+  test_limit: null
+
+evaluator:
+  _target_: curator.evaluate.variational.VariationalEvaluator
+  output_dir: ${run_path}
+  device: ${device}
+  batch_size: 8
+  save_data: true
+  state_mode: predicted
+  compare_converged: true
+  compute_responses: false
+  loss_fn:
+    _target_: curator.train.VariationalJointLoss
+    supervised_weights: {condition_energy: 1.0, condition_forces: 1.0}
+    supervised_scales: {condition_energy: 1.0, condition_forces: 1.0}
+    required_labels: [condition_energy, condition_forces]
+    residual_weights: {stationarity: 0.1}
+
+hydra:
+  run:
+    dir: ${run_path}/hydra

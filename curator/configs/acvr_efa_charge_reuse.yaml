@@ -1,0 +1,17 @@
+# Existing two-layer q-EFA, identical energy/force/residual training objective.
+# mode=model loads weights into a new optimizer run, NOT a full-state resume.
+# Preserve the source experiment's data, loss weights, LR and budget overrides.
+defaults:
+  - acvr_efa_charge_two_scale
+  - _self_
+
+run_path: runs/acvr_efa_charge_reuse
+model_path:
+  mode: model
+  transform:
+    - type: efa_reuse
+      residual_evaluation: reuse
+      contraction: auto
+      pairwise_max_atoms: 256
+task:
+  _target_: curator.train.VariationalGradientTask

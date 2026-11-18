@@ -1,0 +1,23 @@
+# Assemble with curator.model.multipole.augment_multipole_model so the entire
+# coordinate graph and separate energy/proposal optimizer groups are retained.
+_target_: curator.layer._multipole_variational_output.MultipoleVariationalOutput
+energy_model:
+  _target_: curator.layer._multipole_state_energy.NeuralMultipoleStateEnergy
+  hidden_irreps: 64x0e + 16x1o + 8x2e
+  num_layers: 2
+  num_heads: 4
+  radial_features: 8
+  max_length: 32.0
+  readout_scale: 0.001
+proposal:
+  _target_: curator.layer._multipole_state_proposal.MultipoleStateProposal
+  hidden_irreps: 64x0e + 16x1o + 8x2e
+  num_layers: 2
+  num_heads: 4
+  radial_features: 8
+  max_length: 32.0
+  readout_scale: 0.05
+charge_residual_scale: 1.0  # V
+dipole_residual_scale: 1.0  # V/Angstrom
+compute_residuals: true
+state_mode: predicted

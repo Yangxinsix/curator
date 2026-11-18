@@ -1,0 +1,2 @@
+_target_: curator.train.resume_callbacks.ResumeTrainingState
+output_path: ${run_path}/resume/restoration.json

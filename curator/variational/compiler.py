@@ -55,6 +55,29 @@ class CompiledBoundary:
     def n_state(self) -> int:
         return self.constraint_matrix.shape[1]
 
+    def energy(self, state: torch.Tensor) -> torch.Tensor:
+        """Boundary contribution for any scalar base energy functional.
+
+        The environment convention is ``0.5*(B*x-b).T*K*(B*x-b)-h.T*B*x``:
+        the field couples to the observable, not its displacement from target.
+        Thus the constant exactly matches :meth:`to_problem`. No context or
+        state is detached here, preserving physical coordinate/field derivatives.
+        """
+
+        if state.shape != (self.n_state,):
+            raise ValueError("state does not match the compiled layout")
+        if state.dtype != self.constraint_matrix.dtype or state.device != self.constraint_matrix.device:
+            raise ValueError("state and compiled boundary must share dtype and device")
+        value = state.sum() * 0.0
+        if self.control_matrix.shape[0]:
+            value = value - self.control_value @ (self.control_matrix @ state)
+        if self.environment_matrix.shape[0]:
+            observable = self.environment_matrix @ state
+            displacement = observable - self.environment_target
+            value = value + 0.5 * displacement @ self.environment_stiffness @ displacement
+            value = value - self.environment_field @ observable
+        return value
+
     def to_problem(
         self,
         hessian: torch.Tensor,

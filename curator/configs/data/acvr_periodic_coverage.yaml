@@ -1,0 +1,11 @@
+# Prepared data only. Set archive_path to acvr_prepare_field_data.py output.
+# No proposal architecture or loss setting is changed by this configuration.
+_target_: curator.data.periodic_charge_coverage.PreparedChargeDataModule
+archive_path: ???
+view: all
+amplitude: null
+verify_hashes: true
+batch_size: 1
+num_workers: 0
+shuffle: true
+default_dtype: float64

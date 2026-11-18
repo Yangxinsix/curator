@@ -53,7 +53,7 @@ def _canonical(value):
 
 
 class VariationalJointLoss(nn.Module):
-    """Combine supervised observables and variational certificates.
+    """Combine supervised observables, state residuals and optional certificates.
 
     Predictions must live under ``prediction["variational_prediction"]``.
     This deliberately differs from the target namespace because Curator's legacy
@@ -65,9 +65,20 @@ class VariationalJointLoss(nn.Module):
     average over geometries, so a geometry carrying more voltage/charge states
     does not automatically dominate training.
 
+    ``energy_per_atom`` divides each condition_energy error by the atom count
+    of its geometry before squaring/reduction; its physical scale is then eV/atom.
+    The default retains the total-energy convention for existing experiments.
+
     KKT certificates must be assembled from the learned functional, predicted
     state/multipliers, and compiled boundary.  A freely learned "residual head"
     is not a valid input to this loss.
+
+    ``residual_weights`` consumes teacher-free state gradients in the separate
+    ``residuals`` namespace.  These are stationarity diagnostics, not a claim of
+    minimum certification.  The model must build their graph so only proposal
+    parameters receive the residual gradient, or explicitly request parameter
+    routing through VariationalGradientTask; optimizer groups alone do not
+    enforce that policy.
     """
 
     def __init__(
@@ -82,8 +93,11 @@ class VariationalJointLoss(nn.Module):
         stability_weight: float = 0.0,
         stability_margin: float = 0.0,
         balance_mode: str = "geometry",
+        residual_weights: Optional[Mapping[str, float]] = None,
+        energy_per_atom: bool = False,
     ) -> None:
         super().__init__()
+        self.energy_per_atom = bool(energy_per_atom)
         self.supervised_weights = self._weights(supervised_weights, "supervised")
         self.supervised_scales = {
             str(key): self._positive(value, "supervised scale")
@@ -109,6 +123,7 @@ class VariationalJointLoss(nn.Module):
         if unknown_metadata:
             raise ValueError("metadata requirements need supervised weights: %s" % sorted(unknown_metadata))
         self.certificate_weights = self._weights(certificate_weights or {}, "certificate")
+        self.residual_weights = self._weights(residual_weights or {}, "residual")
         self.response_weight = self._nonnegative(response_weight, "response_weight")
         self.response_scales = {
             str(key): self._positive(value, "response scale")
@@ -281,8 +296,18 @@ class VariationalJointLoss(nn.Module):
     def _certificate_errors(self, name, entry, target, reference):
         if entry.get("source") != "compiled_variational_operator":
             raise ValueError("%s certificate must come from the compiled variational operator" % name)
+        return self._normalized_residual_errors(name, entry, target, reference)
+
+    def _residual_errors(self, name, entry, target, reference):
+        if entry.get("source") != "variational_energy_gradient":
+            raise ValueError("%s residual must come from the variational energy gradient" % name)
+        if entry.get("gradient_policy") not in ("proposal_only", "joint"):
+            raise ValueError("%s residual must declare gradient_policy='proposal_only' or 'joint'" % name)
+        return self._normalized_residual_errors(name, entry, target, reference)
+
+    def _normalized_residual_errors(self, name, entry, target, reference):
         if not entry.get("normalization"):
-            raise ValueError("%s certificate requires explicit normalization metadata" % name)
+            raise ValueError("%s requires explicit normalization metadata" % name)
         n_conditions = target["condition_weight"].numel()
         values = entry["values"].reshape(-1)
         ptr = _validated_ptr(entry["ptr"], n_conditions, values.numel(), name)
@@ -387,20 +412,32 @@ class VariationalJointLoss(nn.Module):
         errors = torch.relu(self.stability_margin - curvature).square()
         return errors.to(device=reference.device, dtype=reference.dtype), eligible
 
-    def forward(self, prediction: Dict[str, Any], batch: Dict[str, Any]) -> Dict[str, Any]:
+    def forward(self, prediction: Dict[str, Any], batch: Dict[str, Any], *,
+                allow_parameter_routing: bool = False) -> Dict[str, Any]:
         if "variational" not in batch:
             raise KeyError("batch is missing variational targets")
         if "variational_prediction" not in prediction:
             raise KeyError("model output is missing the independent variational_prediction namespace")
         target = batch["variational"]
         predicted = prediction["variational_prediction"]
+        latent = predicted.get("metadata", {}).get("state_semantics") == "predicted_auxiliary"
+        semantics = [spec.get("semantics", "variational_internal")
+                     for spec in target.get("variable_spec", ())]
+        if latent or "predicted_auxiliary" in semantics:
+            if not latent or not semantics or any(value != "predicted_auxiliary" for value in semantics):
+                raise ValueError("prediction and target state semantics differ")
+            if any(self.certificate_weights.values()) or self.stability_weight or self.response_weight:
+                raise ValueError("latent charge training supports supervised labels, not variational certificates or responses")
         if predicted.get("value_space") != "physical":
             raise ValueError("variational predictions must declare value_space='physical'")
         reference = _reference_tensor(predicted, target)
         axes = self._batch_axes(batch, target, reference)
         n_conditions = axes[0].numel()
         zero = reference.sum() * 0
-        total = zero
+        # Diagnostic zero terms retain their graph for existing callers, but
+        # must not attach arbitrary physical parameters to a residual-only
+        # objective: optimizers can update zero gradients via weight decay.
+        total = reference.new_zeros(())
         terms = {}
 
         predicted_labels = predicted.get("labels", {})
@@ -420,9 +457,16 @@ class VariationalJointLoss(nn.Module):
                 errors, active = self._label_errors(
                     name, predicted_labels[name], target_entry, reference
                 )
+                if name == "condition_energy" and getattr(self, "energy_per_atom", False):
+                    from curator.data import properties
+                    counts = batch[properties.n_atoms].reshape(-1).to(errors)
+                    if counts.numel() != axes[2].numel() or bool((counts <= 0).any()):
+                        raise ValueError("per-atom energy loss requires positive atom counts per geometry")
+                    errors = errors / counts[axes[1]].square()
                 reduced = self._reduce(errors, active, axes)
             terms[name] = self._term(coefficient, reduced, n_conditions)
-            total = total + terms[name]["loss"]
+            if reduced[3]:
+                total = total + terms[name]["loss"]
 
         certificates = predicted.get("certificates", {})
         for name, coefficient in self.certificate_weights.items():
@@ -440,6 +484,30 @@ class VariationalJointLoss(nn.Module):
             terms[key] = self._term(coefficient, self._reduce(errors, active, axes), n_conditions)
             total = total + terms[key]["loss"]
 
+        unrestricted = total
+        routed = reference.new_zeros(())
+        residuals = predicted.get("residuals", {})
+        for name, coefficient in getattr(self, "residual_weights", {}).items():
+            key = "residual:" + name
+            if coefficient == 0 or latent:
+                terms[key] = self._term(0.0, (zero, zero, zero, 0, 0), n_conditions)
+                terms[key]["status"] = "not_applicable_to_latent" if latent else "disabled"
+                continue
+            if name not in residuals:
+                raise KeyError("prediction is missing variational residual %s" % name)
+            errors, active = self._residual_errors(name, residuals[name], target, reference)
+            terms[key] = self._term(coefficient, self._reduce(errors, active, axes), n_conditions)
+            total = total + terms[key]["loss"]
+            if residuals[name].get("requires_parameter_routing", False):
+                if not allow_parameter_routing:
+                    raise RuntimeError("reused proposal_only residuals require VariationalGradientTask; "
+                                       "ordinary total_loss.backward() would change the training objective")
+                if residuals[name]["gradient_policy"] != "proposal_only":
+                    raise ValueError("parameter routing requires proposal_only residuals")
+                routed = routed + terms[key]["loss"]
+            else:
+                unrestricted = unrestricted + terms[key]["loss"]
+
         if self.response_weight:
             if "responses" not in predicted:
                 raise KeyError("prediction is missing variational responses")
@@ -448,6 +516,7 @@ class VariationalJointLoss(nn.Module):
                 self.response_weight, self._reduce(errors, active, axes), n_conditions
             )
             total = total + terms["response"]["loss"]
+            unrestricted = unrestricted + terms["response"]["loss"]
 
         if self.stability_weight:
             if "stability" not in predicted:
@@ -457,13 +526,16 @@ class VariationalJointLoss(nn.Module):
                 self.stability_weight, self._reduce(errors, active, axes), n_conditions
             )
             total = total + terms["stability"]["loss"]
+            unrestricted = unrestricted + terms["stability"]["loss"]
 
-        return {"loss": total, "terms": terms, "balance_mode": self.balance_mode}
+        return {"loss": total, "terms": terms, "balance_mode": self.balance_mode,
+                "unrestricted_loss": unrestricted, "parameter_routed_loss": routed}
 
     @property
     def term_coefficients(self) -> Dict[str, float]:
         values = dict(self.supervised_weights)
         values.update({"certificate:" + key: value for key, value in self.certificate_weights.items()})
+        values.update({"residual:" + key: value for key, value in getattr(self, "residual_weights", {}).items()})
         if self.response_weight:
             values["response"] = self.response_weight
         if self.stability_weight:

@@ -1,0 +1,16 @@
+# Opt in from a trained geometry EFA checkpoint; calibrate scales on training data.
+defaults:
+  - acvr_efa_charge_convex
+  - _self_
+
+run_path: runs/acvr_efa_charge_two_scale
+model_path:
+  transform:
+    - type: efa_two_scale_charge
+      residual_gradient_policy: proposal_only
+      batch_observables: true
+      energy_options:
+        curvature_floor: 0.01
+        hardness_init: 0.1
+        driving_scale: null  # null preserves the source adapter's energy_scale
+        curvature_scale: null  # replace with the positive calibrated value

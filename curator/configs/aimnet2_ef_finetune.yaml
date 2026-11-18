@@ -1,0 +1,92 @@
+# Official pretrained reference fine-tuning, NOT a fair from-scratch held-out benchmark.
+# Original checkpoint used charge supervision and may have seen our random test split.
+seed: 3407
+cfg: null
+run_path: /data1/home/hzxy05/work/yangxin/acvr/experiments/aimnet2_ef_finetune
+model_path: null
+device: cuda
+compile: false
+deploy_model: false
+finetune: full
+model:
+  _target_: curator.model.base.NeuralNetworkPotential
+  representation:
+    _target_: curator.model.aimnet2_adapter.AIMNet2Adapter
+    model_path: /data1/home/hzxy05/work/yangxin/acvr/datasets/longrange_benchmarks_20261009/reference_models/acdb_sa_bs_aimnet2.jpt
+    trainable: true
+    energy_reference_file: /data1/home/hzxy05/work/yangxin/acvr/experiments/acvr_longrange_20261009/initialization/acdb_sa_bs/energy_reference.json
+  output_modules:
+  - _target_: curator.layer._grad_output.GradientOutput
+    grad_on_edge_diff: false
+    grad_on_positions: true
+data:
+  _target_: curator.data.acvr_ef.ACVREFDataModule
+  datapath: /data1/home/hzxy05/work/yangxin/acvr/datasets/longrange_benchmarks_20261009/acdb_sa_bs/all.traj
+  manifest_dir: ${run_path}/data
+  split_file: /data1/home/hzxy05/work/yangxin/acvr/datasets/longrange_benchmarks_20261009/acdb_sa_bs/split.json
+  seed: 3407
+  num_train: 16000
+  num_val: 2000
+  batch_size: 4
+  val_batch_size: 4
+  num_workers: 0
+  default_dtype: float32
+  total_charge: 0.0
+  heads:
+  - energy
+  - forces
+  num_test: 2000
+  total_charge_key: total_charge
+  energy_reference_file: /data1/home/hzxy05/work/yangxin/acvr/experiments/acvr_longrange_20261009/initialization/acdb_sa_bs/energy_reference.json
+task:
+  _target_: curator.model.LitNNP
+  outputs:
+  - _target_: curator.train.ModelOutput
+    name: energy
+    loss_fn:
+      _target_: torch.nn.MSELoss
+    loss_weight: 200.0
+    per_atom_loss: true
+  - _target_: curator.train.ModelOutput
+    name: forces
+    loss_fn:
+      _target_: curator.train.longrange_losses.PerStructureForceMSE
+    loss_weight: 200.0
+  optimizer:
+    _target_: torch.optim.Adam
+    _partial_: true
+    lr: 0.0001
+    amsgrad: true
+  scheduler: null
+  save_entire_model: true
+  normalize_domain_loss: false
+trainer:
+  _target_: pytorch_lightning.Trainer
+  accelerator: gpu
+  devices: 1
+  precision: 32-true
+  max_epochs: 8
+  inference_mode: false
+  deterministic: true
+  gradient_clip_val: 10.0
+  accumulate_grad_batches: 3
+  enable_model_summary: false
+  enable_progress_bar: false
+  num_sanity_val_steps: -1
+  log_every_n_steps: 25
+  default_root_dir: ${run_path}
+  logger:
+    _target_: pytorch_lightning.loggers.CSVLogger
+    save_dir: ${run_path}
+    name: metrics
+  callbacks:
+  - _target_: pytorch_lightning.callbacks.ModelCheckpoint
+    dirpath: ${run_path}/model_path
+    filename: best_model_{epoch}_{step}
+    monitor: val_total_loss
+    mode: min
+    save_top_k: 1
+    save_last: true
+hydra:
+  run:
+    dir: ${run_path}/hydra

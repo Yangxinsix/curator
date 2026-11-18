@@ -323,6 +323,13 @@ class RealAgnosticDensityInteractionBlock(RealAgnosticInteractionBlock):
         tp_weights = self.conv_tp_weights(edge_dist_embedding)
         edge_density = torch.tanh(self.density_fn(edge_dist_embedding) ** 2)
         node_feat = self.exchange_info(node_feat, lammps_data, n_ghost, is_first_layer=is_first_layer)
+        # Match the official density-first order for force-backward scheduling.
+        density = torch.zeros(
+            (node_feat.shape[0], edge_density.shape[1]),
+            device=edge_density.device,
+            dtype=edge_density.dtype,
+        )
+        density = density.index_add_(0, edge_idx[:, 1], edge_density)
         edge_feat = self.conv_tp(
             node_feat[edge_idx[:, 0]],
             edge_diff_embedding,
@@ -334,13 +341,7 @@ class RealAgnosticDensityInteractionBlock(RealAgnosticInteractionBlock):
             device=edge_feat.device,
             dtype=edge_feat.dtype,
         )
-        node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0, out=out_feat)
-        density = torch.zeros(
-            (node_feat.shape[0], edge_density.shape[1]),
-            device=edge_density.device,
-            dtype=edge_density.dtype,
-        )
-        density = scatter_add(edge_density, edge_idx[:, 1], dim=0, out=density)
+        node_feat = out_feat.index_add_(0, edge_idx[:, 1], edge_feat)
         node_feat = self.truncate_ghost(node_feat, n_local)
         node_attr = self.truncate_ghost(node_attr, n_local)
         density = self.truncate_ghost(density, n_local)
@@ -394,6 +395,13 @@ class RealAgnosticDensityResidualInteractionBlock(RealAgnosticResidualInteractio
         edge_density = torch.tanh(self.density_fn(edge_dist_embedding) ** 2)
 
         node_feat = self.exchange_info(node_feat, lammps_data, n_ghost, is_first_layer=is_first_layer)
+        # Match the official density-first order for force-backward scheduling.
+        density = torch.zeros(
+            (node_feat.shape[0], edge_density.shape[1]),
+            device=edge_density.device,
+            dtype=edge_density.dtype,
+        )
+        density = density.index_add_(0, edge_idx[:, 1], edge_density)
         edge_feat = self.conv_tp(
             node_feat[edge_idx[:, 0]],
             edge_diff_embedding,
@@ -404,13 +412,7 @@ class RealAgnosticDensityResidualInteractionBlock(RealAgnosticResidualInteractio
             device=edge_feat.device,
             dtype=edge_feat.dtype,
         )
-        node_feat = scatter_add(edge_feat, edge_idx[:, 1], dim=0, out=out_feat)
-        density = torch.zeros(
-            (node_feat.shape[0], edge_density.shape[1]),
-            device=edge_density.device,
-            dtype=edge_density.dtype,
-        )
-        density = scatter_add(edge_density, edge_idx[:, 1], dim=0, out=density)
+        node_feat = out_feat.index_add_(0, edge_idx[:, 1], edge_feat)
         node_feat = self.truncate_ghost(node_feat, n_local)
         node_attr = self.truncate_ghost(node_attr, n_local)
         density = self.truncate_ghost(density, n_local)

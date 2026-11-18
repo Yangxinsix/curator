@@ -1,0 +1,14 @@
+_target_: curator.train.convergence.LearningRateGatedEarlyStopping
+monitor: ${task.scheduler_monitor}
+mode: min
+patience: 8
+relative_min_delta: 0.005
+min_lr: 1.0e-6
+min_lr_checks: 12
+plateau_window: 6
+plateau_rtol: 0.005
+deterioration_rtol: 0.02
+# Add val_physical_stationarity_rms_V for response models.
+physical_metrics:
+  - val_physical_energy_rmse_meV_per_atom
+  - val_physical_force_component_rmse_eV_per_Angstrom

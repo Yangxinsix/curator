@@ -221,6 +221,7 @@ def load_trained_model(
 ) -> torch.nn.Module:
     """Load a trained model or checkpoint and return a torch.nn.Module."""
     from curator.layer.wrappers import get_config_wrapper_config, get_model_wrapper_config
+    from curator.layer.wrappers.utils import temporary_default_dtype
     from curator.model.checkpoint_upgrade import _register_legacy_outputspec, _upgrade_legacy_checkpoint_model
     from curator.model.conversion import convert_model_wrapper
 
@@ -309,10 +310,25 @@ def load_trained_model(
     )
     _listify_config_field(model_cfg, "input_modules")
     _listify_config_field(model_cfg, "output_modules")
-    model = instantiate(model_cfg, _convert_="all")
+    state_dict = obj.get("state_dict")
+    if state_dict is None and isinstance(stored_model, torch.nn.Module):
+        state_dict = stored_model.state_dict()
+    if state_dict is None:
+        raise ValueError("Checkpoint is missing a state_dict.")
+    model_state = {name.removeprefix("model."): value for name, value in state_dict.items()}
+    # Reconstruct in the stored model's main floating dtype, rather than
+    # silently rounding a float64 checkpoint into default-float32 parameters.
+    # Task metric buffers must not decide the network's construction dtype.
+    has_model_prefix = any(name.startswith("model.") for name in state_dict)
+    floating_state = [value for name, value in state_dict.items()
+                      if isinstance(value, torch.Tensor) and value.is_floating_point()
+                      and (name.startswith("model.") or not has_model_prefix)]
+    build_dtype = max(floating_state, key=lambda value: value.numel()).dtype if floating_state else None
+    with temporary_default_dtype(build_dtype):
+        model = instantiate(model_cfg, _convert_="all")
 
     if stored_wrapper is not None:
-        model = convert_model_wrapper(model, stored_wrapper)
+        model = convert_model_wrapper(model, stored_wrapper, target_dtype=build_dtype)
 
     data_cfg = cfg_copy.data if cfg_copy is not None else obj.get('data_params') if isinstance(obj, dict) else None
     data_cfg = _copy_config(data_cfg)
@@ -321,15 +337,18 @@ def load_trained_model(
         if hasattr(datamodule, 'setup'):
             datamodule.setup()
         if hasattr(model, 'initialize_modules'):
-            model.initialize_modules(datamodule)
+            with temporary_default_dtype(build_dtype):
+                model.initialize_modules(datamodule)
 
-    state_dict = obj.get("state_dict")
-    if state_dict is None and isinstance(stored_model, torch.nn.Module):
-        state_dict = stored_model.state_dict()
-    if state_dict is None:
-        raise ValueError("Checkpoint is missing a state_dict.")
+    # Preserve intentionally mixed parameter/buffer dtypes as well. A single
+    # model.to(dtype) would incorrectly convert, e.g., float64 statistic buffers.
+    for name, value in (*model.named_parameters(), *model.named_buffers()):
+        stored = model_state.get(name)
+        if isinstance(stored, torch.Tensor) and value.is_floating_point() and stored.is_floating_point():
+            if value.dtype != stored.dtype:
+                value.data = value.data.to(dtype=stored.dtype)
     model.load_state_dict(
-        {name.replace("model.", "", 1): value for name, value in state_dict.items()},
+        model_state,
         strict=False,
     )
     model.to(device)

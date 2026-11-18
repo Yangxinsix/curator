@@ -233,7 +233,9 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
     model_path = find_best_model(source_path)[0]
     log.debug("Loading trained model from %s", model_path)
     log.debug("Checkpoint loading mode: %s", source_mode)
-    checkpoint_data = torch_load_compat(torch, model_path, weights_only=False)
+    # Inspect checkpoints independently of their original training device.
+    # Trainer.fit restores state onto the selected accelerator for resume mode.
+    checkpoint_data = torch_load_compat(torch, model_path, map_location="cpu", weights_only=False)
 
     saved_model = checkpoint_data.get("model") if isinstance(checkpoint_data, dict) else None
     if isinstance(saved_model, torch.nn.Module):
@@ -256,6 +258,10 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
             if wrapper_from_checkpoint is not None:
                 model = convert_model_wrapper(model, wrapper_from_checkpoint, target_dtype=build_dtype)
                 model = mark_external_checkpoint_metadata(model, external_spec)
+        elif isinstance(saved_model, torch.nn.Module):
+            # Serialized native models preserve dynamically assembled adapters
+            # and proposal heads which need not exist in config.model.
+            model = saved_model
         else:
             model = instantiate_model(config.model)
         return LoadedModel(
@@ -285,6 +291,15 @@ def _load_model(config: DictConfig, *, build_dtype=None) -> LoadedModel:
         model = checkpoint_data
     elif isinstance(saved_model, torch.nn.Module):
         model = saved_model
+        state_dict = checkpoint_data.get("state_dict")
+        if state_dict is not None:
+            if any(name.startswith("model.") for name in state_dict):
+                state_dict = {
+                    name[len("model."):]: value
+                    for name, value in state_dict.items()
+                    if name.startswith("model.")
+                }
+            model.load_state_dict(state_dict, strict=True)
     else:
         external_spec = external_checkpoint_spec(checkpoint_data)
         if external_spec is not None:
@@ -378,8 +393,27 @@ def _prepare_model(
         model.initialize_modules(datamodule)
         log.debug("Initialized model modules from datamodule before task setup.")
     else:
+        # Preserve fitted backbone/rescale statistics, but bind the variational
+        # data convention (or validate it on resume) before the first batch.
+        for module in getattr(model, "output_modules", ()):
+            if getattr(module, "joint_variational_output", False):
+                module.setup_from_datamodule(datamodule)
         model._initialized = True
         log.debug("Preserved model-checkpoint module initialization and rescale state.")
+
+    batch_observables = OmegaConf.select(config, "variational_batch_observables")
+    if batch_observables is not None:
+        from ..layer._variational_output import VariationalEnergyOutput
+
+        if not isinstance(batch_observables, bool):
+            raise TypeError("variational_batch_observables must be a boolean")
+        outputs = [module for module in getattr(model, "output_modules", ())
+                   if isinstance(module, VariationalEnergyOutput)]
+        if not outputs:
+            raise ValueError("variational_batch_observables requires a variational output")
+        for output in outputs:
+            output.batch_observables = batch_observables
+        log.info("Independent-geometry variational derivatives batched: %s", batch_observables)
 
     if data_dtype is not None:
         model = model.to(dtype=data_dtype)

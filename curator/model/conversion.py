@@ -834,6 +834,7 @@ def _create_model_from_mace_impl(
 
 
 def _build_mace_from_curator_impl(curator_model):
+    from curator.layer._physical_energy_rescale import PhysicalEnergyRescale
     try:
         from mace.modules import blocks as mace_blocks
         from mace.modules import models as mace_models
@@ -882,6 +883,22 @@ def _build_mace_from_curator_impl(curator_model):
         scale, shift = 1.0, 0.0
         atomic_energies = torch.zeros(len(atomic_numbers))
         for module in output_modules:
+            if isinstance(module, PhysicalEnergyRescale):
+                transforms = module.transforms
+                if [type(t).__name__ for t in transforms] != [
+                    "ScaleTransform", "PerSpeciesScale", "PerSpeciesShift", "AtomwiseShift"
+                ]:
+                    raise NotImplementedError("Unsupported PhysicalEnergyRescale transform sequence for official MACE export.")
+                scale_transform, species_scale, species_shift, shift_transform = transforms
+                if bool(species_scale.enabled):
+                    raise NotImplementedError("Official MACE export does not support per-species energy scaling.")
+                if not shift_transform.atomwise_data_key or shift_transform.shift.numel() != 1:
+                    raise NotImplementedError("Official MACE export requires an atomic scalar energy shift.")
+                scale = pick_scalar(scale_transform.scale)
+                shift = pick_scalar(shift_transform.shift)
+                z_idx = torch.as_tensor(atomic_numbers, dtype=torch.long, device=species_shift.values.device)
+                atomic_energies = species_shift.values[z_idx] if bool(species_shift.enabled) else torch.zeros_like(species_shift.values[z_idx])
+                break
             if not isinstance(module, GlobalRescaleShift):
                 continue
             scale = pick_scalar(module.scale_by)
@@ -891,7 +908,7 @@ def _build_mace_from_curator_impl(curator_model):
                 break
             if not torch.is_tensor(atomic_energies):
                 atomic_energies = torch.as_tensor(atomic_energies)
-            z_idx = torch.as_tensor(atomic_numbers, dtype=torch.long)
+            z_idx = torch.as_tensor(atomic_numbers, dtype=torch.long, device=atomic_energies.device)
             atomic_energies = torch.index_select(atomic_energies, -1, z_idx)
             break
         return scale, shift, atomic_energies
@@ -921,7 +938,7 @@ def _build_mace_from_curator_impl(curator_model):
             "r_max": float(rep_config["cutoff"]),
             "num_bessel": int(rep_config["num_basis"]),
             "num_polynomial_cutoff": int(rep_config["power"]),
-            "max_ell": repr_model.lmax,
+            "max_ell": repr_model.edge_sh_irreps.lmax,
             "num_interactions": len(repr_model.interactions),
             "num_elements": repr_model.embeddings.onehot_embedding.num_elements,
             "hidden_irreps": rep_config["hidden_irreps"],
@@ -932,6 +949,7 @@ def _build_mace_from_curator_impl(curator_model):
             "gate": torch.nn.functional.silu,
             "heads": ["head_0"],
             "radial_MLP": rep_config.get("radial_MLP"),
+            "use_reduced_cg": False,
         }
         rep_kwargs["distance_transform"] = {
             "none": "None",
@@ -951,7 +969,12 @@ def _build_mace_from_curator_impl(curator_model):
             rep_config["interaction_cls"].__name__,
             rep_kwargs["interaction_cls_first"],
         )
-        return mace_models.ScaleShiftMACE(**rep_kwargs)
+        previous_dtype = torch.get_default_dtype()
+        try:
+            torch.set_default_dtype(next(repr_model.parameters()).dtype)
+            return mace_models.ScaleShiftMACE(**rep_kwargs)
+        finally:
+            torch.set_default_dtype(previous_dtype)
 
     def load_core_embeddings(mace_model):
         for target_module, source_state in (
@@ -993,6 +1016,20 @@ def _build_mace_from_curator_impl(curator_model):
         mace_model = torch.load(io.BytesIO(template_bytes), map_location="cpu", weights_only=False)
     else:
         mace_model = build_fresh_official_model()
+    mace_model.to(dtype=next(repr_model.parameters()).dtype)
+
+    # The template is architectural provenance, not the current physical state.
+    # In particular ACVR may have replaced the original atomic reference energy.
+    if any(isinstance(module, (GlobalRescaleShift, PhysicalEnergyRescale)) for module in output_modules):
+        scale, shift, atomic_energies = resolve_rescale_context(resolve_atomic_numbers())
+        with torch.no_grad():
+            mace_model.scale_shift.scale.fill_(scale)
+            mace_model.scale_shift.shift.fill_(shift)
+            mace_model.atomic_energies_fn.atomic_energies.copy_(
+                atomic_energies.to(mace_model.atomic_energies_fn.atomic_energies).reshape_as(
+                    mace_model.atomic_energies_fn.atomic_energies
+                )
+            )
 
     load_core_embeddings(mace_model)
     for idx in range(len(repr_model.interactions)):
@@ -1407,19 +1444,23 @@ def _convert_model_wrapper_impl(
 
     target_state = patched_model.state_dict()
     source_state = source_model.state_dict()
-    source_aliases: Dict[str, torch.Tensor] = {}
+    source_aliases: Dict[str, Any] = {}
     for source_key, source_tensor in source_state.items():
         source_aliases.setdefault(source_key, source_tensor)
         source_aliases.setdefault(source_key.replace(".base.", "."), source_tensor)
-    matched: Dict[str, torch.Tensor] = {}
+    matched: Dict[str, Any] = {}
     for key, target_tensor in target_state.items():
+        if not isinstance(target_tensor, torch.Tensor):
+            if key.endswith("_extra_state") and key in source_state:
+                matched[key] = copy.deepcopy(source_state[key])
+            continue
         canonical_key = key.replace(".base.", ".")
         for source_tensor in (
             source_state.get(key),
             source_state.get(canonical_key),
             source_aliases.get(canonical_key),
         ):
-            if source_tensor is None:
+            if not isinstance(source_tensor, torch.Tensor):
                 continue
             compatible = _coerce_state_tensor_shape(source_tensor, target_tensor.shape)
             if compatible is None:
@@ -1809,6 +1850,284 @@ def convert_cueq_to_e3nn(model):
     return _convert_cueq_to_e3nn_impl(model)
 
 
+def transform_efa_to_q_conditioned(model, **adapter_options):
+    """Upgrade one trained EFA head, keeping an independent copy of its model.
+
+    This opt-in transform must run before constructing an optimizer. Existing
+    checkpoint loading remains unchanged; old Q/K/V and readout parameters are
+    copied exactly and only the additional latent-q modules are initialized.
+    """
+    from curator.layer.efa import EFAAdapter, QConditionedEFAAdapter
+    from curator.model.base import NeuralNetworkPotential
+
+    if not isinstance(model, NeuralNetworkPotential):
+        raise TypeError("expected a Curator NeuralNetworkPotential")
+    indices = [index for index, module in enumerate(model.output_modules)
+               if isinstance(module, EFAAdapter)]
+    if len(indices) != 1 or type(model.output_modules[indices[0]]) is not EFAAdapter:
+        raise ValueError("expected exactly one unconditioned legacy EFAAdapter")
+    upgraded = copy.deepcopy(model)
+    index = indices[0]
+    upgraded.output_modules[index] = QConditionedEFAAdapter.from_legacy(
+        upgraded.output_modules[index], **adapter_options)
+    upgraded.collect_outputs()
+    return upgraded
+
+
+def transform_efa_to_charge_proposal(
+    model, *, proposal_options=None, residual_scale=1.0, compute_forces=True,
+):
+    """Replace one learned q-EFA head with explicit energy and charge proposal.
+
+    Call after loading a trained checkpoint and before building the optimizer.
+    Every energy weight is copied; the global proposal is newly initialized.
+    Standard Curator variational outputs own conservative forces and route the
+    stationarity residual to proposal parameters only. Structured conditions
+    configure fixed charge or fixed potential, with optional overall charge.
+    """
+    from curator.layer._force_output import ForceOutput
+    from curator.layer._variational_output import VariationalEnergyOutput
+    from curator.layer.efa.adapter import EFAAdapter
+    from curator.layer.efa.explicit_q import QConditionedEFAEnergy
+    from curator.layer.efa.proposal import EFAChargeProposal
+    from curator.layer.efa.q_conditioned import QConditionedEFAAdapter
+    from curator.model.base import CallbackModuleList
+
+    if not isinstance(model, NeuralNetworkPotential):
+        raise TypeError("expected a Curator NeuralNetworkPotential")
+    indices = [index for index, module in enumerate(model.output_modules)
+               if isinstance(module, EFAAdapter)]
+    if (len(indices) != 1
+            or type(model.output_modules[indices[0]]) is not QConditionedEFAAdapter
+            or model.output_modules[indices[0]].q_mode != "learned"):
+        raise ValueError("expected exactly one learned QConditionedEFAAdapter")
+    if any(getattr(module, "joint_variational_output", False) for module in model.output_modules):
+        raise ValueError("model already contains a variational output")
+    upgraded = copy.deepcopy(model)
+    index = indices[0]
+    output = VariationalEnergyOutput(
+        state_kind="scalar", components=1,
+        internal_energy=QConditionedEFAEnergy.from_adapter(upgraded.output_modules[index]),
+        proposal=EFAChargeProposal(**dict(proposal_options or {})),
+        state_unit="e", conjugate_unit="V", residual_scale=residual_scale,
+        compute_forces=compute_forces,
+    )
+    modules = [output if position == index else module
+               for position, module in enumerate(upgraded.output_modules)
+               if position == index or not isinstance(module, ForceOutput)]
+    upgraded.output_modules = CallbackModuleList(
+        modules, on_register_callback=upgraded.register_callbacks)
+    upgraded.configure_variational_outputs()
+    upgraded.configure_force_outputs()
+    upgraded.collect_outputs()
+    upgraded.train(model.training)
+    return upgraded
+
+
+def transform_efa_to_convex_charge(
+    model, *, energy_options=None, proposal_options=None, residual_scale=1.0,
+    compute_forces=True, residual_gradient_policy="joint", batch_observables=False,
+):
+    """Keep a trained geometry EFA branch and add a convex charge functional.
+
+    Apply before optimizer construction. The geometry parameters are copied
+    exactly; the charge energy and existing global Fukui proposal are new.
+    """
+    from curator.layer.efa import ConvexQConditionedEFAEnergy
+
+    return _transform_efa_charge_energy(
+        model, ConvexQConditionedEFAEnergy, energy_options=energy_options,
+        proposal_options=proposal_options, residual_scale=residual_scale,
+        compute_forces=compute_forces, residual_gradient_policy=residual_gradient_policy,
+        batch_observables=batch_observables,
+    )
+
+
+def transform_efa_to_two_scale_charge(
+    model, *, energy_options=None, proposal_options=None, residual_scale=1.0,
+    compute_forces=True, residual_gradient_policy="proposal_only", batch_observables=False,
+):
+    """Retain geometry EFA and add independently calibrated charge scales.
+
+    Stationarity supervision defaults to proposal-only gradients so the energy
+    cannot suppress its q response simply to reduce that auxiliary residual.
+    """
+    from curator.layer.efa import TwoScaleQConditionedEFAEnergy
+
+    return _transform_efa_charge_energy(
+        model, TwoScaleQConditionedEFAEnergy, energy_options=energy_options,
+        proposal_options=proposal_options, residual_scale=residual_scale,
+        compute_forces=compute_forces, residual_gradient_policy=residual_gradient_policy,
+        batch_observables=batch_observables,
+    )
+
+
+def _transform_efa_charge_energy(
+    model, energy_type, *, energy_options, proposal_options, residual_scale,
+    compute_forces, residual_gradient_policy, batch_observables,
+):
+    from curator.layer import ForceOutput, VariationalEnergyOutput
+    from curator.layer.efa import EFAAdapter, EFAChargeProposal
+    from curator.model.base import CallbackModuleList
+
+    if not isinstance(model, NeuralNetworkPotential):
+        raise TypeError("expected a Curator NeuralNetworkPotential")
+    indices = [index for index, module in enumerate(model.output_modules)
+               if isinstance(module, EFAAdapter)]
+    if len(indices) != 1 or type(model.output_modules[indices[0]]) is not EFAAdapter:
+        raise ValueError("expected exactly one unconditioned legacy EFAAdapter")
+    if any(getattr(module, "joint_variational_output", False) for module in model.output_modules):
+        raise ValueError("model already contains a variational output")
+    upgraded = copy.deepcopy(model)
+    index = indices[0]
+    output = VariationalEnergyOutput(
+        internal_energy=energy_type.from_adapter(
+            upgraded.output_modules[index], **dict(energy_options or {})),
+        proposal=EFAChargeProposal(**dict(proposal_options or {})),
+        state_unit="e", conjugate_unit="V", residual_scale=residual_scale,
+        compute_forces=compute_forces, residual_gradient_policy=residual_gradient_policy,
+        batch_observables=batch_observables,
+    )
+    modules = [output if position == index else module
+               for position, module in enumerate(upgraded.output_modules)
+               if position == index or not isinstance(module, ForceOutput)]
+    upgraded.output_modules = CallbackModuleList(
+        modules, on_register_callback=upgraded.register_callbacks)
+    upgraded.configure_variational_outputs()
+    upgraded.configure_force_outputs()
+    upgraded.collect_outputs()
+    upgraded.train(model.training)
+    return upgraded
+
+
+def transform_efa_execution(model, *, residual_evaluation="reuse", contraction="auto",
+                            pairwise_max_atoms=256):
+    """Opt in to equivalent EFA execution without changing model parameters.
+
+    Copy the model, reuse the existing energy graph, and choose the kernel
+    contraction order. The state_dict and optimizer parameter layout remain
+    compatible. The CLI's mode=model transform path starts a new optimizer;
+    it must not be presented as restoring a full training checkpoint. Reuse
+    with proposal_only training requires VariationalGradientTask.
+    """
+    from curator.layer import VariationalEnergyOutput
+    from curator.layer.efa import EuclideanFastAttention
+
+    if not isinstance(model, NeuralNetworkPotential):
+        raise TypeError("expected a Curator NeuralNetworkPotential")
+    if residual_evaluation not in {"replay", "reuse"}:
+        raise ValueError("residual_evaluation must be replay or reuse")
+    if contraction not in {"linear", "pairwise", "auto"}:
+        raise ValueError("contraction must be linear, pairwise or auto")
+    if not isinstance(pairwise_max_atoms, int) or pairwise_max_atoms < 1:
+        raise ValueError("pairwise_max_atoms must be a positive integer")
+    outputs = [module for module in model.output_modules
+               if isinstance(module, VariationalEnergyOutput)]
+    if len(outputs) != 1 or not any(isinstance(module, EuclideanFastAttention)
+                                    for module in outputs[0].modules()):
+        raise ValueError("expected exactly one variational EFA output")
+    if (getattr(outputs[0].internal_energy, "requires_shared_context_reuse", False)
+            and residual_evaluation != "reuse"):
+        raise ValueError("shared proposal requires residual_evaluation='reuse'")
+    upgraded = copy.deepcopy(model)
+    output = next(module for module in upgraded.output_modules
+                  if isinstance(module, VariationalEnergyOutput))
+    output.residual_evaluation = residual_evaluation
+    for module in output.modules():
+        if isinstance(module, EuclideanFastAttention):
+            module.contraction = contraction
+            module.pairwise_max_atoms = pairwise_max_atoms
+    return upgraded
+
+
+def transform_two_scale_to_shared_proposal(model, *, proposal_options=None, inherit_local=True):
+    """Keep a two-scale q-EFA energy and replace its proposal before training.
+
+    Every energy/backbone weight is retained. By default the proposal retains
+    matching local input, boundary, normalization and readout weights and the
+    last fusion block. Its global kernel and depth still change, so predicted
+    q is not preserved. Set inherit_local=False for a new proposal. Optimizer
+    state cannot be resumed; use the model-transform fine-tune path.
+    """
+    from curator.layer import VariationalEnergyOutput
+    from curator.layer.efa import (
+        SharedGeometryChargeProposal, SharedTwoScaleQConditionedEFAEnergy,
+        TwoScaleQConditionedEFAEnergy, EFAChargeProposal,
+    )
+
+    if not isinstance(model, NeuralNetworkPotential):
+        raise TypeError("expected a Curator NeuralNetworkPotential")
+    outputs = [module for module in model.output_modules
+               if isinstance(module, VariationalEnergyOutput)]
+    if len(outputs) != 1 or type(outputs[0].internal_energy) is not TwoScaleQConditionedEFAEnergy:
+        raise ValueError("expected exactly one two-scale q-EFA variational output")
+    if outputs[0].proposal_mode != "absolute":
+        raise ValueError("shared charge proposal uses absolute state prediction")
+    if type(outputs[0].proposal) is not EFAChargeProposal:
+        raise ValueError("expected an ordinary EFAChargeProposal as the source")
+    upgraded = copy.deepcopy(model)
+    output = next(module for module in upgraded.output_modules
+                  if isinstance(module, VariationalEnergyOutput))
+    output.internal_energy = SharedTwoScaleQConditionedEFAEnergy.from_two_scale(output.internal_energy)
+    reference = next(output.internal_energy.parameters())
+    source = output.proposal
+    options = {
+        "hidden_irreps": str(source.irreps), "readout_features": source.readout_features,
+        "charge_scale": source.charge_scale, "potential_scale": source.potential_scale,
+        **dict(proposal_options or {}),
+    }
+    output.proposal = SharedGeometryChargeProposal(**options).to(reference)
+    output.proposal.bind(copy.deepcopy(output.feature_spec))
+    if inherit_local:
+        if any(getattr(output.proposal, name) != getattr(source, name) for name in (
+            "irreps", "readout_features", "charge_scale", "potential_scale",
+        )):
+            raise ValueError("local inheritance requires matching proposal irreps, widths and scales")
+        for name in ("input", "boundary_input", "potential_input", "norm", "readout"):
+            setattr(output.proposal, name, copy.deepcopy(getattr(source, name)))
+        output.proposal.fusion = copy.deepcopy(source.fusion[-1])
+    output.residual_evaluation = "reuse"
+    output.reset_deployment()
+    upgraded.configure_variational_outputs()
+    upgraded.collect_outputs()
+    upgraded.train(model.training)
+    return upgraded
+
+
+def transform_efa_proposal_boundary(model, *, potential_scale=None):
+    """Opt in to a new boundary/data campaign using an existing EFA proposal.
+
+    Preserve all learned parameters and fixed-charge predictions. A legacy
+    proposal gains a zero-initialized potential-conditioning branch. Dataset
+    binding is reset explicitly for fine-tuning; ordinary checkpoint resume
+    keeps its strict original boundary/data and optimizer contracts.
+    """
+    from curator.layer.efa.proposal import EFAChargeProposal
+    from curator.layer._variational_output import VariationalEnergyOutput
+
+    if not isinstance(model, NeuralNetworkPotential):
+        raise TypeError("expected a Curator NeuralNetworkPotential")
+    outputs = [module for module in model.output_modules
+               if isinstance(module, VariationalEnergyOutput)
+               and isinstance(module.proposal, EFAChargeProposal)]
+    if len(outputs) != 1:
+        raise ValueError("expected exactly one variational EFA charge proposal")
+    upgraded = copy.deepcopy(model)
+    output = next(module for module in upgraded.output_modules
+                  if isinstance(module, VariationalEnergyOutput)
+                  and isinstance(module.proposal, EFAChargeProposal))
+    if not hasattr(output.proposal, "potential_input"):
+        output.proposal = EFAChargeProposal.from_fixed_charge(
+            output.proposal, potential_scale=1.0 if potential_scale is None else potential_scale)
+    elif potential_scale is not None and potential_scale != output.proposal.potential_scale:
+        raise ValueError("cannot change the scale of an already trained potential branch")
+    output._dataset_metadata = None
+    output.reset_deployment()
+    upgraded.configure_variational_outputs()
+    upgraded.collect_outputs()
+    return upgraded
+
+
 MODEL_TRANSFORM_REGISTRY = {
     "single_to_multi_domain": convert_single_to_multi_domain,
     "multi_to_single_domain": convert_multi_to_single_domain,
@@ -1819,6 +2138,13 @@ MODEL_TRANSFORM_REGISTRY = {
     "wrapper": convert_model_wrapper,
     "e3nn_to_cueq": convert_e3nn_to_cueq,
     "cueq_to_e3nn": convert_cueq_to_e3nn,
+    "efa_q_conditioned": transform_efa_to_q_conditioned,
+    "efa_charge_proposal": transform_efa_to_charge_proposal,
+    "efa_convex_charge": transform_efa_to_convex_charge,
+    "efa_two_scale_charge": transform_efa_to_two_scale_charge,
+    "efa_reuse": transform_efa_execution,
+    "efa_shared_charge_proposal": transform_two_scale_to_shared_proposal,
+    "efa_proposal_boundary": transform_efa_proposal_boundary,
 }
 
 
@@ -1925,4 +2251,11 @@ __all__ = [
     'load_pretrained_weights_from_model',
     'transform_model_to_direct_force',
     'transform_mace_to_qeq',
+    'transform_efa_to_q_conditioned',
+    'transform_efa_to_charge_proposal',
+    'transform_efa_to_convex_charge',
+    'transform_efa_to_two_scale_charge',
+    'transform_efa_execution',
+    'transform_two_scale_to_shared_proposal',
+    'transform_efa_proposal_boundary',
 ]

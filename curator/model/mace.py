@@ -383,6 +383,10 @@ class MACE(Representation):
             irreps=output_feature_irreps,
         )
 
+    @torch.jit.unused
+    def response_feature_spec(self) -> IrrepsFeatureSpec:
+        return self.direct_force_feature_spec()
+
     def module_groups(self):
         groups = OrderedDict(
             (

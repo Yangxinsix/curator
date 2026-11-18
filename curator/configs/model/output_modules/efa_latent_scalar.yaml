@@ -1,0 +1,18 @@
+# Latent q is trained only through E/F; no total-charge projection or residual.
+_target_: curator.layer.efa.LatentChargeEFAAdapter
+encoder: scalar
+charge_mode: learned
+charge_hidden_features: 32
+zero_init_energy: true
+hidden_irreps: 64x0e + 16x1o + 8x2e
+num_layers: 2
+hidden_features: 32
+num_directions: 110
+max_frequency: 6.283185307179586
+max_length: 32.0
+readout_features: 64
+coupling_features: 16
+tensor_integration: true
+integration_lmax: 2
+energy_scale: 0.01
+charge_scale: 1.0

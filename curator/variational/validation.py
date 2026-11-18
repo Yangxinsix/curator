@@ -111,7 +111,9 @@ def thermodynamic_gauge_basis(
     r"""Return control directions that cannot drive feasible state changes.
 
     If ``Z`` spans ``null(A)``, a control displacement is a gauge direction
-    when ``Z.T @ B.T @ delta_h = 0``.
+    when ``Z.T @ B.T @ delta_h = 0``. Compute the same kernel by removing the
+    constraint row space from ``B.T``. Only thin state-by-constraint/control
+    matrices are formed, never a full state-space projector or tangent basis.
     """
 
     if constraint_matrix.ndim != 2 or control_matrix.ndim != 2:
@@ -120,9 +122,34 @@ def thermodynamic_gauge_basis(
         raise ValueError("constraint and control state dimensions must match")
     if control_matrix.shape[0] == 0:
         return control_matrix.new_zeros((0, 0))
-    tangent = null_space(constraint_matrix, tolerance=tolerance)
-    tangent_control = tangent.transpose(0, 1) @ control_matrix.transpose(0, 1)
-    return null_space(tangent_control, tolerance=tolerance)
+    n_state = constraint_matrix.shape[1]
+    n_controls = control_matrix.shape[0]
+    control_transpose = control_matrix.transpose(0, 1)
+    tangent_control = control_transpose
+    if constraint_matrix.shape[0]:
+        _, singular_values, rows = torch.linalg.svd(constraint_matrix, full_matrices=False)
+        constraint_tolerance = (
+            _rank_tolerance(constraint_matrix) if tolerance is None else tolerance
+        )
+        rank = int((singular_values > constraint_tolerance).sum().item())
+        if rank == n_state:
+            return torch.eye(n_controls, dtype=control_matrix.dtype, device=control_matrix.device)
+        row_basis = rows[:rank]
+        tangent_control = control_transpose - row_basis.transpose(0, 1) @ (
+            row_basis @ control_transpose
+        )
+    # Full right singular vectors are only needed when there are more controls
+    # than states; in that case the left factor is no larger than control space.
+    _, singular_values, right = torch.linalg.svd(
+        tangent_control, full_matrices=n_state < n_controls,
+    )
+    if tolerance is None:
+        # Refer to the unprojected controls as well: an all-gauge control set
+        # leaves only roundoff after row-space subtraction, not physical rank.
+        scale = float(torch.linalg.svdvals(control_matrix.detach()).max().item())
+        tolerance = 100.0 * torch.finfo(control_matrix.dtype).eps * max(n_state, n_controls) * scale
+    rank = int((singular_values > tolerance).sum().item())
+    return right[rank:].transpose(0, 1)
 
 
 def minimum_reduced_curvature(

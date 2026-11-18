@@ -1,0 +1,10 @@
+# Independent linear driving force and positive nonlinear charge curvature.
+defaults:
+  - efa_charge_convex
+  - _self_
+
+residual_gradient_policy: proposal_only
+internal_energy:
+  _target_: curator.layer.efa.TwoScaleQConditionedEFAEnergy
+  driving_scale: null
+  curvature_scale: null

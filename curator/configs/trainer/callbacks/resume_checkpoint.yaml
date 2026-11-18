@@ -1,0 +1,3 @@
+_target_: curator.train.resume_callbacks.ResumeCheckpoint
+dirpath: ${run_path}/resume
+filename: last.ckpt
