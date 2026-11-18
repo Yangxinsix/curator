@@ -1,0 +1,18 @@
+{
+  "inputs/energy_reference.json": "45208b26287530be097606eb9c009596450ff665f1e3195e9147128e87decad4",
+  "inputs/split.json": "8979beb238a8ef35bf18cc5f5ef941ad71d567ebadc44a208b9312e2e5f758be",
+  "src/experiments/dpa4c_acvr/fixed_q_batch.py": "d648517b9f46a212c4a8997c8b316cf318f4dfae64247ee3a1108df3434f697d",
+  "src/experiments/dpa4c_cumulene/readout_ext.py": "4edb333d044a2a5f921af80048240e0713f7d0409dc7530fee1081ee70023b95",
+  "src/experiments/dpa4c_cumulene/run.py": "756b7105837f1a3c9bb8ac17285ee10a5236ff927935f9e931561a1821443dac",
+  "src/experiments/dpa4c_directional/PROTOCOL.md": "77b045c91f963c141d9e8d1874a6131f94ee86871d73f3a5dc3d12766ab452c2",
+  "src/experiments/dpa4c_directional/bridge.py": "a357ccf915f6b1472a766f62b5900b6f66352702e6601cd4b6636a596f0834e1",
+  "src/experiments/dpa4c_directional/check_transport.py": "8ff6b9cf183ca476e6fa61db1fc5fc012f07436f7d155e314282d61895c9f6c3",
+  "src/experiments/dpa4c_directional/cluster_submit.py": "5127d123f6f9d8f23466c22b340df67a9dd73d55b93eb5d151992bd7724f0a34",
+  "src/experiments/dpa4c_directional/cluster_worker.sh": "ea479db5979e448ce2adc17a825825c5c81175e3308675762670039ea22ce03f",
+  "src/experiments/dpa4c_directional/runner.py": "ae9ee6c5e003de3bc22f07971d8952c9c62a16dc54d953e395f70e0ac3eb31aa",
+  "src/experiments/dpa4c_directional/selection.py": "27c47463a2d737252095d868ad50ab75da878106ecd8854ab68f148e65bfd965",
+  "src/experiments/dpa4c_directional/transport.py": "c11db5ac272d3a2c3aca1c64b5f44b1916d7d1f3bff4125e7fb96ea004a978da",
+  "src/experiments/dpa4c_readout/readout.py": "ebb1c6f75bbf8f52feea40e0556dd6a91d3f41134e9a2a2193b4a94e0b805a86",
+  "src/experiments/dpa4c_tensor/tensor_model.py": "20e1eeb675c312104e477dac2ce6b38042a6830bd43d35fe09958375db4b9221",
+  "src/experiments/dpa4c_unified/run.py": "047c049135c8b941e2f6f8565012a6536ecfbdfdd0495fb56c77735bda9a5904"
+}

@@ -5,7 +5,7 @@ from typing import Dict, List
 import torch
 
 from curator.data import properties
-from curator.layer._ewald import EwaldSummation, apply_ewald
+from curator.layer._ewald import EwaldSummation
 
 from ..operators import DenseQuadraticOperator
 
@@ -22,22 +22,6 @@ class EwaldChargeOperator:
         self.ewald = ewald
 
     def geometry_kernels(self, data: Dict[str, torch.Tensor]) -> List[torch.Tensor]:
-        """Materialize complete kernels for small-system reference calculations."""
-        return [context["ewald_kernel"] for context in self._geometry(data, matrix_free=False)]
-
-    def prepare(self, data):
-        """Prepare complete per-geometry operators once for the current forward.
-
-        Explicit boundary metadata uses an independent electrostatic neighbor
-        list. Low-level callers without pbc must supply complete periodic edges.
-        """
-        if properties.pbc not in data:
-            return self.ewald.prepare(data[properties.cell], data[properties.n_atoms],
-                                      data[properties.positions], data[properties.edge_dist],
-                                      data[properties.edge_idx])
-        return self._geometry(data, matrix_free=True)
-
-    def _geometry(self, data, *, matrix_free):
         """Build complete kernels independently of the GNN neighbor cutoff.
 
         The selected backend finds discrete periodic neighbors from detached geometry; their
@@ -85,12 +69,12 @@ class EwaldChargeOperator:
             raise ValueError("Ewald charge response requires finite cells and nonsingular periodic cells")
         if not bool(torch.isfinite(positions).all()):
             raise ValueError("Ewald positions must be finite")
-        contexts = []
+        kernels = []
         offset = 0
         for count, cell, is_periodic in zip(counts.tolist(), cells, periodic.tolist()):
             local_positions = positions[offset:offset + count]
             if not is_periodic:
-                contexts.append({"ewald_kernel": self.isolated_kernel(local_positions)})
+                kernels.append(self.isolated_kernel(local_positions))
                 offset += count
                 continue
             atoms = Atoms(numbers=[1] * count,
@@ -105,21 +89,15 @@ class EwaldChargeOperator:
                                  torch.as_tensor(neighbor, device=positions.device)), dim=1).long()
             shifts = torch.as_tensor(shifts, dtype=positions.dtype, device=positions.device)
             difference = local_positions[edges[:, 1]] - local_positions[edges[:, 0]] + shifts @ cell
-            local_data = {
+            kernels.extend(self.kernels({
                 properties.positions: local_positions,
                 properties.cell: cell.unsqueeze(0),
                 properties.n_atoms: counts.new_tensor([count]),
                 properties.edge_idx: edges,
                 properties.edge_dist: torch.linalg.vector_norm(difference, dim=-1),
-            }
-            if matrix_free:
-                contexts.extend(self.ewald.prepare(
-                    local_data[properties.cell], local_data[properties.n_atoms],
-                    local_positions, local_data[properties.edge_dist], edges))
-            else:
-                contexts.extend({"ewald_kernel": kernel} for kernel in self.kernels(local_data))
+            }))
             offset += count
-        return contexts
+        return kernels
 
     @staticmethod
     def isolated_kernel(positions: torch.Tensor) -> torch.Tensor:
@@ -154,8 +132,6 @@ class EwaldChargeOperator:
         return [0.5 * (kernel + kernel.transpose(0, 1)) for kernel in kernels]
 
     def energy(self, data: Dict[str, torch.Tensor], charge: torch.Tensor) -> torch.Tensor:
-        # Preserve the efficient direct structure-factor path for low-level
-        # periodic callers that already supply a complete electrostatic list.
         if properties.pbc in data and not bool(data[properties.pbc].all()):
             counts = data[properties.n_atoms]
             if charge.ndim != 1 or int(counts.sum()) != charge.numel():
@@ -170,14 +146,23 @@ class EwaldChargeOperator:
         counts = data[properties.n_atoms]
         if counts.ndim != 1:
             raise ValueError("n_atoms must be a rank-1 tensor")
-        if charge.ndim not in (1, 2) or int(counts.sum().item()) != charge.shape[0]:
+        if int(counts.sum().item()) != charge.numel():
             raise ValueError("charge length does not match n_atoms")
-        positions = data[properties.positions]
-        if positions.dtype != charge.dtype or positions.device != charge.device:
-            raise ValueError("Ewald geometry must match charge dtype and device")
-        products = [apply_ewald(context, q) for q, context in
-                    zip(charge.split(counts.tolist()), self.prepare(data))]
-        return torch.cat(products) if products else torch.zeros_like(charge)
+        kernels = self.kernels(data)
+        if len(kernels) != counts.numel():
+            raise ValueError("Ewald kernel count does not match n_atoms")
+        products = []
+        offset = 0
+        for count, kernel in zip(counts.tolist(), kernels):
+            if kernel.shape != (count, count):
+                raise ValueError("Ewald kernel shape does not match n_atoms")
+            if kernel.dtype != charge.dtype or kernel.device != charge.device:
+                raise ValueError("Ewald kernels must match charge dtype and device")
+            products.append(kernel @ charge[offset : offset + count])
+            offset += count
+        if offset != charge.numel():
+            raise ValueError("Ewald batch metadata did not consume every charge")
+        return torch.cat(products) if products else charge.new_zeros((0,))
 
     def bind(
         self,

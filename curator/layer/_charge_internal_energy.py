@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from torch import nn
 
-from ._ewald import EwaldSummation, apply_ewald
+from ._ewald import EwaldSummation
 
 
 class EwaldChargeEnergy(nn.Module):
@@ -50,7 +50,8 @@ class EwaldChargeEnergy(nn.Module):
         """Build once per forward, then reuse for every condition and block."""
         from curator.variational.backends.ewald import EwaldChargeOperator
 
-        return EwaldChargeOperator(self.ewald).prepare(data)
+        return [{"ewald_kernel": kernel}
+                for kernel in EwaldChargeOperator(self.ewald).geometry_kernels(data)]
 
     def coefficients(self, context):
         if self.local is None:
@@ -69,9 +70,12 @@ class EwaldChargeEnergy(nn.Module):
         # tensors are proposal inputs only, never a shortcut around that route.
         coefficients = self.coefficients(context)
         charge = state[:, 0]
+        kernel = context["ewald_kernel"]
+        if kernel.shape != (charge.numel(), charge.numel()):
+            raise ValueError("Ewald kernel shape must match the scalar charge state")
         return ((coefficients["electronegativity"] * state
                  + 0.5 * coefficients["hardness"] * state.square()).sum()
-                + 0.5 * charge @ apply_ewald(context, charge))
+                + 0.5 * charge @ kernel @ charge)
 
     def get_extra_state(self):
         return {"schema": 1, "hardness_floor": self.hardness_floor,

@@ -10,8 +10,6 @@ import torch
 from torch import nn
 from e3nn import o3
 
-from ._ewald import apply_ewald
-
 
 def _normal(context, values):
     """Constraint-normal action on [n_state, channels], without a dense projector."""
@@ -242,11 +240,10 @@ class EwaldCommunication(nn.Module):
         self.embed = o3.Linear("2x0e", irreps, biases=True)
 
     def forward(self, features, state, context):
-        if not bool(context["pbc"].all()) or not (
-                "ewald_kernel" in context or "ewald_cos" in context):
+        if not bool(context["pbc"].all()) or "ewald_kernel" not in context:
             raise ValueError("Ewald proposal requires 3D periodic EwaldChargeEnergy context")
         with torch.profiler.record_function("acvr.ewald_apply"):
-            potential = apply_ewald(context, state)
+            potential = context["ewald_kernel"] @ state
         return self.embed(torch.cat((state / self.state_scale, potential / self.field_scale), dim=-1))
 
 
