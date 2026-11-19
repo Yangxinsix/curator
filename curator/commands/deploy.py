@@ -231,6 +231,10 @@ def _prepare_torchscript_model(model) -> None:
                     model.output_modules[i] = domain_modules[0]
 
 
+def deploy_cli() -> None:
+    deploy_main()
+
+
 def deploy_main(argv: Optional[List[str]] = None):
     prepare_cli_environment()
     ensure_cli_stream_logger(log)

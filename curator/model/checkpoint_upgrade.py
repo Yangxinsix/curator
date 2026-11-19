@@ -64,6 +64,7 @@ def _upgrade_legacy_rescale_transforms(module: GlobalRescaleShift) -> None:
 def _upgrade_legacy_rescale_module(module: GlobalRescaleShift) -> None:
     if all(hasattr(module, name) for name in ("heads", "scales", "shifts", "atomic_scales", "atomic_shifts")):
         _upgrade_legacy_rescale_transforms(module)
+        module._configure_reduced_outputs()
         return
 
     raw_state = vars(module)

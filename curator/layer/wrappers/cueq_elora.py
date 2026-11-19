@@ -5,11 +5,6 @@ from dataclasses import dataclass
 from typing import Iterable, Optional
 
 import torch
-from cuequivariance.group_theory.descriptors.irreps_tp import (
-    channelwise_tensor_product as cue_channelwise_tensor_product,
-    fully_connected_tensor_product as cue_fully_connected_tensor_product,
-    linear as cue_linear_descriptor,
-)
 from torch import nn
 
 from e3nn import o3
@@ -105,6 +100,8 @@ def _make_channelwise_reference_specs(
 
 
 def _descriptor_specs_from_linear(irreps_in, irreps_out) -> list[_CueqPathSpec]:
+    from cuequivariance.group_theory.descriptors.irreps_tp import linear as cue_linear_descriptor
+
     descriptor = cue_linear_descriptor(irreps_in, irreps_out).polynomial.operations[0][1]
     specs = []
     for path_i, path in enumerate(descriptor.paths):
@@ -119,6 +116,8 @@ def _descriptor_specs_from_linear(irreps_in, irreps_out) -> list[_CueqPathSpec]:
 
 
 def _descriptor_specs_from_fctp(irreps_in1, irreps_in2, irreps_out) -> list[_CueqPathSpec]:
+    from cuequivariance.group_theory.descriptors.irreps_tp import fully_connected_tensor_product as cue_fully_connected_tensor_product
+
     descriptor = cue_fully_connected_tensor_product(
         irreps_in1,
         irreps_in2,
@@ -137,6 +136,8 @@ def _descriptor_specs_from_fctp(irreps_in1, irreps_in2, irreps_out) -> list[_Cue
 
 
 def _descriptor_specs_from_channelwise(irreps_in1, irreps_in2, filter_irreps_out) -> list[_CueqPathSpec]:
+    from cuequivariance.group_theory.descriptors.irreps_tp import channelwise_tensor_product as cue_channelwise_tensor_product
+
     descriptor = cue_channelwise_tensor_product(
         irreps_in1,
         irreps_in2,

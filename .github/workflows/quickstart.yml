@@ -1,0 +1,64 @@
+name: CPU training quick start
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  quickstart:
+    runs-on: ubuntu-latest
+    env:
+      OMP_NUM_THREADS: "2"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install CPU PyTorch and CURATOR
+        run: |
+          python -m pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install -e .
+      - name: Train PaiNN on CPU
+        working-directory: example/train
+        run: curator-train cfg=config.yaml
+      - name: Export TorchScript and ML-IAP
+        run: |
+          curator-deploy runs/train/model_path --target_path compiled_model.pt
+          curator-deploy runs/train/model_path --mliap --element-types Fe Li O P --target_path mliap_model.pt
+          test -s mliap_model.pt
+      - name: Evaluate the checkpoint and exported TorchScript
+        run: |
+          curator-evaluate --data example/LiFePO4.traj --model runs/train/model_path --device cpu --out runs/evaluate --save-data
+          curator-evaluate --data example/LiFePO4.traj --model compiled_model.pt --device cpu --out runs/evaluate-scripted --save-data --no-plot
+      - name: Verify predictions and artifacts
+        run: |
+          python - <<'PY'
+          import json
+          import math
+          from pathlib import Path
+
+          import numpy as np
+          import torch
+
+          output = Path("runs/evaluate/LiFePO4")
+          metrics = json.loads((output / "metrics.json").read_text())
+          assert metrics["num_structures"] == metrics["energy"]["count"] == 2257
+          assert metrics["forces"]["count"] == 63196
+          assert all(math.isfinite(metrics[key]["mae"]) for key in ("energy", "forces"))
+          assert (output / "parity_energy.png").stat().st_size > 0
+          assert (output / "parity_forces_xyz.png").stat().st_size > 0
+          torch.jit.load("runs/train/compiled_model.pt", map_location="cpu")
+
+          scripted = Path("runs/evaluate-scripted/LiFePO4/results.npz")
+          with np.load(output / "results.npz") as checkpoint, np.load(scripted) as exported:
+              for key, shape, atol in [("energy_pred", (2257,), 1e-6), ("forces_pred", (63196, 3), 1e-5)]:
+                  expected = checkpoint[key]
+                  actual = exported[key]
+                  assert expected.shape == actual.shape == shape
+                  assert np.isfinite(actual).all() and np.isfinite(expected).all()
+                  np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=atol)
+                  print(f"{key} {shape}, max absolute difference {np.abs(actual - expected).max():.6g}")
+          PY

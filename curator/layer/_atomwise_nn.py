@@ -57,6 +57,8 @@ class Dense(nn.Module):
         return y
 
 class AtomwiseNN(nn.Module):
+    __constants__ = ["separate_heads"]
+
     def __init__(
         self,
         in_features: Union[int, o3.Irreps, str],
