@@ -62,7 +62,7 @@ python -m pip install --upgrade pip
 python -m pip install curator-torch
 ```
 
-Official wheels include CURATOR's native C++ neighbor list, which is the default backend for data loading. Installing from source instead requires a C++17 compiler and Python development headers.
+The PyPI 1.1.1 release predates this quick start and the native neighbor list. Use the source installation below for the examples on this branch. Building the native neighbor list requires a C++17 compiler and Python development headers.
 
 ### Latest development version
 
@@ -72,7 +72,7 @@ cd curator
 python -m pip install -e .
 ```
 
-For the current development branch, Python 3.10 or newer is recommended.
+The current development branch requires Python 3.10 or newer.
 
 ### Optional extras
 
@@ -87,14 +87,22 @@ For the current development branch, Python 3.10 or newer is recommended.
 
 ## Quick start
 
-### 1. Evaluate the included LiFePO₄ model
+### 1. Train a LiFePO₄ model on CPU
 
-The repository includes a small dataset and checkpoint, so you can verify an installation without training first:
+Start in the repository root after installing from source. The short PaiNN example trains for one epoch on 16 structures and validates on four. It writes a checkpoint to `runs/train/model_path/` and exports `runs/train/compiled_model.pt`. To train on more structures, edit the split sizes and epoch count in [the example config](example/train/config.yaml).
+
+```bash
+(cd example/train && curator-train cfg=config.yaml)
+```
+
+### 2. Evaluate the trained checkpoint
+
+Run from the repository root. The following command checks predictions on all 2,257 structures in the example trajectory, including those used for training.
 
 ```bash
 curator-evaluate \
   --data example/LiFePO4.traj \
-  --model example/best_model.ckpt \
+  --model runs/train/model_path \
   --device cpu \
   --out runs/evaluate
 ```
@@ -113,18 +121,9 @@ runs/evaluate/LiFePO4/
 
 Add `--save-data` to also write `results.npz`, or `--no-plot` for metrics-only evaluation.
 
-### 2. Train the included example
-
-```bash
-cd example/train
-curator-train cfg=config.yaml
-```
-
-Before a production run, review `data.datapath`, `device`, batch size, precision, and `trainer.max_epochs` in the config. Training writes the resolved config, log, checkpoints, and deployable model into `run_path`.
-
 ### 3. Run the active-learning stages
 
-Each stage consumes a YAML config and hands an artifact to the next stage:
+The following commands are templates. Supply your own YAML paths, point each stage to the preceding artifacts, and configure the electronic-structure calculator before running the labeling stage.
 
 ```bash
 curator-train    cfg=train.yaml
@@ -160,19 +159,19 @@ Two useful post-training commands are:
 
 ```bash
 # Export a TorchScript model
-curator-deploy model.ckpt --target_path compiled_model.pt
+curator-deploy runs/train/model_path --target_path compiled_model.pt
 
 # Export a LAMMPS ML-IAP model
-curator-deploy model.ckpt --mliap \
+curator-deploy runs/train/model_path --mliap \
   --element-types Fe Li O P \
   --target_path mliap_model.pt
 ```
 
-Run any command with `--help` for its current options. Hydra-driven commands also accept direct overrides such as `device=cpu`, `run_path=runs/train`, or `trainer.max_epochs=10`.
+Use `--help` with the stage, evaluation, conversion, and deployment commands. The MyQueue workflow entry point reads `user_cfg.yaml` from the working directory. Hydra-driven commands also accept direct overrides such as `device=cpu`, `run_path=runs/train`, or `trainer.max_epochs=10`.
 
 ## Configuration and outputs
 
-CURATOR composes package defaults with a user YAML supplied through `cfg=<path>`. The resolved configuration is saved beside the run artifacts, so every experiment remains inspectable and reproducible.
+CURATOR composes package defaults with a user YAML supplied through `cfg=<path>`. Training saves the composed configuration beside the run artifacts. The YAML file can retain interpolation expressions.
 
 | Stage | Main inputs | Default run artifacts |
 |---|---|---|

@@ -257,6 +257,7 @@ class Evaluator:
         elif batch_columns or output_columns:
             raise ValueError("`sqlite_output` is required when sqlite column mappings are provided.")
 
+        scripted_model = isinstance(self.model, torch.jit.ScriptModule)
         with torch.set_grad_enabled(needs_grad):
             for batch_index, batch in enumerate(iter_batches(
                 dataset=dataset,
@@ -283,7 +284,10 @@ class Evaluator:
                 if self.benchmark and model_device.type == "cuda":
                     torch.cuda.synchronize(model_device)
                 start = time.perf_counter() if self.benchmark else None
-                outputs = self.model(batch)
+                inputs = batch
+                if scripted_model:
+                    inputs = {k: v for k, v in batch.items() if isinstance(v, torch.Tensor)}
+                outputs = self.model(inputs)
                 if self.benchmark and model_device.type == "cuda":
                     torch.cuda.synchronize(model_device)
                 if self.benchmark and batch_index >= self.benchmark_warmup_batches:
