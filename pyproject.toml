@@ -14,7 +14,8 @@ manylinux-aarch64-image = "manylinux2014"
 
 # Test the installed binary wheel without pulling CURATOR's full ML stack into
 # every build environment. Full dependency and model tests remain in normal CI.
-test-environment = { PIP_NO_DEPS = "1", PYTHONSAFEPATH = "1" }
+# Use a NumPy wheel compatible with the test image (including manylinux2014).
+test-environment = { PIP_NO_DEPS = "1", PIP_ONLY_BINARY = "numpy", PYTHONSAFEPATH = "1" }
 test-requires = ["numpy"]
 test-command = "python {project}/.github/scripts/check_native_wheel.py"
 
